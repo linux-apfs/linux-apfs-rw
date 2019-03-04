@@ -72,4 +72,7 @@ const struct inode_operations apfs_symlink_inode_operations = {
 	.get_link	= apfs_get_link,
 	.getattr	= apfs_getattr,
 	.listxattr	= apfs_listxattr,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) /* Now this is the default */
+	.readlink	= generic_readlink,
+#endif
 };
