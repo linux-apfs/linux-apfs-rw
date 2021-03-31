@@ -40,7 +40,7 @@ headers. On Debian, you can get them by running (as root):
 
   apt-get install linux-headers-$(uname -r)
 
-Now you can just cd to the linux-apfs-oot directory and run
+Now you can just cd to the linux-apfs-rw directory and run
 
   make
 
