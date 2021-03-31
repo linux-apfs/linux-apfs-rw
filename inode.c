@@ -14,11 +14,22 @@ static int apfs_readpage(struct file *file, struct page *page)
 	return mpage_readpage(page, apfs_get_block);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0) /* Misses mpage_readpages() */
+
+static void apfs_readahead(struct readahead_control *rac)
+{
+	mpage_readahead(rac, apfs_get_block);
+}
+
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0) */
+
 static int apfs_readpages(struct file *file, struct address_space *mapping,
 			  struct list_head *pages, unsigned int nr_pages)
 {
 	return mpage_readpages(mapping, pages, nr_pages, apfs_get_block);
 }
+
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0) */
 
 /**
  * apfs_create_dstream_rec - Create the data stream record for an inode
@@ -167,7 +178,11 @@ out_abort:
 /* bmap is not implemented to avoid issues with CoW on swapfiles */
 static const struct address_space_operations apfs_aops = {
 	.readpage	= apfs_readpage,
-	.readpages	= apfs_readpages,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+	.readahead      = apfs_readahead,
+#else
+	.readpages      = apfs_readpages,
+#endif
 	.write_begin	= apfs_write_begin,
 	.write_end	= apfs_write_end,
 };
