@@ -11,6 +11,7 @@
 #include <linux/kref.h>
 #include <linux/list.h>
 #include <linux/types.h>
+#include <linux/version.h>
 #include "apfs_raw.h"
 
 #define APFS_MODULE_ID_STRING	"linux-apfs by EA Fernández"
