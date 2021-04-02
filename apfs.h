@@ -134,46 +134,79 @@ struct apfs_bh_info {
 	struct list_head	list;	/* List of buffers in the transaction */
 };
 
-/* Mount option flags */
+/* Mount option flags for a container */
 #define APFS_CHECK_NODES	1
+#define APFS_READWRITE		2
 
 /*
- * Superblock data in memory, both from the main superblock and the volume
- * checkpoint superblock.
+ * Container superblock data in memory
+ */
+struct apfs_nxsb_info {
+	struct block_device *nx_bdev; /* Device for the container */
+	struct apfs_nx_superblock *nx_raw; /* On-disk main sb */
+	struct apfs_object nx_object; /* Main superblock object */
+	u64 nx_xid; /* Latest transaction id */
+
+	unsigned int nx_flags;	/* Mount options shared by all volumes */
+	unsigned int nx_refcnt; /* Number of mounted volumes in container */
+
+	/* TODO: handle block sizes above the maximum of PAGE_SIZE? */
+	unsigned long nx_blocksize;
+	unsigned char nx_blocksize_bits;
+
+	struct apfs_spaceman nx_spaceman;
+	struct apfs_transaction nx_transaction;
+
+	/* For now, a single semaphore for every operation */
+	struct rw_semaphore nx_big_sem;
+
+	/* List of currently mounted containers */
+	struct list_head nx_list;
+};
+
+extern struct mutex nxs_mutex;
+
+/*
+ * Volume superblock data in memory
  */
 struct apfs_sb_info {
-	struct apfs_nx_superblock *s_msb_raw;		/* On-disk main sb */
-	struct apfs_superblock *s_vsb_raw;		/* On-disk volume sb */
+	struct apfs_nxsb_info *s_nxi; /* In-memory container sb for volume */
+	struct apfs_superblock *s_vsb_raw; /* On-disk volume sb */
 
-	u64 s_xid;			/* Latest transaction id */
 	struct apfs_node *s_cat_root;	/* Root of the catalog tree */
 	struct apfs_node *s_omap_root;	/* Root of the object map tree */
 
-	struct apfs_object s_mobject;	/* Main superblock object */
 	struct apfs_object s_vobject;	/* Volume superblock object */
 
 	/* Mount options */
-	unsigned int s_flags;
 	unsigned int s_vol_nr;		/* Index of the volume in the sb list */
 	kuid_t s_uid;			/* uid to override on-disk uid */
 	kgid_t s_gid;			/* gid to override on-disk gid */
 
-	/* TODO: handle block sizes above the maximum of PAGE_SIZE? */
-	unsigned long s_blocksize;
-	unsigned char s_blocksize_bits;
-
 	struct inode *s_private_dir;	/* Inode for the private directory */
-
-	struct apfs_spaceman s_spaceman;
-	struct apfs_transaction s_transaction;
-
-	/* For now, a single semaphore for every operation */
-	struct rw_semaphore s_big_sem;
 };
 
 static inline struct apfs_sb_info *APFS_SB(struct super_block *sb)
 {
 	return sb->s_fs_info;
+}
+
+/**
+ * APFS_NXI - Get the shared container info for a volume's superblock
+ * @sb: superblock structure
+ */
+static inline struct apfs_nxsb_info *APFS_NXI(struct super_block *sb)
+{
+	return APFS_SB(sb)->s_nxi;
+}
+
+/**
+ * APFS_SM - Get the shared spaceman struct for a volume's superblock
+ * @sb: superblock structure
+ */
+static inline struct apfs_spaceman *APFS_SM(struct super_block *sb)
+{
+	return &APFS_NXI(sb)->nx_spaceman;
 }
 
 static inline bool apfs_is_case_insensitive(struct super_block *sb)
@@ -505,6 +538,16 @@ struct apfs_xattr {
 #define apfs_debug(sb, fmt, ...) no_printk(fmt, ##__VA_ARGS__)
 #endif /* CONFIG_APFS_DEBUG */
 
+/**
+ * apfs_assert_in_transaction - Assert that the object is in current transaction
+ * @sb:		superblock structure
+ * @obj:	on-disk object to check
+ */
+static inline void apfs_assert_in_transaction(struct super_block *sb, struct apfs_obj_phys *obj)
+{
+	ASSERT(le64_to_cpu(obj->o_xid) == APFS_NXI(sb)->nx_xid);
+}
+
 /* btree.c */
 extern struct apfs_query *apfs_alloc_query(struct apfs_node *node,
 					   struct apfs_query *parent);
@@ -657,5 +700,26 @@ extern const struct inode_operations apfs_symlink_inode_operations;
 
 /* xattr.c */
 extern const struct xattr_handler *apfs_xattr_handlers[];
+
+/*
+ * TODO: the following are modified variants of buffer head functions that will
+ * work with the shared block device for the container. The correct approach
+ * here would be to avoid buffer heads and use bios, but for now this will do.
+ */
+
+static inline void
+apfs_map_bh(struct buffer_head *bh, struct super_block *sb, sector_t block)
+{
+	set_buffer_mapped(bh);
+	bh->b_bdev = APFS_NXI(sb)->nx_bdev;
+	bh->b_blocknr = block;
+	bh->b_size = sb->s_blocksize;
+}
+
+static inline struct buffer_head *
+apfs_sb_bread(struct super_block *sb, sector_t block)
+{
+	return __bread_gfp(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
+}
 
 #endif	/* _APFS_H */

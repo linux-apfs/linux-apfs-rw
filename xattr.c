@@ -144,7 +144,7 @@ static int apfs_xattr_extents_read(struct inode *parent,
 			bytes = min(sb->s_blocksize,
 				    (unsigned long)(length - file_off));
 
-			bh = sb_bread(sb, ext.phys_block_num + j);
+			bh = apfs_sb_bread(sb, ext.phys_block_num + j);
 			if (!bh) {
 				ret = -EIO;
 				goto done;
@@ -251,13 +251,12 @@ done:
 int apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 		   size_t size)
 {
-	struct super_block *sb = inode->i_sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(inode->i_sb);
 	int ret;
 
-	down_read(&sbi->s_big_sem);
+	down_read(&nxi->nx_big_sem);
 	ret = __apfs_xattr_get(inode, name, buffer, size);
-	up_read(&sbi->s_big_sem);
+	up_read(&nxi->nx_big_sem);
 	return ret;
 }
 
@@ -285,13 +284,14 @@ ssize_t apfs_listxattr(struct dentry *dentry, char *buffer, size_t size)
 	struct inode *inode = d_inode(dentry);
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_key key;
 	struct apfs_query *query;
 	u64 cnid = apfs_ino(inode);
 	size_t free = size;
 	ssize_t ret;
 
-	down_read(&sbi->s_big_sem);
+	down_read(&nxi->nx_big_sem);
 
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query) {
@@ -339,6 +339,6 @@ ssize_t apfs_listxattr(struct dentry *dentry, char *buffer, size_t size)
 
 fail:
 	apfs_free_query(sb, query);
-	up_read(&sbi->s_big_sem);
+	up_read(&nxi->nx_big_sem);
 	return ret;
 }

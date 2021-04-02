@@ -40,7 +40,7 @@ static int apfs_child_from_query(struct apfs_query *query, u64 *child)
 int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 			   u64 id, u64 *block, bool write)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_query *query;
 	struct apfs_key key;
 	int ret = 0;
@@ -49,7 +49,7 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 	if (!query)
 		return -ENOMEM;
 
-	apfs_init_omap_key(id, sbi->s_xid, &key);
+	apfs_init_omap_key(id, nxi->nx_xid, &key);
 	query->key = &key;
 	query->flags |= APFS_QUERY_OMAP;
 
@@ -76,7 +76,7 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 		}
 
 		key.ok_oid = cpu_to_le64(id);
-		key.ok_xid = cpu_to_le64(sbi->s_xid); /* TODO: snapshots? */
+		key.ok_xid = cpu_to_le64(nxi->nx_xid); /* TODO: snapshots? */
 		val.ov_flags = 0; /* TODO: preserve the flags */
 		val.ov_size = cpu_to_le32(sb->s_blocksize);
 		val.ov_paddr = cpu_to_le64(new_bh->b_blocknr);
@@ -103,6 +103,7 @@ fail:
 int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_query *query;
 	struct apfs_key key;
 	struct apfs_omap_key raw_key;
@@ -113,7 +114,7 @@ int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno)
 	if (!query)
 		return -ENOMEM;
 
-	apfs_init_omap_key(oid, sbi->s_xid, &key);
+	apfs_init_omap_key(oid, nxi->nx_xid, &key);
 	query->key = &key;
 	query->flags |= APFS_QUERY_OMAP;
 
@@ -122,7 +123,7 @@ int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno)
 		goto fail;
 
 	raw_key.ok_oid = cpu_to_le64(oid);
-	raw_key.ok_xid = cpu_to_le64(sbi->s_xid);
+	raw_key.ok_xid = cpu_to_le64(nxi->nx_xid);
 	raw_val.ov_flags = 0;
 	raw_val.ov_size = cpu_to_le32(sb->s_blocksize);
 	raw_val.ov_paddr = cpu_to_le64(bno);
@@ -145,6 +146,7 @@ fail:
 int apfs_delete_omap_rec(struct super_block *sb, u64 oid)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_query *query;
 	struct apfs_key key;
 	int ret;
@@ -153,7 +155,7 @@ int apfs_delete_omap_rec(struct super_block *sb, u64 oid)
 	if (!query)
 		return -ENOMEM;
 
-	apfs_init_omap_key(oid, sbi->s_xid, &key);
+	apfs_init_omap_key(oid, nxi->nx_xid, &key);
 	query->key = &key;
 	query->flags |= APFS_QUERY_OMAP;
 
@@ -361,7 +363,6 @@ static void apfs_btree_change_rec_count(struct apfs_query *query, int change,
 					int key_len, int val_len)
 {
 	struct super_block *sb;
-	struct apfs_sb_info *sbi;
 	struct apfs_node *root;
 	struct apfs_btree_node_phys *root_raw;
 	struct apfs_btree_info *info;
@@ -376,11 +377,10 @@ static void apfs_btree_change_rec_count(struct apfs_query *query, int change,
 	ASSERT(apfs_node_is_root(root));
 
 	sb = root->object.sb;
-	sbi = APFS_SB(sb);
 	root_raw = (void *)root->object.bh->b_data;
 	info = (void *)root_raw + sb->s_blocksize - sizeof(*info);
 
-	ASSERT(sbi->s_xid == le64_to_cpu(root_raw->btn_o.o_xid));
+	apfs_assert_in_transaction(sb, &root_raw->btn_o);
 	if (key_len > le32_to_cpu(info->bt_longest_key))
 		info->bt_longest_key = cpu_to_le32(key_len);
 	if (val_len > le32_to_cpu(info->bt_longest_val))
@@ -400,7 +400,6 @@ static void apfs_btree_change_rec_count(struct apfs_query *query, int change,
 void apfs_btree_change_node_count(struct apfs_query *query, int change)
 {
 	struct super_block *sb;
-	struct apfs_sb_info *sbi;
 	struct apfs_node *root;
 	struct apfs_btree_node_phys *root_raw;
 	struct apfs_btree_info *info;
@@ -413,11 +412,10 @@ void apfs_btree_change_node_count(struct apfs_query *query, int change)
 	ASSERT(apfs_node_is_root(root));
 
 	sb = root->object.sb;
-	sbi = APFS_SB(sb);
 	root_raw = (void *)root->object.bh->b_data;
 	info = (void *)root_raw + sb->s_blocksize - sizeof(*info);
 
-	ASSERT(sbi->s_xid == le64_to_cpu(root_raw->btn_o.o_xid));
+	apfs_assert_in_transaction(sb, &root_raw->btn_o);
 	le64_add_cpu(&info->bt_node_count, change);
 }
 
@@ -438,7 +436,6 @@ int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
 {
 	struct apfs_node *node = query->node;
 	struct super_block *sb = node->object.sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_btree_node_phys *node_raw;
 	int toc_entry_size;
 	int err;
@@ -455,7 +452,7 @@ int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
 again:
 	node = query->node;
 	node_raw = (void *)node->object.bh->b_data;
-	ASSERT(sbi->s_xid == le64_to_cpu(node_raw->btn_o.o_xid));
+	apfs_assert_in_transaction(sb, &node_raw->btn_o);
 
 	/* TODO: support record fragmentation */
 	if (node->free + key_len + val_len > node->data) {
@@ -527,7 +524,6 @@ int apfs_btree_remove(struct apfs_query *query)
 {
 	struct apfs_node *node = query->node;
 	struct super_block *sb = node->object.sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_btree_node_phys *node_raw;
 	int later_entries = node->records - query->index - 1;
 	int err;
@@ -545,7 +541,7 @@ int apfs_btree_remove(struct apfs_query *query)
 
 	node = query->node;
 	node_raw = (void *)query->node->object.bh->b_data;
-	ASSERT(sbi->s_xid == le64_to_cpu(node_raw->btn_o.o_xid));
+	apfs_assert_in_transaction(sb, &node_raw->btn_o);
 
 	if (node->records == 1)
 		/* Just get rid of the node.  TODO: update the node heights? */
@@ -617,7 +613,6 @@ int apfs_btree_replace(struct apfs_query *query, void *key, int key_len,
 {
 	struct apfs_node *node = query->node;
 	struct super_block *sb = node->object.sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_btree_node_phys *node_raw;
 	int err;
 
@@ -635,7 +630,7 @@ int apfs_btree_replace(struct apfs_query *query, void *key, int key_len,
 again:
 	node = query->node;
 	node_raw = (void *)node->object.bh->b_data;
-	ASSERT(sbi->s_xid == le64_to_cpu(node_raw->btn_o.o_xid));
+	apfs_assert_in_transaction(sb, &node_raw->btn_o);
 
 	/* The first key in a node must match the parent record's */
 	if (key && query->parent && query->index == 0) {

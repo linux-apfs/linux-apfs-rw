@@ -68,6 +68,7 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 				 bool write)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct buffer_head *bh = NULL;
 	struct apfs_btree_node_phys *raw;
 	struct apfs_node *node;
@@ -127,7 +128,7 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 
 	kref_init(&node->refcount);
 
-	if (sbi->s_flags & APFS_CHECK_NODES &&
+	if (nxi->nx_flags & APFS_CHECK_NODES &&
 	    !apfs_obj_verify_csum(sb, &raw->btn_o)) {
 		/* TODO: don't check this twice for virtual/physical objects */
 		apfs_alert(sb, "bad checksum for node in block 0x%llx", bh->b_blocknr);
@@ -155,7 +156,8 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_nx_superblock *msb_raw = sbi->s_msb_raw;
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_nx_superblock *msb_raw = nxi->nx_raw;
 	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
 	struct apfs_node *node;
 	struct buffer_head *bh;
@@ -197,7 +199,7 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 		ASSERT(false);
 	}
 
-	bh = sb_bread(sb, bno);
+	bh = apfs_sb_bread(sb, bno);
 	if (!bh)
 		return ERR_PTR(-EIO);
 	raw = (void *)bh->b_data;
@@ -208,7 +210,7 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 
 	/* Set most of the object header, but the subtype is up to the caller */
 	raw->btn_o.o_oid = cpu_to_le64(oid);
-	raw->btn_o.o_xid = cpu_to_le64(sbi->s_xid);
+	raw->btn_o.o_xid = cpu_to_le64(nxi->nx_xid);
 	raw->btn_o.o_type = cpu_to_le32(storage | APFS_OBJECT_TYPE_BTREE_NODE);
 	raw->btn_o.o_subtype = 0;
 
@@ -253,14 +255,13 @@ fail:
 int apfs_delete_node(struct apfs_query *query)
 {
 	struct super_block *sb = query->node->object.sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
 	struct apfs_node *node = query->node;
 	u64 oid = node->object.oid;
 	u64 bno = node->object.block_nr;
 	int err;
 
-	ASSERT(sbi->s_xid == le64_to_cpu(vsb_raw->apfs_o.o_xid));
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 
 	switch (query->flags & APFS_QUERY_TREE_MASK) {
 	case APFS_QUERY_CAT:
@@ -293,14 +294,13 @@ int apfs_delete_node(struct apfs_query *query)
 void apfs_update_node(struct apfs_node *node)
 {
 	struct super_block *sb = node->object.sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct buffer_head *bh = node->object.bh;
 	struct apfs_btree_node_phys *raw = (void *)bh->b_data;
 	struct apfs_nloc *free_head;
 	u32 tflags, type;
 	int toc_off;
 
-	ASSERT(sbi->s_xid == le64_to_cpu(raw->btn_o.o_xid));
+	apfs_assert_in_transaction(sb, &raw->btn_o);
 
 	raw->btn_o.o_oid = cpu_to_le64(node->object.oid);
 
@@ -709,7 +709,6 @@ static int apfs_btree_inc_height(struct apfs_query *query)
 	struct apfs_node *root = query->node;
 	struct apfs_node *new_node;
 	struct super_block *sb = root->object.sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_btree_node_phys *root_raw;
 	struct apfs_btree_node_phys *new_raw;
 	struct apfs_btree_info *info;
@@ -718,7 +717,7 @@ static int apfs_btree_inc_height(struct apfs_query *query)
 	int toc_entry_size;
 
 	root_raw = (void *)root->object.bh->b_data;
-	ASSERT(sbi->s_xid == le64_to_cpu(root_raw->btn_o.o_xid));
+	apfs_assert_in_transaction(sb, &root_raw->btn_o);
 
 	if (query->parent || query->depth)
 		return -EFSCORRUPTED;
@@ -815,7 +814,6 @@ static int apfs_copy_record_range(struct apfs_node *dest_node,
 				  int start, int end)
 {
 	struct super_block *sb = dest_node->object.sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_btree_node_phys *dest_raw;
 	struct apfs_btree_node_phys *src_raw;
 	struct apfs_query *query = NULL;
@@ -828,7 +826,7 @@ static int apfs_copy_record_range(struct apfs_node *dest_node,
 
 	ASSERT(!dest_node->records);
 	ASSERT(!apfs_node_is_root(dest_node));
-	ASSERT(sbi->s_xid == le64_to_cpu(dest_raw->btn_o.o_xid));
+	apfs_assert_in_transaction(sb, &dest_raw->btn_o);
 
 	/* Resize the table of contents so that all the records fit */
 	if (apfs_node_has_fixed_kv_size(src_node))
@@ -913,7 +911,6 @@ static int apfs_attach_child(struct apfs_query *query, struct apfs_node *child)
 int apfs_node_split(struct apfs_query *query)
 {
 	struct super_block *sb = query->node->object.sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_node *old_node, *new_node;
 	struct apfs_btree_node_phys *old_raw, *new_raw;
 	char *buffer = NULL;
@@ -934,7 +931,7 @@ int apfs_node_split(struct apfs_query *query)
 	apfs_btree_change_node_count(query->parent, 1 /* change */);
 
 	old_raw = (void *)old_node->object.bh->b_data;
-	ASSERT(sbi->s_xid == le64_to_cpu(old_raw->btn_o.o_xid));
+	apfs_assert_in_transaction(sb, &old_raw->btn_o);
 
 	/*
 	 * XXX: to defragment the original node, we put all records in a
@@ -976,7 +973,7 @@ int apfs_node_split(struct apfs_query *query)
 	if (err)
 		goto out_put_node;
 	new_raw = (void *)new_node->object.bh->b_data;
-	ASSERT(sbi->s_xid == le64_to_cpu(new_raw->btn_o.o_xid));
+	apfs_assert_in_transaction(sb, &new_raw->btn_o);
 	new_raw->btn_level = old_raw->btn_level;
 	apfs_update_node(new_node);
 

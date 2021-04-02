@@ -96,8 +96,7 @@ static int apfs_cpm_lookup_oid(struct super_block *sb,
  */
 int apfs_create_cpoint_map(struct super_block *sb, u64 oid, u64 bno)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_nx_superblock *raw_sb = sbi->s_msb_raw;
+	struct apfs_nx_superblock *raw_sb = APFS_NXI(sb)->nx_raw;
 	u64 desc_base = le64_to_cpu(raw_sb->nx_xp_desc_base);
 	u32 desc_index = le32_to_cpu(raw_sb->nx_xp_desc_index);
 	u32 desc_blks = le32_to_cpu(raw_sb->nx_xp_desc_blocks);
@@ -114,11 +113,11 @@ int apfs_create_cpoint_map(struct super_block *sb, u64 oid, u64 bno)
 
 	/* Last block in area is superblock; we want the last mapping block */
 	cpm_bno = desc_base + (desc_index + desc_len - 2) % desc_blks;
-	bh = sb_bread(sb, cpm_bno);
+	bh = apfs_sb_bread(sb, cpm_bno);
 	if (!bh)
 		return -EIO;
 	cpm = (struct apfs_checkpoint_map_phys *)bh->b_data;
-	ASSERT(sbi->s_xid == le64_to_cpu(cpm->cpm_o.o_xid));
+	apfs_assert_in_transaction(sb, &cpm->cpm_o);
 
 	cpm_count = le32_to_cpu(cpm->cpm_count);
 	if (cpm_count >= apfs_max_maps_per_block(sb)) { /* TODO */
@@ -153,8 +152,8 @@ fail:
  */
 struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb, u64 oid)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_nx_superblock *raw_sb = sbi->s_msb_raw;
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
 	u64 desc_base = le64_to_cpu(raw_sb->nx_xp_desc_base);
 	u32 desc_index = le32_to_cpu(raw_sb->nx_xp_desc_index);
 	u32 desc_blks = le32_to_cpu(raw_sb->nx_xp_desc_blocks);
@@ -172,7 +171,7 @@ struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb, u64 oid)
 		u64 obj_bno;
 		int err;
 
-		bh = sb_bread(sb, cpm_bno);
+		bh = apfs_sb_bread(sb, cpm_bno);
 		if (!bh)
 			return ERR_PTR(-EIO);
 		cpm = (struct apfs_checkpoint_map_phys *)bh->b_data;
@@ -185,7 +184,7 @@ struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb, u64 oid)
 		if (err)
 			return ERR_PTR(err);
 
-		bh = sb_bread(sb, obj_bno);
+		bh = apfs_sb_bread(sb, obj_bno);
 		if (!bh)
 			return ERR_PTR(-EIO);
 		return bh;
@@ -206,21 +205,21 @@ struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb, u64 oid)
 struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno,
 					   bool write)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct buffer_head *bh, *new_bh;
 	struct apfs_obj_phys *obj;
 	u32 type;
 	u64 new_bno;
 	int err;
 
-	bh = sb_bread(sb, bno);
+	bh = apfs_sb_bread(sb, bno);
 	if (!bh)
 		return ERR_PTR(-EIO);
 
 	obj = (struct apfs_obj_phys *)bh->b_data;
 	type = le32_to_cpu(obj->o_type);
 	ASSERT(!(type & APFS_OBJ_EPHEMERAL));
-	if (sbi->s_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, obj)) {
+	if (nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, obj)) {
 		err = -EFSBADCRC;
 		goto fail;
 	}
@@ -230,13 +229,13 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno,
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 
 	/* Is the object already part of the current transaction? */
-	if (obj->o_xid == cpu_to_le64(sbi->s_xid))
+	if (obj->o_xid == cpu_to_le64(nxi->nx_xid))
 		return bh;
 
 	err = apfs_spaceman_allocate_block(sb, &new_bno);
 	if (err)
 		goto fail;
-	new_bh = sb_bread(sb, new_bno);
+	new_bh = apfs_sb_bread(sb, new_bno);
 	if (!new_bh) {
 		err = -EIO;
 		goto fail;
@@ -253,7 +252,7 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno,
 
 	if (type & APFS_OBJ_PHYSICAL)
 		obj->o_oid = cpu_to_le64(new_bno);
-	obj->o_xid = cpu_to_le64(sbi->s_xid);
+	obj->o_xid = cpu_to_le64(nxi->nx_xid);
 	err = apfs_transaction_join(sb, bh);
 	if (err)
 		goto fail;

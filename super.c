@@ -3,6 +3,7 @@
  * Copyright (C) 2018 Ernesto A. Fernández <ernesto.mnd.fernandez@gmail.com>
  */
 
+#include <linux/backing-dev.h>
 #include <linux/blkdev.h>
 #include <linux/module.h>
 #include <linux/fs.h>
@@ -17,6 +18,48 @@
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0) /* iversion came in 4.16 */
 #include <linux/iversion.h>
 #endif
+
+/* Keep a list of mounted containers, so that their volumes can share them */
+DEFINE_MUTEX(nxs_mutex);
+static LIST_HEAD(nxs);
+
+/**
+ * apfs_nx_find_by_dev - Search for a device in the list of mounted containers
+ * @bdev:	block device for the wanted container
+ *
+ * Returns a pointer to the container structure in the list, or NULL if the
+ * container isn't currently mounted.
+ */
+static struct apfs_nxsb_info *apfs_nx_find_by_dev(struct block_device *bdev)
+{
+	struct apfs_nxsb_info *curr;
+
+	lockdep_assert_held(&nxs_mutex);
+	list_for_each_entry(curr, &nxs, nx_list) {
+		struct block_device *curr_bdev = curr->nx_bdev;
+
+		if (curr_bdev == bdev)
+			return curr;
+	}
+	return NULL;
+}
+
+/**
+ * apfs_sb_set_blocksize - Set the block size for the container's device
+ * @sb:		superblock structure
+ * @size:	size to set
+ *
+ * This is like sb_set_blocksize(), but it uses the container's device instead
+ * of the nonexistent volume device.
+ */
+static int apfs_sb_set_blocksize(struct super_block *sb, int size)
+{
+	if (set_blocksize(APFS_NXI(sb)->nx_bdev, size))
+		return 0;
+	sb->s_blocksize = size;
+	sb->s_blocksize_bits = blksize_bits(size);
+	return sb->s_blocksize;
+}
 
 /**
  * apfs_read_super_copy - Read the copy of the container superblock in block 0
@@ -35,11 +78,11 @@ static struct buffer_head *apfs_read_super_copy(struct super_block *sb)
 	 * For now assume a small blocksize, we only need it so that we can
 	 * read the actual blocksize from disk.
 	 */
-	if (!sb_set_blocksize(sb, APFS_NX_DEFAULT_BLOCK_SIZE)) {
+	if (!apfs_sb_set_blocksize(sb, APFS_NX_DEFAULT_BLOCK_SIZE)) {
 		apfs_err(sb, "unable to set blocksize");
 		return ERR_PTR(err);
 	}
-	bh = sb_bread(sb, APFS_NX_BLOCK_NUM);
+	bh = apfs_sb_bread(sb, APFS_NX_BLOCK_NUM);
 	if (!bh) {
 		apfs_err(sb, "unable to read superblock");
 		return ERR_PTR(err);
@@ -50,11 +93,11 @@ static struct buffer_head *apfs_read_super_copy(struct super_block *sb)
 	if (sb->s_blocksize != blocksize) {
 		brelse(bh);
 
-		if (!sb_set_blocksize(sb, blocksize)) {
+		if (!apfs_sb_set_blocksize(sb, blocksize)) {
 			apfs_err(sb, "bad blocksize %d", blocksize);
 			return ERR_PTR(err);
 		}
-		bh = sb_bread(sb, APFS_NX_BLOCK_NUM);
+		bh = apfs_sb_bread(sb, APFS_NX_BLOCK_NUM);
 		if (!bh) {
 			apfs_err(sb, "unable to read superblock 2nd time");
 			return ERR_PTR(err);
@@ -86,19 +129,27 @@ fail:
 static void apfs_make_super_copy(struct super_block *sb)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = sbi->s_nxi;
 	struct buffer_head *bh;
 
 	if (sb->s_flags & SB_RDONLY)
 		return;
 
-	bh = sb_bread(sb, APFS_NX_BLOCK_NUM);
+	/* Only update the backup once all volumes are unmounted */
+	mutex_lock(&nxs_mutex);
+	if (nxi->nx_refcnt > 1)
+		goto out_unlock;
+
+	bh = apfs_sb_bread(sb, APFS_NX_BLOCK_NUM);
 	if (!bh) {
 		apfs_err(sb, "failed to write block zero");
-		return;
+		goto out_unlock;
 	}
-	memcpy(bh->b_data, sbi->s_msb_raw, sb->s_blocksize);
+	memcpy(bh->b_data, nxi->nx_raw, sb->s_blocksize);
 	mark_buffer_dirty(bh);
 	brelse(bh);
+out_unlock:
+	mutex_unlock(&nxs_mutex);
 }
 
 /**
@@ -106,11 +157,11 @@ static void apfs_make_super_copy(struct super_block *sb)
  * @sb:	superblock structure
  *
  * Returns a negative error code in case of failure.  On success, returns 0
- * and sets the s_msb_raw, s_mobject and s_xid fields of APFS_SB(@sb).
+ * and sets the nx_raw, nx_object and nx_xid fields of APFS_NXI(@sb).
  */
 static int apfs_map_main_super(struct super_block *sb)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct buffer_head *bh;
 	struct buffer_head *desc_bh = NULL;
 	struct apfs_nx_superblock *msb_raw;
@@ -119,6 +170,15 @@ static int apfs_map_main_super(struct super_block *sb)
 	u32 desc_blocks;
 	int err = -EINVAL;
 	int i;
+
+	lockdep_assert_held(&nxs_mutex);
+	if (nxi->nx_refcnt > 1) {
+		/* It's already mapped */
+		sb->s_blocksize = nxi->nx_blocksize;
+		sb->s_blocksize_bits = nxi->nx_blocksize_bits;
+		sb->s_magic = le32_to_cpu(nxi->nx_raw->nx_magic);
+		return 0;
+	}
 
 	/* Read the superblock from the last clean unmount */
 	bh = apfs_read_super_copy(sb);
@@ -146,7 +206,7 @@ static int apfs_map_main_super(struct super_block *sb)
 		struct apfs_nx_superblock *desc_raw;
 
 		brelse(desc_bh);
-		desc_bh = sb_bread(sb, desc_base + i);
+		desc_bh = apfs_sb_bread(sb, desc_base + i);
 		if (!desc_bh) {
 			apfs_err(sb, "unable to read checkpoint descriptor");
 			goto fail;
@@ -168,12 +228,17 @@ static int apfs_map_main_super(struct super_block *sb)
 		desc_bh = NULL;
 	}
 
-	sbi->s_xid = xid;
-	sbi->s_msb_raw = msb_raw;
-	sbi->s_mobject.sb = sb;
-	sbi->s_mobject.block_nr = bno;
-	sbi->s_mobject.oid = le64_to_cpu(msb_raw->nx_o.o_oid);
-	sbi->s_mobject.bh = bh;
+	nxi->nx_xid = xid;
+	nxi->nx_raw = msb_raw;
+	nxi->nx_object.sb = sb; /* XXX: these "objects" never made any sense */
+	nxi->nx_object.block_nr = bno;
+	nxi->nx_object.oid = le64_to_cpu(msb_raw->nx_o.o_oid);
+	nxi->nx_object.bh = bh;
+
+	/* For now we only support blocksize < PAGE_SIZE */
+	nxi->nx_blocksize = sb->s_blocksize;
+	nxi->nx_blocksize_bits = sb->s_blocksize_bits;
+
 	return 0;
 
 fail:
@@ -196,7 +261,7 @@ static void apfs_update_software_info(struct super_block *sb)
 	struct apfs_modified_by *mod_by;
 
 	ASSERT(sbi->s_vsb_raw);
-	ASSERT(sbi->s_xid == le64_to_cpu(raw->apfs_o.o_xid));
+	apfs_assert_in_transaction(sb, &raw->apfs_o);
 	ASSERT(strlen(APFS_MODULE_ID_STRING) < APFS_MODIFIED_NAMELEN);
 	mod_by = raw->apfs_modified_by;
 
@@ -208,18 +273,34 @@ static void apfs_update_software_info(struct super_block *sb)
 	memset(mod_by->id, 0, sizeof(mod_by->id));
 	strcpy(mod_by->id, APFS_MODULE_ID_STRING);
 	mod_by->timestamp = cpu_to_le64(ktime_get_real_ns());
-	mod_by->last_xid = cpu_to_le64(sbi->s_xid);
+	mod_by->last_xid = cpu_to_le64(APFS_NXI(sb)->nx_xid);
 }
 
 /**
  * apfs_unmap_main_super - Clean up apfs_map_main_super()
- * @sb:	filesystem superblock
+ * @sbi:	in-memory superblock info
+ *
+ * It also cleans up after apfs_attach_nxi(), so the name is no longer accurate.
  */
-static inline void apfs_unmap_main_super(struct super_block *sb)
+static inline void apfs_unmap_main_super(struct apfs_sb_info *sbi)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = sbi->s_nxi;
+	fmode_t mode = FMODE_READ;
 
-	brelse(sbi->s_mobject.bh);
+	if (nxi->nx_flags & APFS_READWRITE)
+		mode |= FMODE_WRITE;
+
+	lockdep_assert_held(&nxs_mutex);
+
+	if (--nxi->nx_refcnt)
+		goto out;
+
+	brelse(nxi->nx_object.bh);
+	blkdev_put(nxi->nx_bdev, mode);
+	list_del(&nxi->nx_list);
+	kfree(nxi);
+out:
+	sbi->s_nxi = NULL;
 }
 
 /**
@@ -233,17 +314,18 @@ static inline void apfs_unmap_main_super(struct super_block *sb)
 int apfs_map_volume_super(struct super_block *sb, bool write)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_nx_superblock *msb_raw = sbi->s_msb_raw;
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_nx_superblock *msb_raw = nxi->nx_raw;
 	struct apfs_superblock *vsb_raw;
 	struct apfs_omap_phys *msb_omap_raw;
 	struct apfs_node *vnode;
 	struct buffer_head *bh;
-	struct apfs_transaction *trans = &sbi->s_transaction;
+	struct apfs_transaction *trans = &nxi->nx_transaction;
 	u64 vol_id;
 	u64 vsb;
 	int err;
 
-	ASSERT(sbi->s_msb_raw);
+	ASSERT(msb_raw);
 	ASSERT(trans->t_old_vsb == sbi->s_vobject.bh);
 
 	/* Get the id for the requested volume number */
@@ -292,7 +374,7 @@ int apfs_map_volume_super(struct super_block *sb, bool write)
 		return err;
 	}
 
-	bh = sb_bread(sb, vsb);
+	bh = apfs_sb_bread(sb, vsb);
 	if (!bh) {
 		apfs_err(sb, "unable to read volume superblock");
 		return -EINVAL;
@@ -370,7 +452,7 @@ int apfs_read_omap(struct super_block *sb, bool write)
 		return PTR_ERR(bh);
 	}
 	if (write) {
-		ASSERT(sbi->s_xid == le64_to_cpu(vsb_raw->apfs_o.o_xid));
+		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		vsb_raw->apfs_omap_oid = cpu_to_le64(bh->b_blocknr);
 	}
 	omap_raw = (struct apfs_omap_phys *)bh->b_data;
@@ -384,7 +466,7 @@ int apfs_read_omap(struct super_block *sb, bool write)
 		goto fail;
 	}
 	if (write) {
-		ASSERT(sbi->s_xid == le64_to_cpu(omap_raw->om_o.o_xid));
+		apfs_assert_in_transaction(sb, &omap_raw->om_o);
 		ASSERT(buffer_trans(bh));
 		omap_raw->om_tree_oid = cpu_to_le64(omap_root->object.block_nr);
 	}
@@ -447,7 +529,7 @@ static void apfs_put_super(struct super_block *sb)
 		vsb_raw = sbi->s_vsb_raw;
 		vsb_bh = sbi->s_vobject.bh;
 
-		ASSERT(sbi->s_xid == le64_to_cpu(vsb_raw->apfs_o.o_xid));
+		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		ASSERT(buffer_trans(vsb_bh));
 
 		vsb_raw->apfs_unmount_time = cpu_to_le64(ktime_get_real_ns());
@@ -463,9 +545,11 @@ static void apfs_put_super(struct super_block *sb)
 fail:
 	apfs_node_put(sbi->s_cat_root);
 	apfs_node_put(sbi->s_omap_root);
-
 	apfs_unmap_volume_super(sb);
-	apfs_unmap_main_super(sb);
+
+	mutex_lock(&nxs_mutex);
+	apfs_unmap_main_super(sbi);
+	mutex_unlock(&nxs_mutex);
 
 	sb->s_fs_info = NULL;
 	kfree(sbi);
@@ -563,8 +647,7 @@ static void destroy_inodecache(void)
  */
 static int apfs_count_used_blocks(struct super_block *sb, u64 *count)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_nx_superblock *msb_raw = sbi->s_msb_raw;
+	struct apfs_nx_superblock *msb_raw = APFS_NXI(sb)->nx_raw;
 	struct apfs_node *vnode;
 	struct apfs_omap_phys *msb_omap_raw;
 	struct buffer_head *bh;
@@ -574,7 +657,7 @@ static int apfs_count_used_blocks(struct super_block *sb, u64 *count)
 
 	/* Get the container's object map */
 	msb_omap = le64_to_cpu(msb_raw->nx_omap_oid);
-	bh = sb_bread(sb, msb_omap);
+	bh = apfs_sb_bread(sb, msb_omap);
 	if (!bh) {
 		apfs_err(sb, "unable to read container object map");
 		return -EIO;
@@ -607,7 +690,7 @@ static int apfs_count_used_blocks(struct super_block *sb, u64 *count)
 		if (err)
 			break;
 
-		bh = sb_bread(sb, vol_bno);
+		bh = apfs_sb_bread(sb, vol_bno);
 		if (!bh) {
 			err = -EIO;
 			apfs_err(sb, "unable to read volume superblock");
@@ -626,13 +709,14 @@ static int apfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
 	struct super_block *sb = dentry->d_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_superblock *msb_raw;
 	struct apfs_superblock *vol;
 	u64 fsid, used_blocks = 0;
 	int err;
 
-	down_read(&sbi->s_big_sem);
-	msb_raw = sbi->s_msb_raw;
+	down_read(&nxi->nx_big_sem);
+	msb_raw = nxi->nx_raw;
 	vol = sbi->s_vsb_raw;
 
 	buf->f_type = APFS_SUPER_MAGIC;
@@ -667,13 +751,14 @@ static int apfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	buf->f_fsid.val[1] = (fsid >> 32) & 0xFFFFFFFFUL;
 
 fail:
-	up_read(&sbi->s_big_sem);
+	up_read(&nxi->nx_big_sem);
 	return err;
 }
 
 static int apfs_show_options(struct seq_file *seq, struct dentry *root)
 {
 	struct apfs_sb_info *sbi = APFS_SB(root->d_sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(root->d_sb);
 
 	if (sbi->s_vol_nr != 0)
 		seq_printf(seq, ",vol=%u", sbi->s_vol_nr);
@@ -683,7 +768,7 @@ static int apfs_show_options(struct seq_file *seq, struct dentry *root)
 	if (gid_valid(sbi->s_gid))
 		seq_printf(seq, ",gid=%u", from_kgid(&init_user_ns,
 						     sbi->s_gid));
-	if (sbi->s_flags & APFS_CHECK_NODES)
+	if (nxi->nx_flags & APFS_CHECK_NODES)
 		seq_puts(seq, ",cknodes");
 
 	return 0;
@@ -712,6 +797,51 @@ static const match_table_t tokens = {
 	{Opt_err, NULL}
 };
 
+/**
+ * apfs_set_nx_flags - Set the mount flags for the container, if allowed
+ * @sb:		superblock structure
+ * @flags:	flags to set
+ */
+static void apfs_set_nx_flags(struct super_block *sb, unsigned int flags)
+{
+	struct apfs_nxsb_info *nxi = APFS_SB(sb)->s_nxi;
+
+	lockdep_assert_held(&nxs_mutex);
+
+	/* The mount flags can only be set when the container is first mounted */
+	if (nxi->nx_refcnt == 1)
+		nxi->nx_flags = flags;
+	else if (flags != nxi->nx_flags)
+		apfs_warn(sb, "ignoring mount flags - container already mounted");
+}
+
+/**
+ * apfs_get_vol_number - Retrieve the volume number from the mount options
+ * @options:	string of mount options
+ *
+ * On error, it will just return the default volume 0.
+ */
+static unsigned int apfs_get_vol_number(char *options)
+{
+	char needle[] = "vol=";
+	char *volstr;
+	long vol;
+
+	if (!options)
+		return 0;
+
+	/* TODO: just parse all the options once... */
+	volstr = strstr(options, needle);
+	if (!volstr)
+		return 0;
+	volstr += sizeof(needle) - 1;
+
+	/* TODO: other bases? */
+	if (kstrtol(volstr, 10, &vol) < 0)
+		return 0;
+	return vol;
+}
+
 /*
  * Many of the parse_options() functions in other file systems return 0
  * on error. This one returns an error code, and 0 on success.
@@ -719,16 +849,18 @@ static const match_table_t tokens = {
 static int parse_options(struct super_block *sb, char *options)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = sbi->s_nxi;
 	char *p;
 	substring_t args[MAX_OPT_ARGS];
 	int option;
 	int err = 0;
-	bool readwrite;
+	unsigned int nx_flags;
+
+	lockdep_assert_held(&nxs_mutex);
 
 	/* Set default values before parsing */
 	sbi->s_vol_nr = 0;
-	sbi->s_flags = 0;
-	readwrite = false;
+	nx_flags = 0;
 
 	if (!options)
 		goto out;
@@ -745,14 +877,14 @@ static int parse_options(struct super_block *sb, char *options)
 			 * Write support is not safe yet, so keep it disabled
 			 * unless the user requests it explicitly.
 			 */
-			readwrite = true;
+			nx_flags |= APFS_READWRITE;
 			break;
 		case Opt_cknodes:
 			/*
 			 * Right now, node checksums are too costly to enable
 			 * by default.  TODO: try to improve this.
 			 */
-			sbi->s_flags |= APFS_CHECK_NODES;
+			nx_flags |= APFS_CHECK_NODES;
 			break;
 		case Opt_uid:
 			err = match_int(&args[0], &option);
@@ -785,7 +917,8 @@ static int parse_options(struct super_block *sb, char *options)
 	}
 
 out:
-	if (readwrite && !(sb->s_flags & SB_RDONLY))
+	apfs_set_nx_flags(sb, nx_flags);
+	if ((nxi->nx_flags & APFS_READWRITE) && !(sb->s_flags & SB_RDONLY))
 		apfs_notice(sb, "experimental write support is enabled");
 	else
 		sb->s_flags |= SB_RDONLY;
@@ -801,13 +934,12 @@ out:
  */
 static int apfs_check_features(struct super_block *sb)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_nx_superblock *msb_raw = sbi->s_msb_raw;
-	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
+	struct apfs_nx_superblock *msb_raw = APFS_NXI(sb)->nx_raw;
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
 	u64 features;
 
-	ASSERT(sbi->s_msb_raw);
-	ASSERT(sbi->s_vsb_raw);
+	ASSERT(msb_raw);
+	ASSERT(vsb_raw);
 
 	features = le64_to_cpu(msb_raw->nx_incompatible_features);
 	if (features & ~APFS_NX_SUPPORTED_INCOMPAT_MASK) {
@@ -864,33 +996,22 @@ static int apfs_check_features(struct super_block *sb)
 
 static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 {
-	struct apfs_sb_info *sbi;
+	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct inode *root;
 	int err;
 
-	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
-	if (!sbi)
-		return -ENOMEM;
-	sb->s_fs_info = sbi;
-	init_rwsem(&sbi->s_big_sem);
-
-	err = apfs_map_main_super(sb);
-	if (err)
-		goto failed_main_super;
-
-	/* For now we only support blocksize < PAGE_SIZE */
-	sbi->s_blocksize = sb->s_blocksize;
-	sbi->s_blocksize_bits = sb->s_blocksize_bits;
+	ASSERT(sbi);
+	lockdep_assert_held(&nxs_mutex);
 
 	sbi->s_uid = INVALID_UID;
 	sbi->s_gid = INVALID_GID;
 	err = parse_options(sb, data);
 	if (err)
-		goto failed_volume_super;
+		return err;
 
 	err = apfs_map_volume_super(sb, false /* write */);
 	if (err)
-		goto failed_volume_super;
+		return err;
 
 	err = apfs_check_features(sb);
 	if (err)
@@ -941,25 +1062,152 @@ failed_cat:
 	apfs_node_put(sbi->s_omap_root);
 failed_omap:
 	apfs_unmap_volume_super(sb);
-failed_volume_super:
-	apfs_unmap_main_super(sb);
-failed_main_super:
-	sb->s_fs_info = NULL;
-	kfree(sbi);
 	return err;
 }
 
-static struct dentry *apfs_mount(struct file_system_type *fs_type,
-		int flags, const char *dev_name, void *data)
+/**
+ * apfs_test_super - Check if two volume superblocks are for the same volume
+ * @sb:		superblock structure for a currently mounted volume
+ * @data:	superblock info for the volume being mounted
+ */
+static int apfs_test_super(struct super_block *sb, void *data)
 {
-	return mount_bdev(fs_type, flags, dev_name, data, apfs_fill_super);
+	struct apfs_sb_info *sbi_1 = data;
+	struct apfs_sb_info *sbi_2 = APFS_SB(sb);
+
+	if (sbi_1->s_nxi != sbi_2->s_nxi)
+		return false;
+	if (sbi_1->s_vol_nr != sbi_2->s_vol_nr)
+		return false;
+	return true;
+}
+
+/**
+ * apfs_set_super - Assign a fake bdev and an info struct to a superblock
+ * @sb:		superblock structure to set
+ * @data:	superblock info for the volume being mounted
+ */
+static int apfs_set_super(struct super_block *sb, void *data)
+{
+	int err = set_anon_super(sb, data);
+	if (!err)
+		sb->s_fs_info = data;
+	return err;
+}
+
+/**
+ * apfs_attach_nxi - Attach container sb info to a volume's sb info
+ * @sbi:	new superblock info structure for the volume to be mounted
+ * @bdev:	block device for the container
+ * @mode:	FMODE_* mask
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_attach_nxi(struct apfs_sb_info *sbi, struct block_device *bdev, fmode_t mode)
+{
+	struct apfs_nxsb_info *nxi;
+
+	lockdep_assert_held(&nxs_mutex);
+
+	nxi = apfs_nx_find_by_dev(bdev);
+	if (nxi) {
+		/* The whole container holds a single reference to the device */
+		blkdev_put(bdev, mode);
+	} else {
+		nxi = kzalloc(sizeof(*nxi), GFP_KERNEL);
+		if (!nxi)
+			return -ENOMEM;
+
+		nxi->nx_bdev = bdev;
+		init_rwsem(&nxi->nx_big_sem);
+		list_add(&nxi->nx_list, &nxs);
+	}
+
+	sbi->s_nxi = nxi;
+	++nxi->nx_refcnt;
+	return 0;
+}
+
+/*
+ * This function is a copy of mount_bdev() that allows multiple mounts.
+ */
+static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
+				 const char *dev_name, void *data)
+{
+	struct apfs_nxsb_info *nxi;
+	struct block_device *bdev;
+	struct super_block *sb;
+	struct apfs_sb_info *sbi;
+	fmode_t mode = FMODE_READ; /* XXX: why not FMODE_EXCL? */
+	bool clean_bdev = true;
+	int error = 0;
+
+	if (!(flags & SB_RDONLY))
+		mode |= FMODE_WRITE;
+
+	bdev = blkdev_get_by_path(dev_name, mode, fs_type);
+	if (IS_ERR(bdev))
+		return ERR_CAST(bdev);
+
+	mutex_lock(&nxs_mutex);
+
+	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
+	if (!sbi)
+		goto out_unlock;
+	sbi->s_vol_nr = apfs_get_vol_number(data);
+
+	error = apfs_attach_nxi(sbi, bdev, mode);
+	if (error)
+		goto out_free_sbi;
+	nxi = sbi->s_nxi;
+	if (nxi->nx_refcnt > 1)
+		clean_bdev = false;
+
+	/* TODO: lockfs stuff? Btrfs doesn't seem to care */
+	sb = sget(fs_type, apfs_test_super, apfs_set_super, flags | SB_NOSEC, sbi);
+	if (IS_ERR(sb))
+		goto out_unmap_super;
+
+	if (sb->s_root) {
+		if ((flags ^ sb->s_flags) & SB_RDONLY) {
+			deactivate_locked_super(sb);
+			error = -EBUSY;
+			goto out_unmap_super;
+		}
+		--nxi->nx_refcnt; /* Only one reference per volume */
+	} else {
+		error = apfs_map_main_super(sb);
+		if (error)
+			goto out_unmap_super;
+		sb->s_mode = mode;
+		snprintf(sb->s_id, sizeof(sb->s_id), "%xg", sb->s_dev);
+		error = apfs_fill_super(sb, data, flags & SB_SILENT ? 1 : 0);
+		if (error) {
+			deactivate_locked_super(sb);
+			goto out_unmap_super;
+		}
+		sb->s_flags |= SB_ACTIVE;
+	}
+
+	mutex_unlock(&nxs_mutex);
+	return dget(sb->s_root);
+
+out_unmap_super:
+	apfs_unmap_main_super(sbi);
+out_free_sbi:
+	kfree(sbi);
+out_unlock:
+	mutex_unlock(&nxs_mutex);
+	if (clean_bdev)
+		blkdev_put(bdev, mode);
+	return ERR_PTR(error);
 }
 
 static struct file_system_type apfs_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "apfs",
 	.mount		= apfs_mount,
-	.kill_sb	= kill_block_super,
+	.kill_sb	= kill_anon_super,
 	.fs_flags	= FS_REQUIRES_DEV,
 };
 MODULE_ALIAS_FS("apfs");

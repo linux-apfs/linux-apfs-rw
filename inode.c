@@ -375,6 +375,7 @@ static struct inode *apfs_iget_locked(struct super_block *sb, u64 cnid)
 struct inode *apfs_iget(struct super_block *sb, u64 cnid)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct inode *inode;
 	struct apfs_query *query;
 	int err;
@@ -385,7 +386,7 @@ struct inode *apfs_iget(struct super_block *sb, u64 cnid)
 	if (!(inode->i_state & I_NEW))
 		return inode;
 
-	down_read(&sbi->s_big_sem);
+	down_read(&nxi->nx_big_sem);
 	query = apfs_inode_lookup(inode);
 	if (IS_ERR(query)) {
 		err = PTR_ERR(query);
@@ -395,7 +396,7 @@ struct inode *apfs_iget(struct super_block *sb, u64 cnid)
 	apfs_free_query(sb, query);
 	if (err)
 		goto fail;
-	up_read(&sbi->s_big_sem);
+	up_read(&nxi->nx_big_sem);
 
 	/* Allow the user to override the ownership */
 	if (uid_valid(sbi->s_uid))
@@ -408,7 +409,7 @@ struct inode *apfs_iget(struct super_block *sb, u64 cnid)
 	return inode;
 
 fail:
-	up_read(&sbi->s_big_sem);
+	up_read(&nxi->nx_big_sem);
 	iget_failed(inode);
 	return ERR_PTR(err);
 }
@@ -688,7 +689,7 @@ int apfs_update_inode(struct inode *inode, char *new_name)
 		goto fail;
 	bh = query->node->object.bh;
 	node_raw = (void *)bh->b_data;
-	ASSERT(sbi->s_xid == le64_to_cpu(node_raw->btn_o.o_xid));
+	apfs_assert_in_transaction(sb, &node_raw->btn_o);
 	inode_raw = (void *)node_raw + query->off;
 
 	inode_raw->parent_id = cpu_to_le64(ai->i_parent_id);
@@ -729,8 +730,7 @@ fail:
 static int apfs_delete_inode(struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
 	struct apfs_query *query;
 	int ret;
 
@@ -743,7 +743,7 @@ static int apfs_delete_inode(struct inode *inode)
 	ret = apfs_btree_remove(query);
 	apfs_free_query(sb, query);
 
-	ASSERT(sbi->s_xid == le64_to_cpu(vsb_raw->apfs_o.o_xid));
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFREG:
 		le64_add_cpu(&vsb_raw->apfs_num_files, -1);
@@ -814,15 +814,14 @@ static int apfs_insert_inode_locked(struct inode *inode)
 struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 {
 	struct super_block *sb = dir->i_sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
 	struct inode *inode;
 	struct apfs_inode_info *ai;
 	u64 cnid;
 	struct timespec64 now;
 
 	/* Updating on-disk structures here is odd, but it works for now */
-	ASSERT(sbi->s_xid == le64_to_cpu(vsb_raw->apfs_o.o_xid));
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 
 	inode = new_inode(sb);
 	if (!inode)

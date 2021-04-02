@@ -125,7 +125,7 @@ int __apfs_get_block(struct inode *inode, sector_t iblock,
 		bh_result->b_size = map_len;
 
 	/*
-	 * Save the requested mapping length as map_bh() replaces it with
+	 * Save the requested mapping length as apfs_map_bh() replaces it with
 	 * the filesystem block size
 	 */
 	map_len = bh_result->b_size;
@@ -133,7 +133,7 @@ int __apfs_get_block(struct inode *inode, sector_t iblock,
 	if (ext.phys_block_num != 0) {
 		/* Find the block number of iblock within the disk */
 		bno = ext.phys_block_num + blk_off;
-		map_bh(bh_result, sb, bno);
+		apfs_map_bh(bh_result, sb, bno);
 	}
 	bh_result->b_size = map_len;
 	return 0;
@@ -142,13 +142,12 @@ int __apfs_get_block(struct inode *inode, sector_t iblock,
 int apfs_get_block(struct inode *inode, sector_t iblock,
 		   struct buffer_head *bh_result, int create)
 {
-	struct super_block *sb = inode->i_sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(inode->i_sb);
 	int ret;
 
-	down_read(&sbi->s_big_sem);
+	down_read(&nxi->nx_big_sem);
 	ret = __apfs_get_block(inode, iblock, bh_result, create);
-	up_read(&sbi->s_big_sem);
+	up_read(&nxi->nx_big_sem);
 	return ret;
 }
 
@@ -230,8 +229,7 @@ static int apfs_create_phys_extent(struct inode *inode,
 				   struct apfs_file_extent *extent)
 {
 	struct super_block *sb = inode->i_sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
 	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_node *extref_root;
 	struct apfs_key key;
@@ -247,7 +245,7 @@ static int apfs_create_phys_extent(struct inode *inode,
 				APFS_OBJ_PHYSICAL, true /* write */);
 	if (IS_ERR(extref_root))
 		return PTR_ERR(extref_root);
-	ASSERT(sbi->s_xid == le64_to_cpu(vsb_raw->apfs_o.o_xid));
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	vsb_raw->apfs_extentref_tree_oid = cpu_to_le64(extref_root->object.oid);
 
 	query = apfs_alloc_query(extref_root, NULL /* parent */);
@@ -296,8 +294,7 @@ static int apfs_delete_phys_extent(struct inode *inode,
 				   struct apfs_file_extent *extent)
 {
 	struct super_block *sb = inode->i_sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
 	struct apfs_node *extref_root;
 	struct apfs_key key;
 	struct apfs_query *query = NULL;
@@ -308,7 +305,7 @@ static int apfs_delete_phys_extent(struct inode *inode,
 				APFS_OBJ_PHYSICAL, true /* write */);
 	if (IS_ERR(extref_root))
 		return PTR_ERR(extref_root);
-	ASSERT(sbi->s_xid == le64_to_cpu(vsb_raw->apfs_o.o_xid));
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	vsb_raw->apfs_extentref_tree_oid = cpu_to_le64(extref_root->object.oid);
 
 	query = apfs_alloc_query(extref_root, NULL /* parent */);
@@ -354,7 +351,7 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 	if (err)
 		return err;
 
-	map_bh(bh_result, sb, ext.phys_block_num);
+	apfs_map_bh(bh_result, sb, ext.phys_block_num);
 	err = apfs_transaction_join(sb, bh_result);
 	if (err)
 		return err;
@@ -380,7 +377,7 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			return err;
 	}
 
-	/* Just invalidate the cache; s_big_sem provides the locking here */
+	/* Just invalidate the cache; nx_big_sem provides the locking here */
 	ai->i_cached_extent.len = 0;
 
 	return 0;

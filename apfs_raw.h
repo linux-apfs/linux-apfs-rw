@@ -837,7 +837,7 @@ struct apfs_nx_superblock {
 	__le64 nx_readonly_compatible_features;
 	__le64 nx_incompatible_features;
 
-/*48*/	char nx_uuid[16];
+/*48*/	char nx_uuid[UUID_SIZE];
 
 /*58*/	__le64 nx_next_oid;
 	__le64 nx_next_xid;

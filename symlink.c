@@ -20,12 +20,12 @@ static const char *apfs_get_link(struct dentry *dentry, struct inode *inode,
 				 struct delayed_call *done)
 {
 	struct super_block *sb = inode->i_sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	char *target = NULL;
 	int err;
 	int size;
 
-	down_read(&sbi->s_big_sem);
+	down_read(&nxi->nx_big_sem);
 
 	if (!dentry) {
 		err = -ECHILD;
@@ -58,13 +58,13 @@ static const char *apfs_get_link(struct dentry *dentry, struct inode *inode,
 		goto fail;
 	}
 
-	up_read(&sbi->s_big_sem);
+	up_read(&nxi->nx_big_sem);
 	set_delayed_call(done, kfree_link, target);
 	return target;
 
 fail:
 	kfree(target);
-	up_read(&sbi->s_big_sem);
+	up_read(&nxi->nx_big_sem);
 	return ERR_PTR(err);
 }
 

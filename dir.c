@@ -137,12 +137,12 @@ fail:
 int apfs_inode_by_name(struct inode *dir, const struct qstr *child, u64 *ino)
 {
 	struct super_block *sb = dir->i_sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_query *query;
 	struct apfs_drec drec;
 	int err = 0;
 
-	down_read(&sbi->s_big_sem);
+	down_read(&nxi->nx_big_sem);
 	query = apfs_dentry_lookup(dir, child, &drec);
 	if (IS_ERR(query)) {
 		err = PTR_ERR(query);
@@ -151,7 +151,7 @@ int apfs_inode_by_name(struct inode *dir, const struct qstr *child, u64 *ino)
 	*ino = drec.ino;
 	apfs_free_query(sb, query);
 out:
-	up_read(&sbi->s_big_sem);
+	up_read(&nxi->nx_big_sem);
 	return err;
 }
 
@@ -160,6 +160,7 @@ static int apfs_readdir(struct file *file, struct dir_context *ctx)
 	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_key key;
 	struct apfs_query *query;
 	u64 cnid = apfs_ino(inode);
@@ -167,7 +168,7 @@ static int apfs_readdir(struct file *file, struct dir_context *ctx)
 	bool hashed = apfs_is_normalization_insensitive(sb);
 	int err = 0;
 
-	down_read(&sbi->s_big_sem);
+	down_read(&nxi->nx_big_sem);
 
 	/* Inode numbers might overflow here; follow btrfs in ignoring that */
 	if (!dir_emit_dots(file, ctx))
@@ -223,7 +224,7 @@ static int apfs_readdir(struct file *file, struct dir_context *ctx)
 	apfs_free_query(sb, query);
 
 out:
-	up_read(&sbi->s_big_sem);
+	up_read(&nxi->nx_big_sem);
 	return err;
 }
 
@@ -521,13 +522,12 @@ static int apfs_create_sibling_recs(struct dentry *dentry,
 				    struct inode *inode, u64 *sibling_id)
 {
 	struct super_block *sb = dentry->d_sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
 	u64 cnid;
 	int ret;
 
 	/* Sibling ids come from the same pool as the inode numbers */
-	ASSERT(sbi->s_xid == le64_to_cpu(vsb_raw->apfs_o.o_xid));
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	cnid = le64_to_cpu(vsb_raw->apfs_next_obj_id);
 	le64_add_cpu(&vsb_raw->apfs_next_obj_id, 1);
 
