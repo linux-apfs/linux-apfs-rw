@@ -120,7 +120,6 @@ int apfs_read_cat_key(void *raw, int size, struct apfs_key *key, bool hashed)
 			      ((struct apfs_drec_hashed_key *)raw)->name_len_and_hash) &
 								    APFS_DREC_HASH_MASK;
 			key->name = ((struct apfs_drec_hashed_key *)raw)->name;
-			break;
 		} else {
 			if (size < sizeof(struct apfs_drec_key) + 1 ||
 			    *((char *)raw + size - 1) != 0) {
@@ -131,6 +130,7 @@ int apfs_read_cat_key(void *raw, int size, struct apfs_key *key, bool hashed)
 			key->number = 0;
 			key->name = ((struct apfs_drec_key *)raw)->name;
 		}
+		break;
 	case APFS_TYPE_XATTR:
 		if (size < sizeof(struct apfs_xattr_key) + 1 ||
 		    *((char *)raw + size - 1) != 0) {
