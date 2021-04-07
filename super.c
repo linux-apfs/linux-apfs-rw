@@ -327,6 +327,7 @@ int apfs_map_volume_super(struct super_block *sb, bool write)
 
 	ASSERT(msb_raw);
 	ASSERT(trans->t_old_vsb == sbi->s_vobject.bh);
+	(void)trans;
 
 	/* Get the id for the requested volume number */
 	if (sbi->s_vol_nr >= APFS_NX_MAX_FILE_SYSTEMS) {
