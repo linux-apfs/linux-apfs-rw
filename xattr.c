@@ -62,6 +62,7 @@ static int apfs_xattr_from_query(struct apfs_query *query,
  * @xattr:	the xattr structure
  * @buffer:	where to copy the attribute value
  * @size:	size of @buffer
+ * @only_whole:	are partial reads banned?
  *
  * Copies the value of @xattr to @buffer, if provided. If @buffer is NULL, just
  * computes the size of the buffer required.
@@ -71,7 +72,7 @@ static int apfs_xattr_from_query(struct apfs_query *query,
  */
 static int apfs_xattr_extents_read(struct inode *parent,
 				   struct apfs_xattr *xattr,
-				   void *buffer, size_t size)
+				   void *buffer, size_t size, bool only_whole)
 {
 	struct super_block *sb = parent->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
@@ -90,8 +91,13 @@ static int apfs_xattr_extents_read(struct inode *parent,
 
 	if (!buffer) /* All we want is the length */
 		return length;
-	if (length > size) /* xattr won't fit in the buffer */
-		return -ERANGE;
+	if (only_whole) {
+		if (length > size) /* xattr won't fit in the buffer */
+			return -ERANGE;
+	} else {
+		if (length > size)
+			length = size;
+	}
 
 	extent_id = le64_to_cpu(xdata->xattr_obj_id);
 	/* We will read all the extents, starting with the last one */
@@ -166,6 +172,7 @@ done:
  * @xattr:	the xattr structure
  * @buffer:	where to copy the attribute value
  * @size:	size of @buffer
+ * @only_whole:	are partial reads banned?
  *
  * Copies the inline value of @xattr to @buffer, if provided. If @buffer is
  * NULL, just computes the size of the buffer required.
@@ -175,14 +182,19 @@ done:
  */
 static int apfs_xattr_inline_read(struct inode *parent,
 				  struct apfs_xattr *xattr,
-				  void *buffer, size_t size)
+				  void *buffer, size_t size, bool only_whole)
 {
 	int length = xattr->xdata_len;
 
 	if (!buffer) /* All we want is the length */
 		return length;
-	if (length > size) /* xattr won't fit in the buffer */
-		return -ERANGE;
+	if (only_whole) {
+		if (length > size) /* xattr won't fit in the buffer */
+			return -ERANGE;
+	} else {
+		if (length > size)
+			length = size;
+	}
 	memcpy(buffer, xattr->xdata, length);
 	return length;
 }
@@ -198,6 +210,20 @@ static int apfs_xattr_inline_read(struct inode *parent,
  */
 int __apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 		     size_t size)
+{
+	return ____apfs_xattr_get(inode, name, buffer, size, true /* only_whole */);
+}
+
+/**
+ * ____apfs_xattr_get - Find and read a named attribute, optionally header only
+ * @inode:	inode the attribute belongs to
+ * @name:	name of the attribute
+ * @buffer:	where to copy the attribute value
+ * @size:	size of @buffer
+ * @only_whole:	must read complete (no partial header read allowed)
+ */
+int ____apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
+		       size_t size, bool only_whole)
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
@@ -226,9 +252,9 @@ int __apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 	}
 
 	if (xattr.has_dstream)
-		ret = apfs_xattr_extents_read(inode, &xattr, buffer, size);
+		ret = apfs_xattr_extents_read(inode, &xattr, buffer, size, only_whole);
 	else
-		ret = apfs_xattr_inline_read(inode, &xattr, buffer, size);
+		ret = apfs_xattr_inline_read(inode, &xattr, buffer, size, only_whole);
 
 done:
 	apfs_free_query(sb, query);

@@ -316,6 +316,9 @@ struct apfs_dstream_id_val {
 #define APFS_INODE_PINNED_MASK			(APFS_INODE_PINNED_TO_MAIN \
 						| APFS_INODE_PINNED_TO_TIER2)
 
+/* BSD flags */
+#define APFS_INOBSD_COMPRESSED			0x00000020
+
 /*
  * Structure of an inode as stored as a B-tree value
  */
@@ -1107,6 +1110,36 @@ struct apfs_xattr_val {
 struct apfs_xattr_dstream {
 	__le64 xattr_obj_id;
 	struct apfs_dstream dstream;
+} __packed;
+
+/*
+ * Compressed file header
+ */
+struct apfs_compress_hdr {
+	__le32 signature;
+	__le32 algo;
+	__le64 size;
+} __packed;
+
+#define APFS_COMPRESS_ZLIB_ATTR		3
+#define APFS_COMPRESS_ZLIB_RSRC		4
+
+struct apfs_compress_rsrc_hdr {
+	__be32 data_offs;
+	__be32 mgmt_offs;
+	__be32 data_size;
+	__be32 mgmt_size;
+} __packed;
+
+#define APFS_COMPRESS_BLOCK		0x10000
+
+struct apfs_compress_rsrc_data {
+	__le32 unknown;
+	__le32 num;
+	struct apfs_compress_rsrc_block {
+		__le32 offs;
+		__le32 size;
+	} __packed block[0];
 } __packed;
 
 #endif	/* _APFS_RAW_H */

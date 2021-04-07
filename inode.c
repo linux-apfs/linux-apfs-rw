@@ -191,16 +191,20 @@ static const struct address_space_operations apfs_aops = {
  * apfs_inode_set_ops - Set up an inode's operations
  * @inode:	vfs inode to set up
  * @rdev:	device id (0 if not a device file)
+ * @compressed:	is this a compressed inode?
  *
  * For device files, also sets the device id to @rdev.
  */
-static void apfs_inode_set_ops(struct inode *inode, dev_t rdev)
+static void apfs_inode_set_ops(struct inode *inode, dev_t rdev, bool compressed)
 {
 	/* A lot of operations still missing, of course */
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFREG:
 		inode->i_op = &apfs_file_inode_operations;
-		inode->i_fop = &apfs_file_operations;
+		if (compressed)
+			inode->i_fop = &apfs_compress_file_operations;
+		else
+			inode->i_fop = &apfs_file_operations;
 		inode->i_mapping->a_ops = &apfs_aops;
 		break;
 	case S_IFDIR:
@@ -233,7 +237,8 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 	char *raw = query->node->object.bh->b_data;
 	char *xval = NULL;
 	int xlen;
-	u32 rdev = 0;
+	u32 rdev = 0, bsd_flags;
+	bool compressed;
 
 	if (query->len < sizeof(*inode_val))
 		goto corrupted;
@@ -265,15 +270,24 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 	inode->i_mtime = ns_to_timespec64(le64_to_cpu(inode_val->mod_time));
 	ai->i_crtime = ns_to_timespec64(le64_to_cpu(inode_val->create_time));
 
-	inode->i_size = inode->i_blocks = 0; /* TODO: compressed inodes */
-	xlen = apfs_find_xfield(inode_val->xfields,
-				query->len - sizeof(*inode_val),
-				APFS_INO_EXT_TYPE_DSTREAM, &xval);
-	if (xlen >= sizeof(struct apfs_dstream)) {
-		struct apfs_dstream *dstream = (struct apfs_dstream *)xval;
+	inode->i_size = inode->i_blocks = 0;
+	bsd_flags = le32_to_cpu(inode_val->bsd_flags);
+	if ((bsd_flags & APFS_INOBSD_COMPRESSED) && !S_ISDIR(inode->i_mode)) {
+		if (!apfs_compress_get_size(inode, &inode->i_size)) {
+			/* TODO: correct block calculation in general */
+			inode->i_blocks = (inode->i_size + 511) >> 9;
+			compressed = true;
+		}
+	} else {
+		xlen = apfs_find_xfield(inode_val->xfields,
+					query->len - sizeof(*inode_val),
+					APFS_INO_EXT_TYPE_DSTREAM, &xval);
+		if (xlen >= sizeof(struct apfs_dstream)) {
+			struct apfs_dstream *dstream = (struct apfs_dstream *)xval;
 
-		inode->i_size = le64_to_cpu(dstream->size);
-		inode->i_blocks = le64_to_cpu(dstream->alloced_size) >> 9;
+			inode->i_size = le64_to_cpu(dstream->size);
+			inode->i_blocks = le64_to_cpu(dstream->alloced_size) >> 9;
+		}
 	}
 	xval = NULL;
 
@@ -287,7 +301,7 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 		rdev = le32_to_cpup(rdev_p);
 	}
 
-	apfs_inode_set_ops(inode, rdev);
+	apfs_inode_set_ops(inode, rdev, compressed);
 	return 0;
 
 corrupted:
@@ -860,7 +874,7 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 	}
 
 	/* No need to dirty the inode, we'll write it to disk right away */
-	apfs_inode_set_ops(inode, rdev);
+	apfs_inode_set_ops(inode, rdev, false /* compressed */);
 	return inode;
 }
 

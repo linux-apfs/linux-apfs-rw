@@ -566,6 +566,9 @@ extern void apfs_btree_change_node_count(struct apfs_query *query, int change);
 extern int apfs_btree_replace(struct apfs_query *query, void *key, int key_len,
 			      void *val, int val_len);
 
+/* compress.c */
+extern int apfs_compress_get_size(struct inode *inode, loff_t *size);
+
 /* dir.c */
 extern int apfs_inode_by_name(struct inode *dir, const struct qstr *child,
 			      u64 *ino);
@@ -666,6 +669,8 @@ extern int apfs_transaction_join(struct super_block *sb,
 void apfs_transaction_abort(struct super_block *sb);
 
 /* xattr.c */
+extern int ____apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
+			      size_t size, bool only_whole);
 extern int __apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 			    size_t size);
 extern int apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
@@ -682,6 +687,9 @@ extern int apfs_insert_xfield(u8 *buffer, int buflen,
 /*
  * Inode and file operations
  */
+
+/* compress.c */
+extern const struct file_operations apfs_compress_file_operations;
 
 /* dir.c */
 extern const struct file_operations apfs_dir_operations;
