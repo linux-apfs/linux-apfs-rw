@@ -1140,29 +1140,32 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	struct super_block *sb;
 	struct apfs_sb_info *sbi;
 	fmode_t mode = FMODE_READ; /* XXX: why not FMODE_EXCL? */
-	bool clean_bdev = true;
 	int error = 0;
 
 	if (!(flags & SB_RDONLY))
 		mode |= FMODE_WRITE;
 
-	bdev = blkdev_get_by_path(dev_name, mode, fs_type);
-	if (IS_ERR(bdev))
-		return ERR_CAST(bdev);
-
 	mutex_lock(&nxs_mutex);
 
-	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
-	if (!sbi)
+	bdev = blkdev_get_by_path(dev_name, mode, fs_type);
+	if (IS_ERR(bdev)) {
+		error = PTR_ERR(bdev);
 		goto out_unlock;
+	}
+
+	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
+	if (!sbi) {
+		blkdev_put(bdev, mode);
+		goto out_unlock;
+	}
 	sbi->s_vol_nr = apfs_get_vol_number(data);
 
 	error = apfs_attach_nxi(sbi, bdev, mode);
-	if (error)
+	if (error) {
+		blkdev_put(bdev, mode);
 		goto out_free_sbi;
+	}
 	nxi = sbi->s_nxi;
-	if (nxi->nx_refcnt > 1)
-		clean_bdev = false;
 
 	/* TODO: lockfs stuff? Btrfs doesn't seem to care */
 	sb = sget(fs_type, apfs_test_super, apfs_set_super, flags | SB_NOSEC, sbi);
@@ -1199,8 +1202,6 @@ out_free_sbi:
 	kfree(sbi);
 out_unlock:
 	mutex_unlock(&nxs_mutex);
-	if (clean_bdev)
-		blkdev_put(bdev, mode);
 	return ERR_PTR(error);
 }
 
