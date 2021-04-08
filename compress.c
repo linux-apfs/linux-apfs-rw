@@ -236,6 +236,7 @@ static ssize_t apfs_compress_file_read(struct file *filp, char __user *buf, size
 		res = copy_to_user(buf, fd->data + *off, size);
 		if(res == size)
 			return -EFAULT;
+		*off += size - res;
 		return size - res;
 	}
 }
