@@ -238,7 +238,7 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 	char *xval = NULL;
 	int xlen;
 	u32 rdev = 0, bsd_flags;
-	bool compressed;
+	bool compressed = false;
 
 	if (query->len < sizeof(*inode_val))
 		goto corrupted;
