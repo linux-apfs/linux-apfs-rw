@@ -294,9 +294,157 @@ static int apfs_xattr_osx_get(const struct xattr_handler *handler,
 	return apfs_xattr_get(inode, name, buffer, size);
 }
 
+/**
+ * apfs_build_xattr_key - Allocate and initialize the key for a xattr record
+ * @name:	xattr name
+ * @ino:	inode number for xattr's owner
+ * @key_p:	on return, a pointer to the new on-disk key structure
+ *
+ * Returns the length of the key, or a negative error code in case of failure.
+ */
+static int apfs_build_xattr_key(const char *name, u64 ino, struct apfs_xattr_key **key_p)
+{
+	struct apfs_xattr_key *key;
+	u16 namelen = strlen(name) + 1; /* We count the null-termination */
+	int key_len;
+
+	key_len = sizeof(*key) + namelen;
+	key = kmalloc(key_len, GFP_KERNEL);
+	if (!key)
+		return -ENOMEM;
+
+	apfs_key_set_hdr(APFS_TYPE_XATTR, ino, key);
+	key->name_len = cpu_to_le16(namelen);
+	strcpy(key->name, name);
+
+	*key_p = key;
+	return key_len;
+}
+
+/**
+ * apfs_build_xattr_val - Allocate and initialize the value for an inline xattr
+ * @value:	content of the xattr
+ * @size:	size of @value
+ * @val_p:	on return, a pointer to the new on-disk value structure
+ *
+ * Returns the length of the value, or a negative error code in case of failure.
+ */
+static int apfs_build_xattr_val(const void *value, size_t size, struct apfs_xattr_val **val_p)
+{
+	struct apfs_xattr_val *val;
+	int val_len;
+
+	val_len = sizeof(*val) + size;
+	val = kmalloc(val_len, GFP_KERNEL);
+	if (!val)
+		return -ENOMEM;
+
+	val->flags = cpu_to_le16(APFS_XATTR_DATA_EMBEDDED);
+	val->xdata_len = cpu_to_le16(size);
+	memcpy(val->xdata, value, size);
+
+	*val_p = val;
+	return val_len;
+}
+
+/**
+ * apfs_xattr_set - Write a named attribute
+ * @inode:	inode the attribute will belong to
+ * @name:	name for the attribute
+ * @value:	value for the attribute
+ * @size:	size of @value
+ * @flags:	XATTR_REPLACE and XATTR_CREATE
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_xattr_set(struct inode *inode, const char *name,
+			  const void *value, size_t size, int flags)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_key key;
+	struct apfs_query *query;
+	u64 cnid = apfs_ino(inode);
+	int key_len, val_len;
+	struct apfs_xattr_key *raw_key = NULL;
+	struct apfs_xattr_val *raw_val = NULL;
+	int ret;
+
+	if (size > APFS_XATTR_MAX_EMBEDDED_SIZE)
+		return -ERANGE; /* TODO: support dstream xattrs */
+
+	apfs_init_xattr_key(cnid, name, &key);
+
+	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+	query->key = &key;
+	query->flags = APFS_QUERY_CAT | APFS_QUERY_EXACT;
+
+	ret = apfs_btree_query(sb, &query);
+	if (ret) {
+		if (ret != -ENODATA)
+			goto done;
+		else if (flags & XATTR_REPLACE)
+			goto done;
+	} else if (flags & XATTR_CREATE) {
+		ret = -EEXIST;
+		goto done;
+	}
+
+	key_len = apfs_build_xattr_key(name, cnid, &raw_key);
+	if (key_len < 0) {
+		ret = key_len;
+		goto done;
+	}
+	val_len = apfs_build_xattr_val(value, size, &raw_val);
+	if (val_len < 0) {
+		ret = val_len;
+		goto done;
+	}
+
+	if (ret)
+		ret = apfs_btree_insert(query, raw_key, key_len, raw_val, val_len);
+	else
+		ret = apfs_btree_replace(query, raw_key, key_len, raw_val, val_len);
+
+done:
+	kfree(raw_val);
+	kfree(raw_key);
+	apfs_free_query(sb, query);
+	return ret;
+}
+
+static int apfs_xattr_osx_set(const struct xattr_handler *handler,
+			      struct dentry *unused, struct inode *inode,
+			      const char *name, const void *value,
+			      size_t size, int flags)
+{
+	struct super_block *sb = inode->i_sb;
+	int err;
+
+	err = apfs_transaction_start(sb);
+	if (err)
+		return err;
+
+	/* Ignore the fake 'osx' prefix */
+	err = apfs_xattr_set(inode, name, value, size, flags);
+	if (err)
+		goto fail;
+
+	err = apfs_transaction_commit(sb);
+	if (!err)
+		return 0;
+
+fail:
+	apfs_transaction_abort(sb);
+	return err;
+}
+
 static const struct xattr_handler apfs_xattr_osx_handler = {
 	.prefix	= XATTR_MAC_OSX_PREFIX,
 	.get	= apfs_xattr_osx_get,
+	.set	= apfs_xattr_osx_set,
 };
 
 /* On-disk xattrs have no namespace; use a fake 'osx' prefix in the kernel */
