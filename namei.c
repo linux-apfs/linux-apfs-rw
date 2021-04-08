@@ -29,11 +29,18 @@ static struct dentry *apfs_lookup(struct inode *dir, struct dentry *dentry,
 	return d_splice_alias(inode, dentry);
 }
 
+static int apfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
+{
+	/* Symlink permissions don't mean anything and their value is fixed */
+	return apfs_mkany(dir, dentry, S_IFLNK | 0x1ed, 0 /* rdev */, symname);
+}
+
 const struct inode_operations apfs_dir_inode_operations = {
 	.create		= apfs_create,
 	.lookup		= apfs_lookup,
 	.link		= apfs_link,
 	.unlink		= apfs_unlink,
+	.symlink	= apfs_symlink,
 	.mkdir		= apfs_mkdir,
 	.rmdir		= apfs_rmdir,
 	.mknod		= apfs_mknod,

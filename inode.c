@@ -863,6 +863,8 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 		le64_add_cpu(&vsb_raw->apfs_num_files, 1);
 	else if (S_ISDIR(mode))
 		le64_add_cpu(&vsb_raw->apfs_num_directories, 1);
+	else if (S_ISLNK(mode))
+		le64_add_cpu(&vsb_raw->apfs_num_symlinks, 1);
 	else
 		le64_add_cpu(&vsb_raw->apfs_num_other_fsobjects, 1);
 

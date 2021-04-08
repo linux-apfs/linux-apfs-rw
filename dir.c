@@ -589,8 +589,8 @@ static void apfs_undo_create_dentry(struct dentry *dentry)
 	--APFS_I(parent)->i_nchildren;
 }
 
-int apfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
-	       dev_t rdev)
+int apfs_mkany(struct inode *dir, struct dentry *dentry, umode_t mode,
+	       dev_t rdev, const char *symname)
 {
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode;
@@ -614,6 +614,15 @@ int apfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 	if (err)
 		goto out_discard_inode;
 
+	if (symname) {
+		err = apfs_xattr_set(inode, APFS_XATTR_NAME_SYMLINK, symname,
+				     strlen(symname) + 1, 0 /* flags */);
+		if (err == -ERANGE)
+			err = -ENAMETOOLONG;
+		if (err)
+			goto out_undo_create;
+	}
+
 	err = apfs_transaction_commit(sb);
 	if (err)
 		goto out_undo_create;
@@ -629,6 +638,11 @@ out_discard_inode:
 out_abort:
 	apfs_transaction_abort(sb);
 	return err;
+}
+
+int apfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev)
+{
+	return apfs_mkany(dir, dentry, mode, rdev, NULL /* symname */);
 }
 
 int apfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)

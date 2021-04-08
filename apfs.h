@@ -572,6 +572,8 @@ extern int apfs_compress_get_size(struct inode *inode, loff_t *size);
 /* dir.c */
 extern int apfs_inode_by_name(struct inode *dir, const struct qstr *child,
 			      u64 *ino);
+extern int apfs_mkany(struct inode *dir, struct dentry *dentry,
+		      umode_t mode, dev_t rdev, const char *symname);
 extern int apfs_mknod(struct inode *dir, struct dentry *dentry,
 		      umode_t mode, dev_t rdev);
 extern int apfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode);
@@ -675,6 +677,8 @@ extern int __apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 			    size_t size);
 extern int apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 			  size_t size);
+extern int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
+			  size_t size, int flags);
 extern ssize_t apfs_listxattr(struct dentry *dentry, char *buffer, size_t size);
 
 /* xfield.c */

@@ -357,8 +357,8 @@ static int apfs_build_xattr_val(const void *value, size_t size, struct apfs_xatt
  *
  * Returns 0 on success, or a negative error code in case of failure.
  */
-static int apfs_xattr_set(struct inode *inode, const char *name,
-			  const void *value, size_t size, int flags)
+int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
+		   size_t size, int flags)
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
@@ -402,6 +402,10 @@ static int apfs_xattr_set(struct inode *inode, const char *name,
 		ret = val_len;
 		goto done;
 	}
+
+	/* For now this is the only system xattr we support */
+	if (strcmp(name, APFS_XATTR_NAME_SYMLINK) == 0)
+		raw_val->flags |= cpu_to_le16(APFS_XATTR_FILE_SYSTEM_OWNED);
 
 	if (ret)
 		ret = apfs_btree_insert(query, raw_key, key_len, raw_val, val_len);
