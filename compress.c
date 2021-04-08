@@ -10,7 +10,7 @@
 #include "apfs.h"
 
 /* maximum size of compressed data currently supported */
-#define MAX_FBUF_SIZE		(16 * 1024 * 1024)
+#define MAX_FBUF_SIZE		(128 * 1024 * 1024)
 
 struct apfs_compress_file_data {
 	struct apfs_compress_hdr hdr;
