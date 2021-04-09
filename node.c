@@ -255,13 +255,11 @@ fail:
 int apfs_delete_node(struct apfs_query *query)
 {
 	struct super_block *sb = query->node->object.sb;
-	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	struct apfs_superblock *vsb_raw;
 	struct apfs_node *node = query->node;
 	u64 oid = node->object.oid;
 	u64 bno = node->object.block_nr;
 	int err;
-
-	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 
 	switch (query->flags & APFS_QUERY_TREE_MASK) {
 	case APFS_QUERY_CAT:
@@ -271,6 +269,8 @@ int apfs_delete_node(struct apfs_query *query)
 		err = apfs_delete_omap_rec(sb, oid);
 		if (err)
 			return err;
+		vsb_raw = APFS_SB(sb)->s_vsb_raw;
+		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
 		break;
 	case APFS_QUERY_OMAP:
@@ -278,6 +278,8 @@ int apfs_delete_node(struct apfs_query *query)
 		if (err)
 			return err;
 		/* We don't write to the container's omap */
+		vsb_raw = APFS_SB(sb)->s_vsb_raw;
+		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
 		break;
 	default:
