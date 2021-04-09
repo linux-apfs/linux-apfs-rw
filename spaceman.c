@@ -228,6 +228,155 @@ out:
 	return err;
 }
 
+/*
+ * Free queue record data
+ */
+struct apfs_fq_rec {
+	u64 xid;
+	u64 bno;
+	u64 len;
+};
+
+/**
+ * apfs_fq_rec_from_query - Read the free queue record found by a query
+ * @query:	the query that found the record
+ * @fqrec:	on return, the free queue record
+ *
+ * Reads the free queue record into @fqrec and performs some basic sanity
+ * checks as a protection against crafted filesystems. Returns 0 on success
+ * or -EFSCORRUPTED otherwise.
+ */
+static int apfs_fq_rec_from_query(struct apfs_query *query, struct apfs_fq_rec *fqrec)
+{
+	char *raw = query->node->object.bh->b_data;
+	struct apfs_spaceman_free_queue_key *key;
+
+	if (query->key_len != sizeof(*key))
+		return -EFSCORRUPTED;
+	key = (struct apfs_spaceman_free_queue_key *)(raw + query->key_off);
+
+	fqrec->xid = le64_to_cpu(key->sfqk_xid);
+	fqrec->bno = le64_to_cpu(key->sfqk_paddr);
+
+	if (query->len == 0) {
+		fqrec->len = 1; /* Ghost record */
+		return 0;
+	} else if (query->len == sizeof(__le64)) {
+		fqrec->len = le64_to_cpup((__le64 *)(raw + query->off));
+		return 0;
+	}
+	return -EFSCORRUPTED;
+}
+
+/**
+ * apfs_ip_mark_free - Mark a block in the internal pool as free
+ * @sb:		superblock strucuture
+ * @bno:	block number (must belong to the ip)
+ */
+static void apfs_ip_mark_free(struct super_block *sb, u64 bno)
+{
+	struct apfs_spaceman *sm = APFS_SM(sb);
+	struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
+	char *bitmap = sm->sm_ip->b_data;
+
+	bno -= le64_to_cpu(sm_raw->sm_ip_base);
+	__clear_bit_le(bno, bitmap);
+}
+
+/**
+ * apfs_flush_fq_rec - Delete a single fq record and mark its blocks as free
+ * @root:	free queue root node
+ * @xid:	transaction to target
+ * @len:	on return, the number of freed blocks
+ *
+ * Returns 0 on success, or a negative error code in case of failure. -ENODATA
+ * in particular means that there are no matching records left.
+ */
+static int apfs_flush_fq_rec(struct apfs_node *root, u64 xid, u64 *len)
+{
+	struct super_block *sb = root->object.sb;
+	struct apfs_query *query = NULL;
+	struct apfs_fq_rec fqrec = {0};
+	struct apfs_key key;
+	u64 bno;
+	int err;
+
+	query = apfs_alloc_query(root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+	apfs_init_free_queue_key(xid, 0 /* paddr */, &key);
+	query->key = &key;
+	query->flags |= APFS_QUERY_FREE_QUEUE | APFS_QUERY_ANY_NUMBER | APFS_QUERY_EXACT;
+
+	err = apfs_btree_query(sb, &query);
+	if (err)
+		goto fail;
+	err = apfs_fq_rec_from_query(query, &fqrec);
+	if (err)
+		goto fail;
+
+	for (bno = fqrec.bno; bno < fqrec.bno + fqrec.len; ++bno)
+		apfs_ip_mark_free(sb, bno);
+	err = apfs_btree_remove(query);
+	if (err)
+		goto fail;
+	*len = fqrec.len;
+
+fail:
+	apfs_free_query(sb, query);
+	return err;
+}
+
+/**
+ * apfs_flush_ip_free_queue - Free ip blocks queued by old transactions
+ * @sb:	superblock structure
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_flush_ip_free_queue(struct super_block *sb)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_spaceman *sm = APFS_SM(sb);
+	struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
+	struct apfs_spaceman_free_queue *fq = &sm_raw->sm_fq[APFS_SFQ_IP];
+	struct apfs_node *fq_root;
+	u64 oldest = le64_to_cpu(fq->sfq_oldest_xid);
+	int err;
+
+	/* Preserve a few transactions */
+	if (oldest + 4 >= nxi->nx_xid)
+		return 0;
+
+	fq_root = apfs_read_node(sb, le64_to_cpu(fq->sfq_tree_oid),
+				 APFS_OBJ_EPHEMERAL, true /* write */);
+	if (IS_ERR(fq_root))
+		return PTR_ERR(fq_root);
+
+	while (true) {
+		u64 count = 0;
+
+		/* Probably not very efficient... */
+		err = apfs_flush_fq_rec(fq_root, oldest, &count);
+		if (err == -ENODATA) {
+			err = 0;
+			break;
+		} else if (err) {
+			goto fail;
+		} else {
+			le64_add_cpu(&fq->sfq_count, -count);
+		}
+	}
+
+	/* TODO: may be incorrect if the fs was touched by Apple's driver */
+	fq->sfq_oldest_xid = cpu_to_le64(oldest + 1);
+
+	apfs_obj_set_csum(sb, &sm_raw->sm_o);
+
+fail:
+	apfs_node_put(fq_root);
+	return err;
+}
+
 /**
  * apfs_read_spaceman - Find and read the space manager
  * @sb: superblock structure
@@ -280,9 +429,13 @@ int apfs_read_spaceman(struct super_block *sb)
 		goto fail;
 	}
 
+	/* XXX: we are leaking this buffer head, right? */
 	spaceman->sm_bh = sm_bh;
 	spaceman->sm_raw = sm_raw;
 	err = apfs_rotate_ip_bitmaps(sb);
+	if (err)
+		goto fail;
+	err = apfs_flush_ip_free_queue(sb);
 	if (err)
 		goto fail;
 	return 0;
