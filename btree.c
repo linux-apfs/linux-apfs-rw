@@ -435,7 +435,6 @@ int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
 		      void *val, int val_len)
 {
 	struct apfs_node *node = query->node;
-	struct super_block *sb = node->object.sb;
 	struct apfs_btree_node_phys *node_raw;
 	int toc_entry_size;
 	int err;
@@ -452,7 +451,7 @@ int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
 again:
 	node = query->node;
 	node_raw = (void *)node->object.bh->b_data;
-	apfs_assert_in_transaction(sb, &node_raw->btn_o);
+	apfs_assert_in_transaction(node->object.sb, &node_raw->btn_o);
 
 	/* TODO: support record fragmentation */
 	if (node->free + key_len + val_len > node->data) {
@@ -523,7 +522,6 @@ again:
 int apfs_btree_remove(struct apfs_query *query)
 {
 	struct apfs_node *node = query->node;
-	struct super_block *sb = node->object.sb;
 	struct apfs_btree_node_phys *node_raw;
 	int later_entries = node->records - query->index - 1;
 	int err;
@@ -541,7 +539,7 @@ int apfs_btree_remove(struct apfs_query *query)
 
 	node = query->node;
 	node_raw = (void *)query->node->object.bh->b_data;
-	apfs_assert_in_transaction(sb, &node_raw->btn_o);
+	apfs_assert_in_transaction(node->object.sb, &node_raw->btn_o);
 
 	if (node->records == 1)
 		/* Just get rid of the node.  TODO: update the node heights? */
