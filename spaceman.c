@@ -181,9 +181,6 @@ static int apfs_rotate_ip_bitmaps(struct super_block *sb)
 
 	apfs_assert_in_transaction(sb, &sm_raw->sm_o);
 
-	brelse(spaceman->sm_ip);
-	spaceman->sm_ip = NULL;
-
 	if (le32_to_cpu(sm_raw->sm_ip_bm_size_in_blocks) != 1) {
 		apfs_warn(sb, "Multiblock ip bitmaps not supported");
 		return -EOPNOTSUPP;

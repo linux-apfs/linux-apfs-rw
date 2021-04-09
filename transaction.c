@@ -426,6 +426,9 @@ int apfs_transaction_commit(struct super_block *sb)
 	brelse(trans->t_old_cat_root.object.bh);
 	trans->t_old_cat_root.object.bh = NULL;
 
+	brelse(APFS_SM(sb)->sm_ip);
+	APFS_SM(sb)->sm_ip = NULL;
+
 	mutex_unlock(&nxs_mutex);
 	up_write(&nxi->nx_big_sem);
 	return 0;
@@ -522,6 +525,9 @@ void apfs_transaction_abort(struct super_block *sb)
 	brelse(sbi->s_cat_root->object.bh);
 	*(sbi->s_cat_root) = trans->t_old_cat_root;
 	trans->t_old_cat_root.object.bh = NULL;
+
+	brelse(APFS_SM(sb)->sm_ip);
+	APFS_SM(sb)->sm_ip = NULL;
 
 	mutex_unlock(&nxs_mutex);
 	up_write(&nxi->nx_big_sem);
