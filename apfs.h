@@ -543,10 +543,7 @@ struct apfs_xattr {
  * @sb:		superblock structure
  * @obj:	on-disk object to check
  */
-static inline void apfs_assert_in_transaction(struct super_block *sb, struct apfs_obj_phys *obj)
-{
-	ASSERT(le64_to_cpu(obj->o_xid) == APFS_NXI(sb)->nx_xid);
-}
+#define apfs_assert_in_transaction(sb, obj)	ASSERT(le64_to_cpu((obj)->o_xid) == APFS_NXI(sb)->nx_xid)
 
 /* btree.c */
 extern struct apfs_query *apfs_alloc_query(struct apfs_node *node,
