@@ -255,6 +255,59 @@ void apfs_cpoint_data_allocate(struct super_block *sb, u64 *bno)
 }
 
 /**
+ * apfs_cpoint_data_free - Free a block in the checkpoint data area
+ * @sb:		superblock structure
+ * @bno:	block number to free
+ *
+ * Returns 0 on sucess, or a negative error code in case of failure.
+ */
+int apfs_cpoint_data_free(struct super_block *sb, u64 bno)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
+	u64 data_base = le64_to_cpu(raw_sb->nx_xp_data_base);
+	u32 data_next = le32_to_cpu(raw_sb->nx_xp_data_next);
+	u32 data_blks = le32_to_cpu(raw_sb->nx_xp_data_blocks);
+	u32 data_len = le32_to_cpu(raw_sb->nx_xp_data_len);
+	u32 data_index = le32_to_cpu(raw_sb->nx_xp_data_index);
+	u32 i, bno_i;
+
+	/*
+	 * We can't leave a hole in the data area, so we need to shift all
+	 * blocks that come after @bno one position back.
+	 */
+	bno_i = (bno - data_base + data_blks - data_index) % data_blks;
+	for (i = bno_i; i < data_len - 1; ++i) {
+		struct buffer_head *old_bh, *new_bh;
+		int err;
+
+		new_bh = apfs_sb_bread(sb, data_base + (data_index + i) % data_blks);
+		old_bh = apfs_sb_bread(sb, data_base + (data_index + i + 1) % data_blks);
+		if (!new_bh || !old_bh) {
+			brelse(new_bh);
+			brelse(old_bh);
+			return -EIO;
+		}
+		/* I could also just remap the buffer heads... */
+		memcpy(new_bh->b_data, old_bh->b_data, sb->s_blocksize);
+
+		brelse(old_bh);
+		err = apfs_transaction_join(sb, new_bh); /* Not really needed */
+		brelse(new_bh);
+		if (err)
+			return err;
+	}
+
+	data_next = (data_blks + data_next - 1) % data_blks;
+	data_len--;
+
+	apfs_assert_in_transaction(sb, &raw_sb->nx_o);
+	raw_sb->nx_xp_data_next = cpu_to_le32(data_next);
+	raw_sb->nx_xp_data_len = cpu_to_le32(data_len);
+	return 0;
+}
+
+/**
  * apfs_checkpoint_start - Start the checkpoint for a new transaction
  * @sb:		superblock structure
  * @trans:	the transaction

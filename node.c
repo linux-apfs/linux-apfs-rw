@@ -261,6 +261,14 @@ int apfs_delete_node(struct apfs_query *query)
 	u64 bno = node->object.block_nr;
 	int err;
 
+	/*
+	 * For ephemeral nodes, it's important to do this before actually
+	 * deleting the node, because that involves moving blocks around.
+	 */
+	err = apfs_btree_remove(query->parent);
+	if (err)
+		return err;
+
 	switch (query->flags & APFS_QUERY_TREE_MASK) {
 	case APFS_QUERY_CAT:
 		err = apfs_free_queue_insert(sb, bno);
@@ -272,7 +280,7 @@ int apfs_delete_node(struct apfs_query *query)
 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
-		break;
+		return 0;
 	case APFS_QUERY_OMAP:
 		err = apfs_free_queue_insert(sb, bno);
 		if (err)
@@ -281,12 +289,18 @@ int apfs_delete_node(struct apfs_query *query)
 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
-		break;
+		return 0;
+	case APFS_QUERY_FREE_QUEUE:
+		err = apfs_cpoint_data_free(sb, bno);
+		if (err)
+			return err;
+		err = apfs_remove_cpoint_map(sb, bno);
+		if (err)
+			return err;
+		return 0;
 	default:
-		/* TODO: ephemeral nodes */
 		return -EOPNOTSUPP;
 	}
-	return apfs_btree_remove(query->parent);
 }
 
 /**
