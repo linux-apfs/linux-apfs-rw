@@ -36,19 +36,25 @@ Build
 =====
 
 In order to build a module out-of-tree, you will first need the Linux kernel
-headers. On Debian, you can get them by running (as root):
+headers.
 
-  apt-get install linux-headers-$(uname -r)
+Install Linux headers:
 
-Now you can just cd to the linux-apfs-rw directory and run
+```bash
+apt install linux-headers
 
-  make
+pacman -S linux-headers
 
-The resulting module is the apfs.ko file. Before you can use it you must insert
-it into the kernel, as well as its dependencies. Again as root:
+yum install linux-headers
+```
 
-  modprobe libcrc32c
-  insmod apfs.ko
+Make and install the module:
+
+```bash
+sudo modprobe libcrc32c
+make
+sudo make install
+```
 
 Mount
 =====
