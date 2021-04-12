@@ -634,7 +634,7 @@ fail:
  */
 static int apfs_inode_resize(struct inode *inode, struct apfs_query *query)
 {
-	char *raw = query->node->object.bh->b_data;
+	char *raw;
 	struct apfs_inode_val *inode_raw;
 	char *xval;
 	int xlen;
@@ -643,6 +643,7 @@ static int apfs_inode_resize(struct inode *inode, struct apfs_query *query)
 	err = apfs_query_join_transaction(query);
 	if (err)
 		return err;
+	raw = query->node->object.bh->b_data;
 	inode_raw = (void *)raw + query->off;
 
 	xlen = apfs_find_xfield(inode_raw->xfields,
