@@ -436,7 +436,6 @@ int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
 {
 	struct apfs_node *node = query->node;
 	struct apfs_btree_node_phys *node_raw;
-	int toc_entry_size;
 	int err;
 
 	/* Do this first, or node splits may cause @query->parent to be gone */
@@ -453,64 +452,14 @@ again:
 	node_raw = (void *)node->object.bh->b_data;
 	apfs_assert_in_transaction(node->object.sb, &node_raw->btn_o);
 
-	/* TODO: support record fragmentation */
-	if (node->free + key_len + val_len > node->data) {
+	err = apfs_node_insert(query, key, key_len, val, val_len);
+	if (err == -ENOSPC) {
 		err = apfs_node_split(query);
 		if (err)
 			return err;
 		goto again;
 	}
-
-	if (apfs_node_has_fixed_kv_size(node))
-		toc_entry_size = sizeof(struct apfs_kvoff);
-	else
-		toc_entry_size = sizeof(struct apfs_kvloc);
-
-	/* Expand the table of contents if necessary */
-	if (sizeof(*node_raw) +
-	    (node->records + 1) * toc_entry_size > node->key) {
-		int new_key_base = node->key;
-		int new_free_base = node->free;
-		int inc;
-
-		inc = APFS_BTREE_TOC_ENTRY_INCREMENT * toc_entry_size;
-
-		new_key_base += inc;
-		new_free_base += inc;
-		if (new_free_base + key_len + val_len > node->data) {
-			err = apfs_node_split(query);
-			if (err)
-				return err;
-			goto again;
-		}
-		memmove((void *)node_raw + new_key_base,
-			(void *)node_raw + node->key, node->free - node->key);
-
-		node->key = new_key_base;
-		node->free = new_free_base;
-	}
-
-	query->index++; /* The query returned the record right before @key */
-	query->len = val_len;
-	query->key_len = key_len;
-
-	/* Write the record key to the end of the key area */
-	query->key_off = node->free;
-	memcpy((void *)node_raw + query->key_off, key, key_len);
-	node->free += key_len;
-
-	if (val) {
-		/* Write the record value to the beginning of the value area */
-		query->off = node->data - val_len;
-		memcpy((void *)node_raw + query->off, val, val_len);
-		node->data -= val_len;
-	}
-
-	/* Add the new entry to the table of contents */
-	apfs_create_toc_entry(query);
-
-	apfs_update_node(node);
-	return 0;
+	return err;
 }
 
 /**
@@ -577,16 +526,13 @@ int apfs_btree_remove(struct apfs_query *query)
 		memmove(toc_entry, toc_entry + 1,
 			later_entries * sizeof(*toc_entry));
 	}
+
+	apfs_node_free_range(node, query->key_off, query->key_len);
+	apfs_node_free_range(node, query->off, query->len);
+
 	--node->records;
-
-	/*
-	 * TODO: move the edges of the key and value areas, if necessary; add
-	 * the freed space to the linked list.
-	 */
-	node->key_free_list_len += query->key_len;
-	node->val_free_list_len += query->len;
-
 	apfs_update_node(node);
+
 	--query->index;
 	return 0;
 }
@@ -638,57 +584,12 @@ again:
 			return err;
 	}
 
-	/* TODO: support record fragmentation */
-	if ((key_len > query->key_len || val_len > query->len) &&
-	    node->free + key_len + val_len > node->data) {
+	err = apfs_node_replace(query, key, key_len, val, val_len);
+	if (err == -ENOSPC) {
 		err = apfs_node_split(query);
 		if (err)
 			return err;
 		goto again;
 	}
-
-	if (key) {
-		if (key_len <= query->key_len) {
-			memcpy((void *)node_raw + query->key_off, key, key_len);
-			node->key_free_list_len += query->key_len - key_len;
-		} else {
-			query->key_off = node->free;
-			memcpy((void *)node_raw + node->free, key, key_len);
-			node->free += key_len;
-			node->key_free_list_len += query->key_len;
-		}
-		query->key_len = key_len;
-	}
-
-	if (val) {
-		if (val_len <= query->len) {
-			memcpy((void *)node_raw + query->off, val, val_len);
-			node->val_free_list_len += query->len - val_len;
-		} else {
-			node->data -= val_len;
-			query->off = node->data;
-			memcpy((void *)node_raw + node->data, val, val_len);
-			node->val_free_list_len += query->len;
-		}
-		query->len = val_len;
-	}
-
-	/* If the key or value were resized, update the table of contents */
-	if (!apfs_node_has_fixed_kv_size(node)) {
-		struct apfs_kvloc *kvloc;
-		int value_end;
-
-		value_end = sb->s_blocksize;
-		if (apfs_node_is_root(node))
-			value_end -= sizeof(struct apfs_btree_info);
-
-		kvloc = (struct apfs_kvloc *)node_raw->btn_data + query->index;
-		kvloc->v.off = cpu_to_le16(value_end - query->off);
-		kvloc->v.len = cpu_to_le16(query->len);
-		kvloc->k.off = cpu_to_le16(query->key_off - node->key);
-		kvloc->k.len = cpu_to_le16(query->key_len);
-	}
-
-	apfs_update_node(node);
-	return 0;
+	return err;
 }

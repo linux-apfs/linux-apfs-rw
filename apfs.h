@@ -637,11 +637,13 @@ extern void apfs_update_node(struct apfs_node *node);
 extern int apfs_delete_node(struct apfs_query *query);
 extern int apfs_node_query(struct super_block *sb, struct apfs_query *query);
 extern int apfs_bno_from_query(struct apfs_query *query, u64 *bno);
-extern void apfs_create_toc_entry(struct apfs_query *query);
 extern int apfs_node_split(struct apfs_query *query);
 extern int apfs_node_locate_key(struct apfs_node *node, int index, int *off);
 extern void apfs_node_get(struct apfs_node *node);
 extern void apfs_node_put(struct apfs_node *node);
+extern void apfs_node_free_range(struct apfs_node *node, u16 off, u16 len);
+extern int apfs_node_replace(struct apfs_query *query, void *key, int key_len, void *val, int val_len);
+extern int apfs_node_insert(struct apfs_query *query, void *key, int key_len, void *val, int val_len);
 
 /* object.c */
 extern int apfs_obj_verify_csum(struct super_block *sb,

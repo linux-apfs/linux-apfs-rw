@@ -335,10 +335,15 @@ void apfs_update_node(struct apfs_node *node)
 	raw->btn_free_space.off = cpu_to_le16(node->free - node->key);
 	raw->btn_free_space.len = cpu_to_le16(node->data - node->free);
 
+	/* Reset the lists on zero length, a defragmentation is taking place */
 	free_head = &raw->btn_key_free_list;
 	free_head->len = cpu_to_le16(node->key_free_list_len);
+	if (!free_head->len)
+		free_head->off = cpu_to_le16(APFS_BTOFF_INVALID);
 	free_head = &raw->btn_val_free_list;
 	free_head->len = cpu_to_le16(node->val_free_list_len);
+	if (!free_head->len)
+		free_head->off = cpu_to_le16(APFS_BTOFF_INVALID);
 
 	apfs_obj_set_csum(sb, &raw->btn_o);
 }
@@ -462,7 +467,7 @@ static int apfs_node_locate_data(struct apfs_node *node, int index, int *off)
  * Creates a toc entry for the record at index @query->index and increases
  * @node->records.  The caller must ensure enough space in the table.
  */
-void apfs_create_toc_entry(struct apfs_query *query)
+static void apfs_create_toc_entry(struct apfs_query *query)
 {
 	struct apfs_node *node = query->node;
 	struct super_block *sb = node->object.sb;
@@ -1017,5 +1022,430 @@ out_put_node:
 	apfs_node_put(new_node);
 out_free_buffer:
 	kfree(buffer);
+	return err;
+}
+
+/* TODO: the following 4 functions could be reused elsewhere */
+
+/**
+ * apfs_off_to_val_off - Translate offset in node to offset in value area
+ * @node:	the node
+ * @off:	offset in the node
+ */
+static u16 apfs_off_to_val_off(struct apfs_node *node, u16 off)
+{
+	struct super_block *sb = node->object.sb;
+	u16 val_end;
+
+	val_end = sb->s_blocksize;
+	if (apfs_node_is_root(node)) /* has footer */
+		val_end -= sizeof(struct apfs_btree_info);
+	return val_end - off;
+}
+
+/**
+ * apfs_val_off_to_off - Translate offset in value area to offset in node
+ * @node:	the node
+ * @off:	offset in the value area
+ */
+static u16 apfs_val_off_to_off(struct apfs_node *node, u16 off)
+{
+	return apfs_off_to_val_off(node, off);
+}
+
+/**
+ * apfs_off_to_key_off - Translate offset in node to offset in key area
+ * @node:	the node
+ * @off:	offset in the node
+ */
+static u16 apfs_off_to_key_off(struct apfs_node *node, u16 off)
+{
+	return off - node->key;
+}
+
+/**
+ * apfs_key_off_to_off - Translate offset in key area to offset in node
+ * @node:	the node
+ * @off:	offset in the key area
+ */
+static u16 apfs_key_off_to_off(struct apfs_node *node, u16 off)
+{
+	return off + node->key;
+}
+
+/* The type of the previous four functions, used for node offset calculations */
+typedef u16 (*offcalc)(struct apfs_node *, u16);
+
+/**
+ * apfs_node_free_list_add - Add a free node segment to the proper free list
+ * @node:	node for the segment
+ * @off:	offset of the segment to add
+ * @len:	length of the segment to add
+ *
+ * The caller must ensure that the freed segment fits in the node.
+ */
+static void apfs_node_free_list_add(struct apfs_node *node, u16 off, u16 len)
+{
+	struct super_block *sb = node->object.sb;
+	struct buffer_head *bh = node->object.bh;
+	struct apfs_btree_node_phys *node_raw = (void *)bh->b_data;
+	struct apfs_nloc *head, *new;
+	offcalc off_to_rel;
+
+	apfs_assert_in_transaction(sb, &node_raw->btn_o);
+
+	if (off >= node->data) { /* Value area */
+		off_to_rel = apfs_off_to_val_off;
+		head = &node_raw->btn_val_free_list;
+		node->val_free_list_len += len;
+	} else { /* Key area */
+		off_to_rel = apfs_off_to_key_off;
+		head = &node_raw->btn_key_free_list;
+		node->key_free_list_len += len;
+	}
+
+	/* Very small segments are leaked until defragmentation */
+	if (len < sizeof(*new))
+		return;
+
+	/* The free list doesn't seem to be kept in any particular order */
+	new = (void *)node_raw + off;
+	new->off = head->off;
+	new->len = cpu_to_le16(len);
+	head->off = cpu_to_le16(off_to_rel(node, off));
+}
+
+/**
+ * apfs_node_free_range - Free space from a node's key or value areas
+ * @node:	the node
+ * @off:	offset to free
+ * @len:	length to free
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+void apfs_node_free_range(struct apfs_node *node, u16 off, u16 len)
+{
+	struct super_block *sb = node->object.sb;
+	struct buffer_head *bh = node->object.bh;
+	struct apfs_btree_node_phys *raw = (void *)bh->b_data;
+
+	apfs_assert_in_transaction(sb, &raw->btn_o);
+
+	if (off == node->data)
+		node->data += len;
+	else if (off + len == node->free)
+		node->free -= len;
+	else
+		apfs_node_free_list_add(node, off, len);
+}
+
+/**
+ * apfs_node_free_list_unlink - Unlink an entry from a node's free list
+ * @prev:	previous entry
+ * @curr:	entry to unlink
+ */
+static void apfs_node_free_list_unlink(struct apfs_nloc *prev, struct apfs_nloc *curr)
+{
+	prev->off = curr->off;
+}
+
+/**
+ * apfs_node_free_list_alloc - Allocate a free segment from a free list
+ * @node:	the node
+ * @len:	length to allocate
+ * @value:	true to allocate in the value area, false for the key area
+ *
+ * Returns the offset in the node on success, or a negative error code in case
+ * of failure.
+ */
+static int apfs_node_free_list_alloc(struct apfs_node *node, u16 len, bool value)
+{
+	struct super_block *sb = node->object.sb;
+	struct buffer_head *bh = node->object.bh;
+	struct apfs_btree_node_phys *node_raw = (void *)bh->b_data;
+	struct apfs_nloc *head, *curr, *prev;
+	offcalc rel_to_off;
+	int *list_len;
+	int bound = sb->s_blocksize;
+
+	apfs_assert_in_transaction(sb, &node_raw->btn_o);
+
+	if (value) { /* Value area */
+		rel_to_off = apfs_val_off_to_off;
+		head = &node_raw->btn_val_free_list;
+		list_len = &node->val_free_list_len;
+	} else { /* Key area */
+		rel_to_off = apfs_key_off_to_off;
+		head = &node_raw->btn_key_free_list;
+		list_len = &node->key_free_list_len;
+	}
+
+	if (*list_len < len)
+		return -ENOSPC;
+
+	prev = head;
+	while (bound--) {
+		u16 curr_off = le16_to_cpu(prev->off);
+		u16 abs_off = rel_to_off(node, curr_off);
+		u16 curr_len;
+
+		if (curr_off == APFS_BTOFF_INVALID)
+			return -ENOSPC;
+		if (abs_off + sizeof(*curr) > sb->s_blocksize)
+			return -EFSCORRUPTED;
+		curr = (void *)node_raw + abs_off;
+
+		curr_len = le16_to_cpu(curr->len);
+		if (curr_len >= len) {
+			if (abs_off + curr_len > sb->s_blocksize)
+				return -EFSCORRUPTED;
+			apfs_node_free_list_unlink(prev, curr);
+			apfs_node_free_list_add(node, abs_off + len, curr_len - len);
+			*list_len -= len;
+			return abs_off;
+		}
+
+		prev = curr;
+	}
+
+	/* Don't loop forever if the free list is corrupted and doesn't end */
+	return -EFSCORRUPTED;
+}
+
+/**
+ * apfs_node_alloc_key - Allocated free space for a new key
+ * @node:	the node to search
+ * @len:	wanted key length
+ *
+ * Returns the offset in the node on success, or a negative error code in case
+ * of failure.
+ */
+static int apfs_node_alloc_key(struct apfs_node *node, u16 len)
+{
+	int off;
+
+	if (node->free + len <= node->data) {
+		off = node->free;
+		node->free += len;
+		return off;
+	}
+	return apfs_node_free_list_alloc(node, len, false /* value */);
+}
+
+/**
+ * apfs_node_alloc_val - Allocated free space for a new value
+ * @node:	the node to search
+ * @len:	wanted value length
+ *
+ * Returns the offset in the node on success, or a negative error code in case
+ * of failure.
+ */
+static int apfs_node_alloc_val(struct apfs_node *node, u16 len)
+{
+	int off;
+
+	if (node->free + len <= node->data) {
+		off = node->data - len;
+		node->data -= len;
+		return off;
+	}
+	return apfs_node_free_list_alloc(node, len, true /* value */);
+}
+
+/**
+ * apfs_node_replace - Replace a record in a node
+ * @query:	exact query that found the record
+ * @key:	new on-disk record key (NULL if unchanged)
+ * @key_len:	length of @key
+ * @val:	new on-disk record value (NULL if unchanged)
+ * @val_len:	length of @val
+ *
+ * Returns 0 on success, and @query is left pointing to the same record. Returns
+ * a negative error code in case of failure, which may be -ENOSPC if the node
+ * seems full.
+ */
+int apfs_node_replace(struct apfs_query *query, void *key, int key_len, void *val, int val_len)
+{
+	struct apfs_node *node = query->node;
+	struct super_block *sb = node->object.sb;
+	struct apfs_btree_node_phys *node_raw = (void *)node->object.bh->b_data;
+	int old_free = node->free, old_data = node->data;
+	int old_key_free_len = node->key_free_list_len;
+	int old_val_free_len = node->val_free_list_len;
+	int key_off = 0, val_off = 0, err = 0;
+
+	apfs_assert_in_transaction(sb, &node_raw->btn_o);
+
+	if (key) {
+		if (key_len <= query->key_len) {
+			u16 end = query->key_off + key_len;
+			u16 diff = query->key_len - key_len;
+
+			apfs_node_free_range(node, end, diff);
+			key_off = query->key_off;
+		} else {
+			apfs_node_free_range(node, query->key_off, query->key_len);
+			key_off = apfs_node_alloc_key(node, key_len);
+			if (key_off < 0) {
+				err = key_off;
+				goto fail;
+			}
+		}
+	}
+
+	if (val) {
+		if (val_len <= query->len) {
+			u16 end = query->off + val_len;
+			u16 diff = query->len - val_len;
+
+			apfs_node_free_range(node, end, diff);
+			val_off = query->off;
+		} else {
+			apfs_node_free_range(node, query->off, query->len);
+			val_off = apfs_node_alloc_val(node, val_len);
+			if (val_off < 0) {
+				err = val_off;
+				goto fail;
+			}
+		}
+	}
+
+	if (key) {
+		query->key_off = key_off;
+		query->key_len = key_len;
+		memcpy((void *)node_raw + key_off, key, key_len);
+	}
+	if (val) {
+		query->off = val_off;
+		query->len = val_len;
+		memcpy((void *)node_raw + val_off, val, val_len);
+	}
+
+	/* If the key or value were resized, update the table of contents */
+	if (!apfs_node_has_fixed_kv_size(node)) {
+		struct apfs_kvloc *kvloc;
+		int value_end;
+
+		value_end = sb->s_blocksize;
+		if (apfs_node_is_root(node))
+			value_end -= sizeof(struct apfs_btree_info);
+
+		kvloc = (struct apfs_kvloc *)node_raw->btn_data + query->index;
+		kvloc->v.off = cpu_to_le16(value_end - query->off);
+		kvloc->v.len = cpu_to_le16(query->len);
+		kvloc->k.off = cpu_to_le16(query->key_off - node->key);
+		kvloc->k.len = cpu_to_le16(query->key_len);
+	}
+
+	apfs_update_node(node);
+	return 0;
+
+fail:
+	/*
+	 * This isn't very tidy, but the transaction may continue on -ENOSPC,
+	 * so we must restore the in-memory node fields that may have been
+	 * modified. The on-disk free lists can be ignored because the node
+	 * should be split soon.
+	 */
+	node->free = old_free;
+	node->data = old_data;
+	node->key_free_list_len = old_key_free_len;
+	node->val_free_list_len = old_val_free_len;
+	return err;
+}
+
+/**
+ * apfs_node_insert - Insert a new record in a node
+ * @query:	query run to search for the record
+ * @key:	on-disk record key
+ * @key_len:	length of @key
+ * @val:	on-disk record value (NULL for ghost records)
+ * @val_len:	length of @val (0 for ghost records)
+ *
+ * The new record is placed right after the one found by @query. On success,
+ * returns 0 and sets @query to the new record; returns a negative error code
+ * in case of failure, which may be -ENOSPC if the node seems full.
+ */
+int apfs_node_insert(struct apfs_query *query, void *key, int key_len, void *val, int val_len)
+{
+	struct apfs_node *node = query->node;
+	struct apfs_btree_node_phys *node_raw = (void *)node->object.bh->b_data;
+	int toc_entry_size;
+	int old_free, old_data, old_key_free_len, old_val_free_len;
+	int key_off, val_off, err = 0;
+
+	apfs_assert_in_transaction(node->object.sb, &node_raw->btn_o);
+
+	if (apfs_node_has_fixed_kv_size(node))
+		toc_entry_size = sizeof(struct apfs_kvoff);
+	else
+		toc_entry_size = sizeof(struct apfs_kvloc);
+
+	/* Expand the table of contents if necessary */
+	if (sizeof(*node_raw) +
+	    (node->records + 1) * toc_entry_size > node->key) {
+		int new_key_base = node->key;
+		int new_free_base = node->free;
+		int inc;
+
+		inc = APFS_BTREE_TOC_ENTRY_INCREMENT * toc_entry_size;
+
+		new_key_base += inc;
+		new_free_base += inc;
+		if (new_free_base > node->data)
+			return -ENOSPC;
+		memmove((void *)node_raw + new_key_base,
+			(void *)node_raw + node->key, node->free - node->key);
+
+		node->key = new_key_base;
+		node->free = new_free_base;
+	}
+
+	old_free = node->free;
+	old_data = node->data;
+	old_key_free_len = node->key_free_list_len;
+	old_val_free_len = node->val_free_list_len;
+
+	key_off = apfs_node_alloc_key(node, key_len);
+	if (key_off < 0) {
+		err = key_off;
+		goto fail;
+	}
+
+	if (val) {
+		val_off = apfs_node_alloc_val(node, val_len);
+		if (val_off < 0) {
+			err = val_off;
+			goto fail;
+		}
+	}
+
+	query->key_len = key_len;
+	query->key_off = key_off;
+	memcpy((void *)node_raw + key_off, key, key_len);
+
+	query->len = val_len;
+	if (val) {
+		query->off = val_off;
+		memcpy((void *)node_raw + val_off, val, val_len);
+	}
+
+	query->index++; /* The query returned the record right before @key */
+
+	/* Add the new entry to the table of contents */
+	apfs_create_toc_entry(query);
+
+fail:
+	/*
+	 * We must update the on-disk node even on failure, because we did
+	 * expand the table of contents.
+	 */
+	if (err) {
+		node->free = old_free;
+		node->data = old_data;
+		node->key_free_list_len = old_key_free_len;
+		node->val_free_list_len = old_val_free_len;
+	}
+	apfs_update_node(node);
 	return err;
 }
