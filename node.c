@@ -145,6 +145,42 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 }
 
 /**
+ * apfs_min_table_size - Return the minimum size for a node's table of contents
+ * @sb:		superblock structure
+ * @type:	tree type for the node
+ * @flags:	flags for the node
+ */
+static int apfs_node_min_table_size(struct super_block *sb, u32 type, u16 flags)
+{
+	bool leaf = flags & APFS_BTNODE_LEAF;
+	int key_size, val_size, toc_size;
+	int space, count;
+
+	/* Preallocate the whole table for trees with fixed key/value sizes */
+	switch (type) {
+	case APFS_OBJECT_TYPE_OMAP:
+		key_size = sizeof(struct apfs_omap_key);
+		val_size = leaf ? sizeof(struct apfs_omap_val) : sizeof(__le64);
+		toc_size = sizeof(struct apfs_kvoff);
+		break;
+	case APFS_OBJECT_TYPE_SPACEMAN_FREE_QUEUE:
+		key_size = sizeof(struct apfs_spaceman_free_queue_key);
+		val_size = sizeof(__le64); /* We assume no ghosts here */
+		toc_size = sizeof(struct apfs_kvoff);
+		break;
+	default:
+		/* Make room for one record at least */
+		toc_size = sizeof(struct apfs_kvloc);
+		return APFS_BTREE_TOC_ENTRY_INCREMENT * toc_size;
+	}
+
+	/* The footer of root nodes is ignored for some reason */
+	space = sb->s_blocksize - sizeof(struct apfs_btree_node_phys);
+	count = space / (key_size + val_size + toc_size);
+	return count * toc_size;
+}
+
+/**
  * apfs_create_node - Allocates a new nonroot b-tree node on disk
  * @sb:		filesystem superblock
  * @storage:	storage type for the node object
@@ -735,18 +771,12 @@ static int apfs_btree_inc_height(struct apfs_query *query)
 	struct apfs_btree_info *info;
 	__le64 *raw_oid;
 	u32 storage = apfs_query_storage(query);
-	int toc_entry_size;
 
 	root_raw = (void *)root->object.bh->b_data;
 	apfs_assert_in_transaction(sb, &root_raw->btn_o);
 
 	if (query->parent || query->depth)
 		return -EFSCORRUPTED;
-
-	if (apfs_node_has_fixed_kv_size(root))
-		toc_entry_size = sizeof(struct apfs_kvoff);
-	else
-		toc_entry_size = sizeof(struct apfs_kvloc);
 
 	/* Create a new child node */
 	new_node = apfs_create_node(sb, storage);
@@ -790,7 +820,7 @@ static int apfs_btree_inc_height(struct apfs_query *query)
 	if (!root_query->key_len)
 		return -EFSCORRUPTED;
 	root->key = sizeof(*root_raw) +
-		    APFS_BTREE_TOC_ENTRY_INCREMENT * toc_entry_size;
+		    apfs_node_min_table_size(sb, root->tree_type, root->flags & ~APFS_BTNODE_LEAF);
 	memmove((void *)root_raw + root->key,
 		(void *)root_raw + root_query->key_off, root_query->key_len);
 	root_query->key_off = root->key;
@@ -838,7 +868,7 @@ static int apfs_copy_record_range(struct apfs_node *dest_node,
 	struct apfs_btree_node_phys *dest_raw;
 	struct apfs_btree_node_phys *src_raw;
 	struct apfs_query *query = NULL;
-	int toc_entry_size;
+	int toc_size, toc_entry_size;
 	int err;
 	int i;
 
@@ -854,8 +884,10 @@ static int apfs_copy_record_range(struct apfs_node *dest_node,
 		toc_entry_size = sizeof(struct apfs_kvoff);
 	else
 		toc_entry_size = sizeof(struct apfs_kvloc);
-	dest_node->key = sizeof(*dest_raw) + toc_entry_size *
-			 round_up(end - start, APFS_BTREE_TOC_ENTRY_INCREMENT);
+	toc_size = apfs_node_min_table_size(sb, src_node->tree_type, src_node->flags);
+	if (toc_size < toc_entry_size * (end - start))
+		toc_size = toc_entry_size * round_up(end - start, APFS_BTREE_TOC_ENTRY_INCREMENT);
+	dest_node->key = sizeof(*dest_raw) + toc_size;
 	dest_node->free = dest_node->key;
 	dest_node->data = sb->s_blocksize; /* Nonroot */
 
