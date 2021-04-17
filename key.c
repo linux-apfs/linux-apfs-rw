@@ -84,7 +84,7 @@ int apfs_keycmp(struct super_block *sb,
 		return k1->type < k2->type ? -1 : 1;
 	if (k1->number != k2->number)
 		return k1->number < k2->number ? -1 : 1;
-	if (!k1->name)
+	if (!k1->name || !k2->name)
 		return 0;
 
 	/* Normalization seems to be ignored here, even for directory records */
