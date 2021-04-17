@@ -47,11 +47,13 @@ const struct inode_operations apfs_dir_inode_operations = {
 	.rename		= apfs_rename,
 	.getattr	= apfs_getattr,
 	.listxattr      = apfs_listxattr,
+	.setattr	= apfs_setattr,
 };
 
 const struct inode_operations apfs_special_inode_operations = {
 	.getattr	= apfs_getattr,
 	.listxattr      = apfs_listxattr,
+	.setattr	= apfs_setattr,
 };
 
 static int apfs_dentry_hash(const struct dentry *dir, struct qstr *child)

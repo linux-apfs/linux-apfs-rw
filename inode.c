@@ -931,8 +931,28 @@ fail:
 int apfs_setattr(struct dentry *dentry, struct iattr *iattr)
 {
 	struct inode *inode = d_inode(dentry);
+	struct super_block *sb = inode->i_sb;
+	int err;
 
 	if (iattr->ia_valid & ATTR_SIZE && iattr->ia_size != inode->i_size)
 		return -EOPNOTSUPP; /* TODO: implement truncation */
-	return simple_setattr(dentry, iattr);
+	err = simple_setattr(dentry, iattr);
+	if(err)
+		return err;
+
+	/* TODO: figure out why ->write_inode() isn't firing */
+	err = apfs_transaction_start(sb);
+	if (err)
+		return err;
+	err = apfs_update_inode(inode, NULL /* new_name */);
+	if (err)
+		goto fail;
+	err = apfs_transaction_commit(sb);
+	if (err)
+		goto fail;
+	return 0;
+
+fail:
+	apfs_transaction_abort(sb);
+	return err;
 }
