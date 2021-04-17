@@ -859,7 +859,6 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 	vsb_raw->apfs_last_mod_time = cpu_to_le64(timespec64_to_ns(&now));
 
 	/* Symlinks are not yet supported */
-	ASSERT(!S_ISLNK(mode));
 	if (S_ISREG(mode))
 		le64_add_cpu(&vsb_raw->apfs_num_files, 1);
 	else if (S_ISDIR(mode))
