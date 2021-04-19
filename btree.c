@@ -222,6 +222,51 @@ void apfs_free_query(struct super_block *sb, struct apfs_query *query)
 }
 
 /**
+ * apfs_query_set_before_first - Set the query to point before the first record
+ * @sb:		superblock structure
+ * @query:	the query to set
+ *
+ * Queries set in this way are used to insert a record before the first one.
+ * Only the leaf gets set to the -1 entry; queries for other levels must be set
+ * to 0, since the first entry in each index node will need to be modified.
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_query_set_before_first(struct super_block *sb, struct apfs_query **query)
+{
+	struct apfs_node *node;
+	u64 child_id;
+	u32 storage = apfs_query_storage(*query);
+	int err;
+
+	while ((*query)->depth < 12) {
+		if (apfs_node_is_leaf((*query)->node)) {
+			(*query)->index = -1;
+			return 0;
+		}
+		apfs_node_query_first(*query);
+
+		err = apfs_child_from_query(*query, &child_id);
+		if (err) {
+			apfs_alert(sb, "bad index block: 0x%llx",
+				   (*query)->node->object.block_nr);
+			return err;
+		}
+
+		/* Now go a level deeper */
+		node = apfs_read_node(sb, child_id, storage, false /* write */);
+		if (IS_ERR(node))
+			return PTR_ERR(node);
+
+		*query = apfs_alloc_query(node, *query);
+		apfs_node_put(node);
+	}
+
+	apfs_alert(sb, "b-tree is corrupted");
+	return -EFSCORRUPTED;
+}
+
+/**
  * apfs_btree_query - Execute a query on a b-tree
  * @sb:		filesystem superblock
  * @query:	the query to execute
@@ -255,7 +300,16 @@ next_node:
 	}
 
 	err = apfs_node_query(sb, *query);
-	if (err == -EAGAIN) {
+	if (err == -ENODATA && !(*query)->parent && (*query)->index == -1) {
+		/*
+		 * We may be trying to insert a record before all others: don't
+		 * let the query give up at the root node.
+		 */
+		err = apfs_query_set_before_first(sb, query);
+		if (err)
+			return err;
+		return -ENODATA;
+	} else if (err == -EAGAIN) {
 		if (!(*query)->parent) /* We are at the root of the tree */
 			return -ENODATA;
 
@@ -265,9 +319,9 @@ next_node:
 		apfs_free_query(sb, *query);
 		*query = parent;
 		goto next_node;
-	}
-	if (err)
+	} else if (err) {
 		return err;
+	}
 	if (apfs_node_is_leaf((*query)->node)) /* All done */
 		return 0;
 
@@ -458,6 +512,14 @@ again:
 		if (err)
 			return err;
 		goto again;
+	} else if (err) {
+		return err;
+	}
+
+	/* This can only happen when we insert a record before all others */
+	if (query->parent && query->index == 0) {
+		err = apfs_btree_replace(query->parent, key, key_len,
+					 NULL /* val */, 0 /* val_len */);
 	}
 	return err;
 }

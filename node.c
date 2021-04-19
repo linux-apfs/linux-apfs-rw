@@ -725,6 +725,19 @@ int apfs_node_query(struct super_block *sb, struct apfs_query *query)
 }
 
 /**
+ * apfs_node_query_first - Find the first record in a node
+ * @query: on return this query points to the record
+ */
+void apfs_node_query_first(struct apfs_query *query)
+{
+	struct apfs_node *node = query->node;
+
+	query->index = 0;
+	query->key_len = apfs_node_locate_key(node, query->index, &query->key_off);
+	query->len = apfs_node_locate_data(node, query->index, &query->off);
+}
+
+/**
  * apfs_bno_from_query - Read the block number found by a successful omap query
  * @query:	the query that found the record
  * @bno:	Return parameter.  The block number found.
