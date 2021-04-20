@@ -11,6 +11,7 @@ const struct file_operations apfs_file_operations = {
 	.write_iter	= generic_file_write_iter,
 	.mmap		= generic_file_readonly_mmap,
 	.open		= generic_file_open,
+	.unlocked_ioctl	= apfs_file_ioctl,
 };
 
 const struct inode_operations apfs_file_inode_operations = {

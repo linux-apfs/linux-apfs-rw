@@ -39,6 +39,7 @@ int apfs_extent_from_query(struct apfs_query *query,
 	extent->logical_addr = le64_to_cpu(ext_key->logical_addr);
 	extent->phys_block_num = le64_to_cpu(ext->phys_block_num);
 	extent->len = ext_len;
+	extent->crypto_id = le64_to_cpu(ext->crypto_id);
 	return 0;
 }
 
@@ -173,6 +174,7 @@ static int apfs_update_extents(struct inode *inode,
 	struct apfs_file_extent_val raw_val;
 	u64 extent_id = ai->i_extent_id;
 	int ret;
+	u64 prev_crypto, new_crypto;
 
 	ASSERT(extent->len == sb->s_blocksize);
 
@@ -180,7 +182,11 @@ static int apfs_update_extents(struct inode *inode,
 	raw_key.logical_addr = cpu_to_le64(extent->logical_addr);
 	raw_val.len_and_flags = cpu_to_le64(extent->len);
 	raw_val.phys_block_num = cpu_to_le64(extent->phys_block_num);
-	raw_val.crypto_id = 0;
+	if(apfs_vol_is_encrypted(sb))
+		new_crypto = extent_id;
+	else
+		new_crypto = 0;
+	raw_val.crypto_id = cpu_to_le64(new_crypto);
 
 	apfs_init_file_extent_key(extent_id, extent->logical_addr, &key);
 
@@ -203,7 +209,9 @@ static int apfs_update_extents(struct inode *inode,
 			ret = -EFSCORRUPTED;
 			goto fail;
 		}
-	}
+		prev_crypto = extent->crypto_id;
+	} else
+		prev_crypto = 0;
 
 	if (ret)
 		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
@@ -211,6 +219,15 @@ static int apfs_update_extents(struct inode *inode,
 	else
 		ret = apfs_btree_replace(query, &raw_key, sizeof(raw_key),
 					 &raw_val, sizeof(raw_val));
+
+	if(prev_crypto != new_crypto) {
+		ret = apfs_crypto_adj_refcnt(sb, prev_crypto, -1);
+		if(ret)
+			goto fail;
+		ret = apfs_crypto_adj_refcnt(sb, new_crypto, 1);
+		if(ret)
+			goto fail;
+	}
 
 fail:
 	apfs_free_query(sb, query);

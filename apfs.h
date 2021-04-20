@@ -23,6 +23,12 @@
 	SB_RDONLY = MS_RDONLY;
 #endif
 
+#define APFS_IOC_SET_DFLT_PFK	_IOW('@', 0x80, struct apfs_wrapped_crypto_state)
+#define APFS_IOC_SET_DIR_CLASS	_IOW('@', 0x81, u32)
+#define APFS_IOC_SET_PFK	_IOW('@', 0x82, struct apfs_wrapped_crypto_state)
+#define APFS_IOC_GET_CLASS	_IOR('@', 0x83, u32)
+#define APFS_IOC_GET_PFK	_IOR('@', 0x84, struct apfs_wrapped_crypto_state)
+
 /*
  * In-memory representation of an APFS object
  */
@@ -183,12 +189,23 @@ struct apfs_sb_info {
 	kuid_t s_uid;			/* uid to override on-disk uid */
 	kgid_t s_gid;			/* gid to override on-disk gid */
 
+	struct apfs_crypto_state_val *s_dflt_pfk; /* default per-file key */
+
 	struct inode *s_private_dir;	/* Inode for the private directory */
 };
 
 static inline struct apfs_sb_info *APFS_SB(struct super_block *sb)
 {
 	return sb->s_fs_info;
+}
+
+/**
+ * apfs_vol_is_encrypted - Check if a volume is encrypting files
+ * @sb: superblock
+ */
+static inline bool apfs_vol_is_encrypted(struct super_block *sb) {
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	return (vsb_raw->apfs_fs_flags & cpu_to_le64(APFS_FS_UNENCRYPTED)) == 0;
 }
 
 /**
@@ -333,6 +350,19 @@ static inline void apfs_init_dstream_id_key(u64 id, struct apfs_key *key)
 }
 
 /**
+ * apfs_init_crypto_state_key - Initialize an in-memory key for a crypto query
+ * @id:		crypto state id
+ * @key:	apfs_key structure to initialize
+ */
+static inline void apfs_init_crypto_state_key(u64 id, struct apfs_key *key)
+{
+	key->id = id;
+	key->type = APFS_TYPE_CRYPTO_STATE;
+	key->number = 0;
+	key->name = NULL;
+}
+
+/**
  * apfs_init_sibling_link_key - Initialize an in-memory key for a sibling query
  * @ino:	inode number
  * @id:		sibling id
@@ -449,6 +479,7 @@ struct apfs_file_extent {
 	u64 logical_addr;
 	u64 phys_block_num;
 	u64 len;
+	u64 crypto_id;
 };
 
 /*
@@ -464,6 +495,8 @@ struct apfs_inode_info {
 	u32			i_nchildren;	 /* Child count for directory */
 	uid_t			i_saved_uid;	 /* User ID on disk */
 	gid_t			i_saved_gid;	 /* Group ID on disk */
+	u32			i_key_class;	 /* Security class for directory */
+	u64			i_int_flags;	 /* Internal flags */
 
 	struct inode vfs_inode;
 };
@@ -609,12 +642,16 @@ extern struct inode *apfs_new_inode(struct inode *dir, umode_t mode,
 extern int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 				 struct dentry *dentry);
 extern int apfs_setattr(struct dentry *dentry, struct iattr *iattr);
+long apfs_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+long apfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0) /* No statx yet... */
 extern int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat);
 #else
 extern int apfs_getattr(const struct path *path, struct kstat *stat, u32 request_mask, unsigned int query_flags);
 #endif
+
+extern int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta);
 
 /* key.c */
 extern int apfs_filename_cmp(struct super_block *sb,

@@ -277,6 +277,28 @@ struct apfs_dstream_id_val {
 	__le32 refcnt;
 } __packed;
 
+/*
+ * Structure used to store the encryption state for PFKs
+ */
+struct apfs_wrapped_crypto_state {
+	__le16 major_version;
+	__le16 minor_version;
+	__le32 cpflags;
+	__le32 persistent_class;
+	__le32 key_os_version;
+	__le16 key_revision;
+	__le16 key_len;
+	u8 persistent_key[0];
+} __packed;
+
+/*
+ * Structure of a crypto state record
+ */
+struct apfs_crypto_state_val {
+	__le32 refcnt;
+	struct apfs_wrapped_crypto_state state;
+} __packed;
+
 /* Inode numbers for special inodes */
 #define APFS_INVALID_INO_NUM		0
 
@@ -310,7 +332,7 @@ struct apfs_dstream_id_val {
 /* Masks for internal flags */
 #define APFS_VALID_INTERNAL_INODE_FLAGS		0x0001ffdf
 #define APFS_INODE_INHERITED_INTERNAL_FLAGS	(APFS_INODE_MAINTAIN_DIR_STATS)
-#define APFS_INDOE_CLONED_INTERNAL_FLAGS	(APFS_INODE_HAS_RSRC_FORK \
+#define APFS_INODE_CLONED_INTERNAL_FLAGS	(APFS_INODE_HAS_RSRC_FORK \
 						| APFS_INODE_NO_RSRC_FORK \
 						| APFS_INODE_HAS_FINDER_INFO)
 #define APFS_INODE_PINNED_MASK			(APFS_INODE_PINNED_TO_MAIN \
@@ -507,6 +529,13 @@ struct apfs_file_extent_key {
  * Structure of the key for a data stream record
  */
 struct apfs_dstream_id_key {
+	struct apfs_key_header hdr;
+} __packed;
+
+/*
+ * Structure of the key for a crypto state record
+ */
+struct apfs_crypto_state_key {
 	struct apfs_key_header hdr;
 } __packed;
 
@@ -1002,7 +1031,7 @@ struct apfs_modified_by {
 #define APFS_PROTECTION_CLASS_F		6 /* No protection, nonpersistent key */
 
 /*
- * Structure used to store the encryption state
+ * Structure used to store the encryption state for MKs
  */
 struct apfs_wrapped_meta_crypto_state {
 	__le16 major_version;

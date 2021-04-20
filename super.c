@@ -553,6 +553,9 @@ fail:
 	mutex_unlock(&nxs_mutex);
 
 	sb->s_fs_info = NULL;
+
+	if (sbi->s_dflt_pfk)
+		kfree(sbi->s_dflt_pfk);
 	kfree(sbi);
 }
 
