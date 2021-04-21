@@ -114,16 +114,24 @@ struct apfs_spaceman {
 };
 
 /*
- * Structure that keeps track of a transaction.
+ * Structure that keeps track of a container transaction.
  */
-struct apfs_transaction {
+struct apfs_nx_transaction {
 	struct buffer_head *t_old_msb;  /* Main superblock being replaced */
+	bool force_commit;		/* If set, commit is guaranteed */
+
+	struct list_head t_buffers;	/* List of buffers in the transaction */
+	size_t t_buffers_count;		/* Count of items on the list */
+};
+
+/*
+ * Structure that keeps track of a volume transaction.
+ */
+struct apfs_vol_transaction {
 	struct buffer_head *t_old_vsb;  /* Volume superblock being replaced */
 
 	struct apfs_node t_old_omap_root; /* Omap root node being replaced */
 	struct apfs_node t_old_cat_root;  /* Catalog root node being replaced */
-
-	struct list_head t_buffers;	/* List of buffers in the transaction */
 };
 
 /* State bits for buffer heads in a transaction */
@@ -153,6 +161,8 @@ struct apfs_nxsb_info {
 	struct apfs_object nx_object; /* Main superblock object */
 	u64 nx_xid; /* Latest transaction id */
 
+	struct list_head vol_list;	/* List of mounted volumes in container */
+
 	unsigned int nx_flags;	/* Mount options shared by all volumes */
 	unsigned int nx_refcnt; /* Number of mounted volumes in container */
 
@@ -161,7 +171,7 @@ struct apfs_nxsb_info {
 	unsigned char nx_blocksize_bits;
 
 	struct apfs_spaceman nx_spaceman;
-	struct apfs_transaction nx_transaction;
+	struct apfs_nx_transaction nx_transaction;
 
 	/* For now, a single semaphore for every operation */
 	struct rw_semaphore nx_big_sem;
@@ -177,6 +187,7 @@ extern struct mutex nxs_mutex;
  */
 struct apfs_sb_info {
 	struct apfs_nxsb_info *s_nxi; /* In-memory container sb for volume */
+	struct list_head list;		/* List of mounted volumes in container */
 	struct apfs_superblock *s_vsb_raw; /* On-disk volume sb */
 
 	struct apfs_node *s_cat_root;	/* Root of the catalog tree */
@@ -190,6 +201,8 @@ struct apfs_sb_info {
 	kgid_t s_gid;			/* gid to override on-disk gid */
 
 	struct apfs_crypto_state_val *s_dflt_pfk; /* default per-file key */
+
+	struct apfs_vol_transaction s_transaction;
 
 	struct inode *s_private_dir;	/* Inode for the private directory */
 };
@@ -471,6 +484,10 @@ static inline u32 apfs_query_storage(struct apfs_query *query)
 		return APFS_OBJ_PHYSICAL;
 	BUG();
 }
+
+/* super.c */
+struct apfs_query *apfs_alloc_query_item(void);
+void apfs_free_query_item(struct apfs_query *qi);
 
 /*
  * Extent record data in memory

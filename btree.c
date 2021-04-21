@@ -185,7 +185,7 @@ struct apfs_query *apfs_alloc_query(struct apfs_node *node,
 {
 	struct apfs_query *query;
 
-	query = kmalloc(sizeof(*query), GFP_KERNEL);
+	query = apfs_alloc_query_item();
 	if (!query)
 		return NULL;
 
@@ -216,7 +216,7 @@ void apfs_free_query(struct super_block *sb, struct apfs_query *query)
 		struct apfs_query *parent = query->parent;
 
 		apfs_node_put(query->node);
-		kfree(query);
+		apfs_free_query_item(query);
 		query = parent;
 	}
 }

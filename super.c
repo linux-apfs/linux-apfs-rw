@@ -320,7 +320,7 @@ int apfs_map_volume_super(struct super_block *sb, bool write)
 	struct apfs_omap_phys *msb_omap_raw;
 	struct apfs_node *vnode;
 	struct buffer_head *bh;
-	struct apfs_transaction *trans = &nxi->nx_transaction;
+	struct apfs_vol_transaction *trans = &sbi->s_transaction;
 	u64 vol_id;
 	u64 vsb;
 	int err;
@@ -536,6 +536,8 @@ static void apfs_put_super(struct super_block *sb)
 		vsb_raw->apfs_unmount_time = cpu_to_le64(ktime_get_real_ns());
 		set_buffer_csum(vsb_bh);
 
+		/* Guarantee commit */
+		sbi->s_nxi->nx_transaction.force_commit = true;
 		if (apfs_transaction_commit(sb)) {
 			apfs_transaction_abort(sb);
 			goto fail;
@@ -549,6 +551,7 @@ fail:
 	apfs_unmap_volume_super(sb);
 
 	mutex_lock(&nxs_mutex);
+	list_del(&sbi->list);
 	apfs_unmap_main_super(sbi);
 	mutex_unlock(&nxs_mutex);
 
@@ -639,6 +642,40 @@ static void destroy_inodecache(void)
 	 */
 	rcu_barrier();
 	kmem_cache_destroy(apfs_inode_cachep);
+}
+
+static struct kmem_cache *apfs_query_cachep;
+
+static int __init init_querycache(void)
+{
+	apfs_query_cachep = kmem_cache_create("apfs_query_cache",
+					     sizeof(struct apfs_query),
+					     0, (SLAB_RECLAIM_ACCOUNT|
+						SLAB_MEM_SPREAD|SLAB_ACCOUNT),
+					     NULL);
+	if (apfs_query_cachep == NULL)
+		return -ENOMEM;
+	return 0;
+}
+
+struct apfs_query *apfs_alloc_query_item(void)
+{
+	struct apfs_query *qi;
+	qi = kmem_cache_alloc(apfs_query_cachep, GFP_KERNEL);
+	if(!qi)
+		return NULL;
+	memset(qi, 0, sizeof(struct apfs_query));
+	return qi;
+}
+
+void apfs_free_query_item(struct apfs_query *qi)
+{
+	kmem_cache_free(apfs_query_cachep, qi);
+}
+
+static void destroy_querycache(void)
+{
+	kmem_cache_destroy(apfs_query_cachep);
 }
 
 /**
@@ -1125,8 +1162,10 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, struct block_device *bdev, 
 		nxi->nx_bdev = bdev;
 		init_rwsem(&nxi->nx_big_sem);
 		list_add(&nxi->nx_list, &nxs);
+		INIT_LIST_HEAD(&nxi->vol_list);
 	}
 
+	list_add(&sbi->list, &nxi->vol_list);
 	sbi->s_nxi = nxi;
 	++nxi->nx_refcnt;
 	return 0;
@@ -1224,15 +1263,23 @@ static int __init init_apfs_fs(void)
 	err = init_inodecache();
 	if (err)
 		return err;
-	err = register_filesystem(&apfs_fs_type);
-	if (err)
+	err = init_querycache();
+	if (err) {
 		destroy_inodecache();
+		return err;
+	}
+	err = register_filesystem(&apfs_fs_type);
+	if (err) {
+		destroy_querycache();
+		destroy_inodecache();
+	}
 	return err;
 }
 
 static void __exit exit_apfs_fs(void)
 {
 	unregister_filesystem(&apfs_fs_type);
+	destroy_querycache();
 	destroy_inodecache();
 }
 
