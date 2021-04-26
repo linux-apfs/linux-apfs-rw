@@ -444,7 +444,6 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	struct apfs_bh_info *bhi, *tmp;
 	int err = 0;
-int nerr = 0;
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 	ASSERT(nx_trans->t_old_msb);
@@ -453,7 +452,6 @@ int nerr = 0;
 		struct buffer_head *bh = bhi->bh;
 		int curr_err;
 
-if(buffer_mapped(bh)) {
 		ASSERT(buffer_trans(bh));
 
 		if (buffer_csum(bh))
@@ -463,11 +461,6 @@ if(buffer_mapped(bh)) {
 		if (curr_err)
 			err = curr_err;
 
-} else {
-if(nerr < 10)
-printk(KERN_ERR "unmapped buffer commit (%lX %lX %lX %ld)\n", (long)bh->b_blocknr, (long)bh->b_size, (long)bh->b_state, (long)bh->b_count.counter);
-nerr ++;
-}
 		bh->b_private = NULL;
 		clear_buffer_trans(bh);
 		clear_buffer_csum(bh);
@@ -477,8 +470,6 @@ nerr ++;
 		nx_trans->t_buffers_count --;
 		kfree(bhi);
 	}
-if(nerr)
-printk(KERN_ERR "saw %d unmapped buffer commits\n", nerr);
 	if (err)
 		goto fail;
 	err = apfs_checkpoint_end(sb);
@@ -540,18 +531,12 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 		struct apfs_spaceman_free_queue *fq_main = &sm_raw->sm_fq[APFS_SFQ_MAIN];
 
 		if(nx_trans->t_buffers_count > TRANSACTION_BUFFERS_MAX)
-{ printk(KERN_ERR "commit fq: %ld %ld %ld\n", (long)le64_to_cpu(fq_ip->sfq_count), (long)le64_to_cpu(fq_main->sfq_count), nx_trans->t_buffers_count);
 			return true;
-}
 
 		if(le64_to_cpu(fq_ip->sfq_count) > TRANSACTION_IP_QUEUE_MAX)
-{ printk(KERN_ERR "commit fq: %ld %ld %ld\n", (long)le64_to_cpu(fq_ip->sfq_count), (long)le64_to_cpu(fq_main->sfq_count), nx_trans->t_buffers_count);
 			return true;
-}
 		if(le64_to_cpu(fq_main->sfq_count) > TRANSACTION_MAIN_QUEUE_MAX)
-{ printk(KERN_ERR "commit fq: %ld %ld %ld\n", (long)le64_to_cpu(fq_ip->sfq_count), (long)le64_to_cpu(fq_main->sfq_count), nx_trans->t_buffers_count);
 			return true;
-}
 	}
 
 	return false;
@@ -624,7 +609,6 @@ void apfs_transaction_abort(struct super_block *sb)
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	struct apfs_bh_info *bhi, *tmp;
 
-printk(KERN_ERR "transaction abort\n");
 	ASSERT(nx_trans->t_old_msb);
 	nx_trans->force_commit = false;
 
