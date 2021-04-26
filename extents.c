@@ -369,9 +369,7 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 		return err;
 
 	apfs_map_bh(bh_result, sb, ext.phys_block_num);
-	err = apfs_transaction_join(sb, bh_result);
-	if (err)
-		return err;
+	get_bh(bh_result);
 
 	err = apfs_create_phys_extent(inode, &ext);
 	if (err)
