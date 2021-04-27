@@ -10,7 +10,7 @@ apfs-y := btree.o compress.o dir.o extents.o file.o inode.o key.o message.o \
 	  namei.o node.o object.o spaceman.o super.o symlink.o transaction.o \
 	  unicode.o xattr.o xfield.o
 
-KDIR ?= /lib/modules/`uname -r`/build
+KDIR ?= /lib/modules/$(KERNELRELEASE)/build
 
 default: modules
 	$(MAKE) -C $(KDIR) M=$$PWD modules EXTRA_CFLAGS="-g -DDEBUG"
