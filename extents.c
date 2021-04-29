@@ -153,17 +153,17 @@ int apfs_get_block(struct inode *inode, sector_t iblock,
 }
 
 /**
- * apfs_update_extents - Update the extent records to accommodate a new extent
+ * apfs_update_extent - Create or update the extent record for an extent
  * @inode:	the vfs inode
  * @extent:	new in-memory file extent; the old physical location is set
  *		here on return so that the caller can release the blocks
  *
- * For now, assumes that all extents have a single block, and only creates or
- * updates the records for @extent.  TODO: support longer extents.  Returns 0
- * on success or a negative error code in case of failure.
+ * For now only creates or updates the record for @extent, and it won't work
+ * for writes to the middle of it (TODO). Returns 0 on success or a negative
+ * error code in case of failure.
  */
-static int apfs_update_extents(struct inode *inode,
-			       struct apfs_file_extent *extent)
+static int apfs_update_extent(struct inode *inode,
+			      struct apfs_file_extent *extent)
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
@@ -175,8 +175,6 @@ static int apfs_update_extents(struct inode *inode,
 	u64 extent_id = ai->i_extent_id;
 	int ret;
 	u64 prev_crypto, new_crypto;
-
-	ASSERT(extent->len == sb->s_blocksize);
 
 	apfs_key_set_hdr(APFS_TYPE_FILE_EXTENT, extent_id, &raw_key);
 	raw_key.logical_addr = cpu_to_le64(extent->logical_addr);
@@ -194,7 +192,7 @@ static int apfs_update_extents(struct inode *inode,
 	if (!query)
 		return -ENOMEM;
 	query->key = &key;
-	/* The query is exact for now because we assume single-block extents */
+	/* The query is exact for now because we won't break up extents */
 	query->flags = APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -235,14 +233,14 @@ fail:
 }
 
 /**
- * apfs_create_phys_extent - Create the physical record for a new extent
+ * apfs_update_phys_extent - Create or update the physical record for an extent
  * @inode:	the vfs inode
  * @extent:	new in-memory file extent
  *
- * Only works with single-block extents, for now.  Returns 0 on success or a
+ * Only works for appending to extents, for now.  Returns 0 on success or a
  * negative error code in case of failure.
  */
-static int apfs_create_phys_extent(struct inode *inode,
+static int apfs_update_phys_extent(struct inode *inode,
 				   struct apfs_file_extent *extent)
 {
 	struct super_block *sb = inode->i_sb;
@@ -277,21 +275,20 @@ static int apfs_create_phys_extent(struct inode *inode,
 	query->flags = APFS_QUERY_EXTENTREF | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (!ret) {
-		apfs_alert(sb, "physical extent record for unused block 0x%llx",
-			   extent->phys_block_num);
-		ret = -EFSCORRUPTED;
-		goto fail;
-	}
-	if (ret != -ENODATA)
+	if (ret && ret != -ENODATA)
 		goto fail;
 
 	apfs_key_set_hdr(APFS_TYPE_EXTENT, extent->phys_block_num, &raw_key);
 	raw_val.len_and_kind = cpu_to_le64(kind | blkcnt);
 	raw_val.owning_obj_id = cpu_to_le64(ai->i_extent_id);
 	raw_val.refcnt = cpu_to_le32(1);
-	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
-				&raw_val, sizeof(raw_val));
+
+	if (ret)
+		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
+					&raw_val, sizeof(raw_val));
+	else
+		ret = apfs_btree_replace(query, &raw_key, sizeof(raw_key),
+					 &raw_val, sizeof(raw_val));
 
 fail:
 	apfs_free_query(sb, query);
@@ -348,52 +345,99 @@ fail:
 	return ret;
 }
 
+/**
+ * apfs_flush_extent_cache - Write the cached extent to the catalog, if dirty
+ * @inode: the inode to flush
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+int apfs_flush_extent_cache(struct inode *inode)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	struct apfs_inode_info *ai = APFS_I(inode);
+	struct apfs_file_extent *cache = &ai->i_cached_extent;
+	struct apfs_file_extent ext = *cache;
+	u64 old_blks, new_blks, byte_change;
+	int err;
+
+	if (!ai->i_extent_dirty)
+		return 0;
+
+	err = apfs_update_phys_extent(inode, &ext);
+	if (err)
+		return err;
+	err = apfs_update_extent(inode, &ext);
+	if (err)
+		return err;
+
+	byte_change = cache->len - ext.len;
+	inode_add_bytes(inode, byte_change);
+
+	old_blks = (ext.len + sb->s_blocksize - 1) >> inode->i_blkbits;
+	new_blks = (cache->len + sb->s_blocksize - 1) >> inode->i_blkbits;
+	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, new_blks - old_blks);
+
+	/* Release the old blocks if the extent is new. TODO: cloned files */
+	if (ext.len && ext.phys_block_num != cache->phys_block_num) {
+		int i;
+
+		err = apfs_delete_phys_extent(inode, &ext);
+		if (err)
+			return err;
+
+		for (i = 0; i < old_blks; ++i) {
+			err = apfs_free_queue_insert(sb, ext.phys_block_num + i);
+			if (err)
+				return err;
+		}
+	}
+
+	ai->i_extent_dirty = false;
+	return 0;
+}
+
 int apfs_get_new_block(struct inode *inode, sector_t iblock,
 		       struct buffer_head *bh_result, int create)
 {
 	struct super_block *sb = inode->i_sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
 	struct apfs_inode_info *ai = APFS_I(inode);
-	struct apfs_file_extent ext;
+	struct apfs_file_extent *cache = &ai->i_cached_extent;
+	u64 phys_bno, logical_addr, cache_blks;
+	bool cache_is_tail;
 	int err;
 
 	ASSERT(create);
 
-	/* TODO: preallocate tail blocks, support sparse files */
-	ext.len = sb->s_blocksize;
-	ext.logical_addr = iblock << inode->i_blkbits;
+	/* nx_big_sem provides the locking for the cache here */
+	cache_is_tail = cache->len && (inode->i_size <= cache->logical_addr + cache->len);
+	cache_blks = (cache->len + sb->s_blocksize - 1) >> inode->i_blkbits;
 
-	err = apfs_spaceman_allocate_block(sb, &ext.phys_block_num);
+	/* TODO: preallocate tail blocks, support sparse files */
+	logical_addr = iblock << inode->i_blkbits;
+
+	err = apfs_spaceman_allocate_block(sb, &phys_bno);
 	if (err)
 		return err;
 
-	apfs_map_bh(bh_result, sb, ext.phys_block_num);
+	apfs_map_bh(bh_result, sb, phys_bno);
 	get_bh(bh_result);
 
-	err = apfs_create_phys_extent(inode, &ext);
-	if (err)
-		return err;
-	err = apfs_update_extents(inode, &ext);
-	if (err)
-		return err;
-	inode_add_bytes(inode, sb->s_blocksize);
-	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
-
-	if (ext.len) {
-		/* Release the old blocks.  TODO: support cloned files */
-		inode_sub_bytes(inode, sb->s_blocksize);
-		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
-		err = apfs_delete_phys_extent(inode, &ext);
-		if (err)
-			return err;
-		err = apfs_free_queue_insert(sb, ext.phys_block_num);
-		if (err)
-			return err;
+	if (cache_is_tail &&
+	    logical_addr == cache->logical_addr + cache->len &&
+	    phys_bno == cache->phys_block_num + cache_blks) {
+		cache->len += sb->s_blocksize;
+		ai->i_extent_dirty = true;
+		return 0;
 	}
 
-	/* Just invalidate the cache; nx_big_sem provides the locking here */
-	ai->i_cached_extent.len = 0;
+	err = apfs_flush_extent_cache(inode);
+	if (err)
+		return err;
 
+	cache->logical_addr = logical_addr;
+	cache->phys_block_num = phys_bno;
+	cache->len = sb->s_blocksize;
+	ai->i_extent_dirty = true;
 	return 0;
 }

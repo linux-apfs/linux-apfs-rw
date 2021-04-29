@@ -388,6 +388,11 @@ static int apfs_write_end(struct file *file, struct address_space *mapping,
 		bh = bh->b_this_page;
 	} while (bh != head);
 
+	/* TODO: write all metadata for inodes at transaction commit instead? */
+	err = apfs_flush_extent_cache(inode);
+	if (err)
+		goto out_abort;
+
 	err = apfs_update_inode(inode, NULL /* new_name */);
 	if (err)
 		goto out_abort;

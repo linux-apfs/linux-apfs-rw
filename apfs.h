@@ -507,6 +507,7 @@ struct apfs_inode_info {
 	u64			i_parent_id;	 /* ID of primary parent */
 	u64			i_extent_id;	 /* ID of the extent records */
 	struct apfs_file_extent	i_cached_extent; /* Latest extent record */
+	bool			i_extent_dirty;	 /* Is i_cached_extent dirty? */
 	spinlock_t		i_extent_lock;	 /* Protects i_cached_extent */
 	struct timespec64	i_crtime;	 /* Time of creation */
 	u32			i_nchildren;	 /* Child count for directory */
@@ -647,6 +648,7 @@ extern int __apfs_get_block(struct inode *inode, sector_t iblock,
 			    struct buffer_head *bh_result, int create);
 extern int apfs_get_block(struct inode *inode, sector_t iblock,
 			  struct buffer_head *bh_result, int create);
+extern int apfs_flush_extent_cache(struct inode *inode);
 extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			      struct buffer_head *bh_result, int create);
 

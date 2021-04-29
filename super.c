@@ -577,6 +577,7 @@ static struct inode *apfs_alloc_inode(struct super_block *sb)
 	ai->vfs_inode.i_version = 1;
 #endif
 	ai->i_cached_extent.len = 0;
+	ai->i_extent_dirty = false;
 	ai->i_nchildren = 0;
 	return &ai->vfs_inode;
 }
