@@ -6,9 +6,9 @@
 #include <linux/blkdev.h>
 #include "apfs.h"
 
-#define TRANSACTION_IP_QUEUE_MAX	64
-#define TRANSACTION_MAIN_QUEUE_MAX	512
-#define TRANSACTION_BUFFERS_MAX		8192
+#define TRANSACTION_MAIN_QUEUE_MAX	4096
+#define TRANSACTION_BUFFERS_MAX		1024
+#define TRANSACTION_STARTS_MAX		1024
 
 /**
  * apfs_cpoint_init_area - Initialize the new blocks of a checkpoint area
@@ -389,6 +389,7 @@ int apfs_transaction_start(struct super_block *sb)
 		++nxi->nx_xid;
 		INIT_LIST_HEAD(&nx_trans->t_buffers);
 		nx_trans->t_buffers_count = 0;
+		nx_trans->t_starts_count = 0;
 
 		err = apfs_checkpoint_start(sb);
 		if (err)
@@ -426,6 +427,7 @@ int apfs_transaction_start(struct super_block *sb)
 			goto fail;
 	}
 
+	nx_trans->t_starts_count++;
 	return 0;
 
 fail:
@@ -444,6 +446,7 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	struct apfs_bh_info *bhi, *tmp;
 	int err = 0;
+
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 	ASSERT(nx_trans->t_old_msb);
@@ -532,9 +535,18 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 
 		if(nx_trans->t_buffers_count > TRANSACTION_BUFFERS_MAX)
 			return true;
-
-		if(le64_to_cpu(fq_ip->sfq_count) > TRANSACTION_IP_QUEUE_MAX)
+		if (nx_trans->t_starts_count > TRANSACTION_STARTS_MAX)
 			return true;
+
+		/*
+		 * The internal pool has enough blocks to map the container
+		 * exactly 3 times. Don't allow large transactions if we can't
+		 * be sure the bitmap changes will all fit.
+		 */
+		if(le64_to_cpu(fq_ip->sfq_count) * 3 > le64_to_cpu(sm_raw->sm_ip_block_count))
+			return true;
+
+		/* Don't let the main queue get too full either */
 		if(le64_to_cpu(fq_main->sfq_count) > TRANSACTION_MAIN_QUEUE_MAX)
 			return true;
 	}

@@ -122,6 +122,7 @@ struct apfs_nx_transaction {
 
 	struct list_head t_buffers;	/* List of buffers in the transaction */
 	size_t t_buffers_count;		/* Count of items on the list */
+	int t_starts_count;		/* Count of starts for transaction */
 };
 
 /*
