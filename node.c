@@ -203,7 +203,7 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 
 	switch (storage) {
 	case APFS_OBJ_VIRTUAL:
-		err = apfs_spaceman_allocate_block(sb, &bno);
+		err = apfs_spaceman_allocate_block(sb, &bno, true /* backwards */);
 		if (err)
 			return ERR_PTR(err);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
@@ -215,7 +215,7 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 			return ERR_PTR(err);
 		break;
 	case APFS_OBJ_PHYSICAL:
-		err = apfs_spaceman_allocate_block(sb, &bno);
+		err = apfs_spaceman_allocate_block(sb, &bno, true /* backwards */);
 		if (err)
 			return ERR_PTR(err);
 		/* We don't write to the container's omap */

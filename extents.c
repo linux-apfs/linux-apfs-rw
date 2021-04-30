@@ -416,7 +416,7 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 	/* TODO: preallocate tail blocks, support sparse files */
 	logical_addr = iblock << inode->i_blkbits;
 
-	err = apfs_spaceman_allocate_block(sb, &phys_bno);
+	err = apfs_spaceman_allocate_block(sb, &phys_bno, false /* backwards */);
 	if (err)
 		return err;
 

@@ -812,13 +812,14 @@ static int apfs_chunk_allocate_block(struct super_block *sb,
  * @sb:		superblock structure
  * @cib_bh:	buffer head for the chunk-info block
  * @bno:	on return, the allocated block number
+ * @backwards:	start the search on the last chunk
  *
  * Finds a free block among all the chunks in the cib and marks it as used; the
  * buffer at @cib_bh may be replaced if needed for copy-on-write.  Returns 0 on
  * success, or a negative error code in case of failure.
  */
 static int apfs_cib_allocate_block(struct super_block *sb,
-				   struct buffer_head **cib_bh, u64 *bno)
+				   struct buffer_head **cib_bh, u64 *bno, bool backwards)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_spaceman *sm = APFS_SM(sb);
@@ -839,9 +840,12 @@ static int apfs_cib_allocate_block(struct super_block *sb,
 		return -EFSCORRUPTED;
 
 	for (i = 0; i < chunk_count; ++i) {
+		int index;
 		int err;
 
-		err = apfs_chunk_allocate_block(sb, cib_bh, i, bno);
+		index = backwards ? chunk_count - 1 - i : i;
+
+		err = apfs_chunk_allocate_block(sb, cib_bh, index, bno);
 		if (err == -ENOSPC) /* This chunk is full */
 			continue;
 		return err;
@@ -853,11 +857,12 @@ static int apfs_cib_allocate_block(struct super_block *sb,
  * apfs_spaceman_allocate_block - Allocate a single on-disk block
  * @sb:		superblock structure
  * @bno:	on return, the allocated block number
+ * @backwards:	start the search on the last chunk
  *
  * Finds a free block among the spaceman bitmaps and marks it as used.  Returns
  * 0 on success, or a negative error code in case of failure.
  */
-int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno)
+int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backwards)
 {
 	struct apfs_spaceman *sm = APFS_SM(sb);
 	struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
@@ -866,17 +871,21 @@ int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno)
 	for (i = 0; i < sm->sm_cib_count; ++i) {
 		struct buffer_head *cib_bh;
 		u64 cib_bno;
+		int index;
 		int err;
 
-		cib_bno = apfs_spaceman_read_cib_addr(sb, i);
+		/* Keep extents and metadata separate to limit fragmentation */
+		index = backwards ? sm->sm_cib_count - 1 - i : i;
+
+		cib_bno = apfs_spaceman_read_cib_addr(sb, index);
 		cib_bh = apfs_sb_bread(sb, cib_bno);
 		if (!cib_bh)
 			return -EIO;
 
-		err = apfs_cib_allocate_block(sb, &cib_bh, bno);
+		err = apfs_cib_allocate_block(sb, &cib_bh, bno, backwards);
 		if (!err) {
 			/* The cib may have been moved */
-			apfs_spaceman_write_cib_addr(sb, i, cib_bh->b_blocknr);
+			apfs_spaceman_write_cib_addr(sb, index, cib_bh->b_blocknr);
 			/* The free block count has changed */
 			apfs_write_spaceman(sm);
 			apfs_obj_set_csum(sb, &sm_raw->sm_o);

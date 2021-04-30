@@ -335,7 +335,7 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno,
 	if (obj->o_xid == cpu_to_le64(nxi->nx_xid))
 		return bh;
 
-	err = apfs_spaceman_allocate_block(sb, &new_bno);
+	err = apfs_spaceman_allocate_block(sb, &new_bno, true /* backwards */);
 	if (err)
 		goto fail;
 	new_bh = apfs_sb_bread(sb, new_bno);
