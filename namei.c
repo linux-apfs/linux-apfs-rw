@@ -3,6 +3,7 @@
  * Copyright (C) 2018 Ernesto A. Fernández <ernesto.mnd.fernandez@gmail.com>
  */
 
+#include <linux/namei.h>
 #include "apfs.h"
 #include "unicode.h"
 
@@ -94,7 +95,29 @@ static int apfs_dentry_compare(const struct dentry *dentry, unsigned int len,
 	return apfs_filename_cmp(dentry->d_sb, name->name, str);
 }
 
+static int apfs_dentry_revalidate(struct dentry *dentry, unsigned int flags)
+{
+	struct super_block *sb = dentry->d_sb;
+
+	if (flags & LOOKUP_RCU)
+		return -ECHILD;
+
+	/*
+	 * If we want to create a link with a name that normalizes to the same
+	 * as an existing negative dentry, then we first need to invalidate the
+	 * dentry; otherwise it would keep the existing name.
+	 */
+	if (d_really_is_positive(dentry))
+		return 1;
+	if (!apfs_is_case_insensitive(sb) && !apfs_is_normalization_insensitive(sb))
+		return 1;
+	if (flags & (LOOKUP_CREATE | LOOKUP_RENAME_TARGET))
+		return 0;
+	return 1;
+}
+
 const struct dentry_operations apfs_dentry_operations = {
+	.d_revalidate	= apfs_dentry_revalidate,
 	.d_hash		= apfs_dentry_hash,
 	.d_compare	= apfs_dentry_compare,
 };
