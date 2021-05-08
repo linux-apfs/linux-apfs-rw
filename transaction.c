@@ -358,13 +358,50 @@ static int apfs_checkpoint_end(struct super_block *sb)
 }
 
 /**
+ * apfs_transaction_has_room - Is there enough free space for this transaction?
+ * @sb:		superblock structure
+ * @maxops:	maximum operations expected
+ */
+static bool apfs_transaction_has_room(struct super_block *sb, struct apfs_max_ops maxops)
+{
+	u64 max_cat_blks, max_omap_blks, max_extref_blks, max_blks;
+	/* I don't know the actual maximum heights, just guessing */
+	const u64 max_cat_height = 8, max_omap_height = 3, max_extref_height = 3;
+
+	/*
+	 * On the worst possible case (a tree of max_height), each new insertion
+	 * to the catalog may both cow and split every node up to the root. The
+	 * root though, is only cowed once.
+	 */
+	max_cat_blks = 1 + 2 * maxops.cat * max_cat_height;
+
+	/*
+	 * Any new catalog node could require a new entry in the object map,
+	 * because the original might belong to a snapshot.
+	 */
+	max_omap_blks = 1 + 2 * max_cat_blks * max_omap_height;
+
+	/* The extent reference tree needs a maximum of one record per block */
+	max_extref_blks = 1 + 2 * maxops.blks * max_extref_height;
+
+	/*
+	 * Ephemeral allocations shouldn't fail, and neither should those in the
+	 * internal pool. So just add the actual file blocks and we are done.
+	 */
+	max_blks = max_cat_blks + max_omap_blks + max_extref_blks + maxops.blks;
+
+	return max_blks < APFS_SM(sb)->sm_free_count;
+}
+
+/**
  * apfs_transaction_start - Begin a new transaction
- * @sb: superblock structure
+ * @sb:		superblock structure
+ * @maxops:	maximum operations expected
  *
  * Also locks the filesystem for writing; returns 0 on success or a negative
  * error code in case of failure.
  */
-int apfs_transaction_start(struct super_block *sb)
+int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
@@ -402,6 +439,14 @@ int apfs_transaction_start(struct super_block *sb)
 		err = apfs_read_spaceman(sb);
 		if (err)
 			goto fail;
+	}
+
+	/* Don't start transactions unless we are sure they fit in disk */
+	if (!apfs_transaction_has_room(sb, maxops)) {
+		/* Commit what we have so far to flush the queues */
+		nx_trans->force_commit = true;
+		err = apfs_transaction_commit(sb);
+		return err ? err : -ENOSPC;
 	}
 
 	if (!vol_trans->t_old_vsb) {
@@ -474,10 +519,10 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		kfree(bhi);
 	}
 	if (err)
-		goto fail;
+		return err;
 	err = apfs_checkpoint_end(sb);
 	if (err)
-		goto fail;
+		return err;
 
 	/* Success: forget the old container and volume superblocks */
 	brelse(nx_trans->t_old_msb);
@@ -501,16 +546,6 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	brelse(APFS_SM(sb)->sm_ip);
 	APFS_SM(sb)->sm_ip = NULL;
 	return 0;
-
-fail:
-	/*
-	 * This won't happen on ENOSPC, so it should be rare.  Set the
-	 * filesystem read-only to simplify cleanup for the callers and
-	 * avoid deciding if the transaction was completed.
-	 */
-	apfs_info(sb, "transaction commit failed, forcing read-only");
-	sb->s_flags |= SB_RDONLY;
-	return err;
 }
 
 /**
@@ -566,8 +601,14 @@ int apfs_transaction_commit(struct super_block *sb)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	int err = 0;
 
-	if(apfs_transaction_need_commit(sb))
+	if (apfs_transaction_need_commit(sb)) {
 		err = apfs_transaction_commit_nx(sb);
+		if (err) {
+			apfs_warn(sb, "transaction commit failed");
+			apfs_transaction_abort(sb);
+			return err;
+		}
+	}
 
 	mutex_unlock(&nxs_mutex);
 	up_write(&nxi->nx_big_sem);
@@ -612,7 +653,7 @@ int apfs_transaction_join(struct super_block *sb, struct buffer_head *bh)
  *
  * Releases the big filesystem lock and clears the in-memory transaction data;
  * the on-disk changes are irrelevant because the superblock checksum hasn't
- * been written yet.
+ * been written yet. Leaves the filesystem in read-only state.
  */
 void apfs_transaction_abort(struct super_block *sb)
 {
@@ -623,6 +664,7 @@ void apfs_transaction_abort(struct super_block *sb)
 
 	ASSERT(nx_trans->t_old_msb);
 	nx_trans->force_commit = false;
+	apfs_warn(sb, "aborting transaction");
 
 	--nxi->nx_xid;
 	list_for_each_entry_safe(bhi, tmp, &nx_trans->t_buffers, list) {
@@ -669,6 +711,9 @@ void apfs_transaction_abort(struct super_block *sb)
 
 	brelse(APFS_SM(sb)->sm_ip);
 	APFS_SM(sb)->sm_ip = NULL;
+
+	/* Set the filesystem read-only to simplify cleanup for the callers */
+	sb->s_flags |= SB_RDONLY; /* TODO: the other volumes */
 
 	mutex_unlock(&nxs_mutex);
 	up_write(&nxi->nx_big_sem);

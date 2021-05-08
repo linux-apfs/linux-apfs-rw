@@ -524,8 +524,9 @@ static void apfs_put_super(struct super_block *sb)
 	if (!(sb->s_flags & SB_RDONLY)) {
 		struct apfs_superblock *vsb_raw;
 		struct buffer_head *vsb_bh;
+		struct apfs_max_ops maxops = {0};
 
-		if (apfs_transaction_start(sb))
+		if (apfs_transaction_start(sb, maxops))
 			goto fail;
 		vsb_raw = sbi->s_vsb_raw;
 		vsb_bh = sbi->s_vobject.bh;
@@ -617,9 +618,13 @@ static int __init init_inodecache(void)
 static int apfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 {
 	struct super_block *sb = inode->i_sb;
+	struct apfs_max_ops maxops;
 	int err;
 
-	err = apfs_transaction_start(sb);
+	maxops.cat = APFS_UPDATE_INODE_MAXOPS();
+	maxops.blks = 0;
+
+	err = apfs_transaction_start(sb, maxops);
 	if (err)
 		return err;
 	err = apfs_update_inode(inode, NULL /* new_name */);

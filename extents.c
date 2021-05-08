@@ -231,6 +231,7 @@ fail:
 	apfs_free_query(sb, query);
 	return ret;
 }
+#define APFS_UPDATE_EXTENTS_MAXOPS	(1 + 2 * APFS_CRYPTO_ADJ_REFCNT_MAXOPS())
 
 /**
  * apfs_update_phys_extent - Create or update the physical record for an extent
@@ -396,6 +397,7 @@ int apfs_flush_extent_cache(struct inode *inode)
 	ai->i_extent_dirty = false;
 	return 0;
 }
+#define APFS_FLUSH_EXTENT_CACHE	APFS_UPDATE_EXTENTS_MAXOPS
 
 int apfs_get_new_block(struct inode *inode, sector_t iblock,
 		       struct buffer_head *bh_result, int create)
@@ -440,4 +442,8 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 	cache->len = sb->s_blocksize;
 	ai->i_extent_dirty = true;
 	return 0;
+}
+int APFS_GET_NEW_BLOCK_MAXOPS(void)
+{
+	return APFS_FLUSH_EXTENT_CACHE;
 }

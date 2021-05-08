@@ -418,6 +418,10 @@ done:
 	apfs_free_query(sb, query);
 	return ret;
 }
+int APFS_XATTR_SET_MAXOPS(void)
+{
+	return 1;
+}
 
 static int apfs_xattr_osx_set(const struct xattr_handler *handler,
 			      struct dentry *unused, struct inode *inode,
@@ -425,9 +429,13 @@ static int apfs_xattr_osx_set(const struct xattr_handler *handler,
 			      size_t size, int flags)
 {
 	struct super_block *sb = inode->i_sb;
+	struct apfs_max_ops maxops;
 	int err;
 
-	err = apfs_transaction_start(sb);
+	maxops.cat = APFS_XATTR_SET_MAXOPS();
+	maxops.blks = 0;
+
+	err = apfs_transaction_start(sb, maxops);
 	if (err)
 		return err;
 

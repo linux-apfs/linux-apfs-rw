@@ -149,6 +149,14 @@ struct apfs_bh_info {
 	struct list_head	list;	/* List of buffers in the transaction */
 };
 
+/*
+ * Used to report how many operations may be needed for a transaction
+ */
+struct apfs_max_ops {
+	int cat;	/* Maximum catalog records that may need changing */
+	int blks;	/* Maximum extent blocks that may need changing */
+};
+
 /* Mount option flags for a container */
 #define APFS_CHECK_NODES	1
 #define APFS_READWRITE		2
@@ -641,6 +649,7 @@ extern int apfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		       struct inode *new_dir, struct dentry *new_dentry,
 		       unsigned int flags);
 extern int apfs_delete_orphan_link(struct inode *inode);
+extern int APFS_DELETE_ORPHAN_LINK_MAXOPS(void);
 
 /* extents.c */
 extern int apfs_extent_from_query(struct apfs_query *query,
@@ -652,15 +661,18 @@ extern int apfs_get_block(struct inode *inode, sector_t iblock,
 extern int apfs_flush_extent_cache(struct inode *inode);
 extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			      struct buffer_head *bh_result, int create);
+extern int APFS_GET_NEW_BLOCK_MAXOPS(void);
 
 /* inode.c */
 extern struct inode *apfs_iget(struct super_block *sb, u64 cnid);
 extern int apfs_update_inode(struct inode *inode, char *new_name);
+extern int APFS_UPDATE_INODE_MAXOPS(void);
 extern void apfs_evict_inode(struct inode *inode);
 extern struct inode *apfs_new_inode(struct inode *dir, umode_t mode,
 				    dev_t rdev);
 extern int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 				 struct dentry *dentry);
+extern int APFS_CREATE_INODE_REC_MAXOPS(void);
 extern int apfs_setattr(struct dentry *dentry, struct iattr *iattr);
 long apfs_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 long apfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
@@ -672,6 +684,7 @@ extern int apfs_getattr(const struct path *path, struct kstat *stat, u32 request
 #endif
 
 extern int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta);
+extern int APFS_CRYPTO_ADJ_REFCNT_MAXOPS(void);
 
 /* key.c */
 extern int apfs_filename_cmp(struct super_block *sb,
@@ -728,7 +741,7 @@ extern int apfs_read_catalog(struct super_block *sb, bool write);
 /* transaction.c */
 extern void apfs_cpoint_data_allocate(struct super_block *sb, u64 *bno);
 extern int apfs_cpoint_data_free(struct super_block *sb, u64 bno);
-extern int apfs_transaction_start(struct super_block *sb);
+extern int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops);
 extern int apfs_transaction_commit(struct super_block *sb);
 extern int apfs_transaction_join(struct super_block *sb,
 				 struct buffer_head *bh);
@@ -743,6 +756,7 @@ extern int apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 			  size_t size);
 extern int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 			  size_t size, int flags);
+extern int APFS_XATTR_SET_MAXOPS(void);
 extern ssize_t apfs_listxattr(struct dentry *dentry, char *buffer, size_t size);
 
 /* xfield.c */

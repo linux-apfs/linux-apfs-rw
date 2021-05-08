@@ -73,6 +73,7 @@ out:
 	apfs_free_query(sb, query);
 	return ret;
 }
+#define APFS_CREATE_DSTREAM_REC_MAXOPS	1
 
 /**
  * apfs_create_crypto_rec - Create the crypto state record for an inode
@@ -128,6 +129,7 @@ out:
 	apfs_free_query(sb, query);
 	return ret;
 }
+#define APFS_CREATE_CRYPTO_REC_MAXOPS	1
 
 /**
  * apfs_dflt_key_class - Returns default key class for files in volume
@@ -188,6 +190,10 @@ out:
 	apfs_free_query(sb, query);
 	return ret;
 }
+int APFS_CRYPTO_ADJ_REFCNT_MAXOPS(void)
+{
+	return 1;
+}
 
 /**
  * apfs_crypto_set_key - Modify content of crypto state record
@@ -235,6 +241,7 @@ out:
 	apfs_free_query(sb, query);
 	return ret;
 }
+#define APFS_CRYPTO_SET_KEY_MAXOPS	1
 
 /**
  * apfs_crypto_get_key - Retrieve content of crypto state record
@@ -294,9 +301,17 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 	unsigned int blocksize, block_start, block_end, from, to;
 	pgoff_t index = pos >> PAGE_SHIFT;
 	sector_t iblock = (sector_t)index << (PAGE_SHIFT - inode->i_blkbits);
+	int blkcount = (len + sb->s_blocksize - 1) >> inode->i_blkbits;
+	struct apfs_max_ops maxops;
 	int err;
 
-	err = apfs_transaction_start(sb);
+	maxops.cat = APFS_CREATE_DSTREAM_REC_MAXOPS +
+		     APFS_CREATE_CRYPTO_REC_MAXOPS +
+		     APFS_UPDATE_INODE_MAXOPS() +
+		     blkcount * APFS_GET_NEW_BLOCK_MAXOPS();
+	maxops.blks = blkcount;
+
+	err = apfs_transaction_start(sb, maxops);
 	if (err)
 		return err;
 
@@ -806,6 +821,7 @@ fail:
 	kfree(new_val);
 	return err;
 }
+#define APFS_INODE_RENAME_MAXOPS	1
 
 /**
  * apfs_create_dstream_xfield - Create the inode xfield for a new data stream
@@ -860,6 +876,7 @@ fail:
 	kfree(new_val);
 	return err;
 }
+#define APFS_CREATE_DSTREAM_XFIELD_MAXOPS	1
 
 /**
  * apfs_inode_resize - Update the sizes reported in an inode record
@@ -903,6 +920,7 @@ static int apfs_inode_resize(struct inode *inode, struct apfs_query *query)
 	/* This inode has no dstream xfield, so we need to create it */
 	return apfs_create_dstream_xfield(inode, query);
 }
+#define APFS_INODE_RESIZE_MAXOPS	(1 + APFS_CREATE_DSTREAM_XFIELD_MAXOPS)
 
 /**
  * apfs_update_inode - Update an existing inode record
@@ -973,6 +991,10 @@ fail:
 	apfs_free_query(sb, query);
 	return err;
 }
+int APFS_UPDATE_INODE_MAXOPS(void)
+{
+	return APFS_INODE_RENAME_MAXOPS + APFS_INODE_RESIZE_MAXOPS + 1;
+}
 
 /**
  * apfs_delete_inode - Delete an inode record and update the volume file count
@@ -1013,15 +1035,20 @@ static int apfs_delete_inode(struct inode *inode)
 	}
 	return ret;
 }
+#define APFS_DELETE_INODE_MAXOPS	1
 
 void apfs_evict_inode(struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
+	struct apfs_max_ops maxops;
 
 	if (is_bad_inode(inode) || inode->i_nlink)
 		goto out_clear;
 
-	if (apfs_transaction_start(sb))
+	maxops.cat = APFS_DELETE_INODE_MAXOPS + APFS_DELETE_ORPHAN_LINK_MAXOPS();
+	maxops.blks = 0;
+
+	if (apfs_transaction_start(sb, maxops))
 		goto out_report;
 	if (apfs_delete_inode(inode))
 		goto out_abort;
@@ -1169,11 +1196,16 @@ fail:
 	apfs_free_query(sb, query);
 	return ret;
 }
+int APFS_CREATE_INODE_REC_MAXOPS(void)
+{
+	return 1;
+}
 
 int apfs_setattr(struct dentry *dentry, struct iattr *iattr)
 {
 	struct inode *inode = d_inode(dentry);
 	struct super_block *sb = inode->i_sb;
+	struct apfs_max_ops maxops;
 	int err;
 
 	if (iattr->ia_valid & ATTR_SIZE && iattr->ia_size != inode->i_size)
@@ -1182,8 +1214,11 @@ int apfs_setattr(struct dentry *dentry, struct iattr *iattr)
 	if(err)
 		return err;
 
+	maxops.cat = APFS_UPDATE_INODE_MAXOPS();
+	maxops.blks = 0;
+
 	/* TODO: figure out why ->write_inode() isn't firing */
-	err = apfs_transaction_start(sb);
+	err = apfs_transaction_start(sb, maxops);
 	if (err)
 		return err;
 	err = apfs_update_inode(inode, NULL /* new_name */);
@@ -1239,6 +1274,7 @@ static int apfs_ioc_set_dir_class(struct file *file, u32 __user *user_class)
 	struct inode *inode = file_inode(file);
 	struct apfs_inode_info *ai = APFS_I(inode);
 	struct super_block *sb = inode->i_sb;
+	struct apfs_max_ops maxops;
 	u32 class;
 	int err;
 
@@ -1247,7 +1283,10 @@ static int apfs_ioc_set_dir_class(struct file *file, u32 __user *user_class)
 
 	ai->i_key_class = class;
 
-	err = apfs_transaction_start(sb);
+	maxops.cat = APFS_UPDATE_INODE_MAXOPS();
+	maxops.blks = 0;
+
+	err = apfs_transaction_start(sb, maxops);
 	if (err)
 		return err;
 	err = apfs_update_inode(inode, NULL /* new_name */);
@@ -1270,6 +1309,7 @@ static int apfs_ioc_set_pfk(struct file *file, void __user *user_pfk)
 	struct apfs_wrapped_crypto_state pfk_hdr;
 	struct apfs_crypto_state_val *pfk;
 	struct apfs_inode_info *ai = APFS_I(inode);
+	struct apfs_max_ops maxops;
 	unsigned key_len, key_class;
 	int err;
 
@@ -1287,7 +1327,10 @@ static int apfs_ioc_set_pfk(struct file *file, void __user *user_pfk)
 	}
 	pfk->refcnt = cpu_to_le32(1);
 
-	err = apfs_transaction_start(sb);
+	maxops.cat = APFS_CRYPTO_SET_KEY_MAXOPS + APFS_UPDATE_INODE_MAXOPS();
+	maxops.blks = 0;
+
+	err = apfs_transaction_start(sb, maxops);
 	if (err) {
 		kfree(pfk);
 		return err;
