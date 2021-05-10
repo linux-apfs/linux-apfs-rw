@@ -688,10 +688,15 @@ int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 	return 0;
 }
 
-#else /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0) */
 
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 int apfs_getattr(const struct path *path, struct kstat *stat,
 		 u32 request_mask, unsigned int query_flags)
+#else
+int apfs_getattr(struct user_namespace *mnt_userns,
+		 const struct path *path, struct kstat *stat, u32 request_mask,
+		 unsigned int query_flags)
+#endif
 {
 	struct inode *inode = d_inode(path->dentry);
 	struct apfs_inode_info *ai = APFS_I(inode);
@@ -704,12 +709,15 @@ int apfs_getattr(const struct path *path, struct kstat *stat,
 
 	stat->attributes_mask |= STATX_ATTR_COMPRESSED;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	generic_fillattr(inode, stat);
+#else
+	generic_fillattr(mnt_userns, inode, stat);
+#endif
+
 	stat->ino = apfs_ino(inode);
 	return 0;
 }
-
-#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0) */
 
 /**
  * apfs_build_inode_val - Allocate and initialize the value for an inode record
@@ -1111,7 +1119,13 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 	cnid = le64_to_cpu(vsb_raw->apfs_next_obj_id);
 	le64_add_cpu(&vsb_raw->apfs_next_obj_id, 1);
 	apfs_set_ino(inode, cnid);
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	inode_init_owner(inode, dir, mode);
+#else
+	inode_init_owner(&init_user_ns, inode, dir, mode);
+#endif
+
 	ai->i_saved_uid = i_uid_read(inode);
 	ai->i_saved_gid = i_gid_read(inode);
 	ai->i_parent_id = apfs_ino(dir);
@@ -1201,7 +1215,12 @@ int APFS_CREATE_INODE_REC_MAXOPS(void)
 	return 1;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 int apfs_setattr(struct dentry *dentry, struct iattr *iattr)
+#else
+int apfs_setattr(struct user_namespace *mnt_userns,
+		 struct dentry *dentry, struct iattr *iattr)
+#endif
 {
 	struct inode *inode = d_inode(dentry);
 	struct super_block *sb = inode->i_sb;
@@ -1210,7 +1229,13 @@ int apfs_setattr(struct dentry *dentry, struct iattr *iattr)
 
 	if (iattr->ia_valid & ATTR_SIZE && iattr->ia_size != inode->i_size)
 		return -EOPNOTSUPP; /* TODO: implement truncation */
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	err = simple_setattr(dentry, iattr);
+#else
+	err = simple_setattr(mnt_userns, dentry, iattr);
+#endif
+
 	if(err)
 		return err;
 

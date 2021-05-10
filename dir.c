@@ -655,21 +655,53 @@ out_abort:
 	return err;
 }
 
-int apfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+int apfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
+	       dev_t rdev)
+#else
+int apfs_mknod(struct user_namespace *mnt_userns, struct inode *dir,
+	       struct dentry *dentry, umode_t mode, dev_t rdev)
+#endif
 {
 	return apfs_mkany(dir, dentry, mode, rdev, NULL /* symname */);
 }
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 
 int apfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	return apfs_mknod(dir, dentry, mode | S_IFDIR, 0 /* rdev */);
 }
 
+#else
+
+int apfs_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
+	       struct dentry *dentry, umode_t mode)
+{
+	return apfs_mknod(mnt_userns, dir, dentry, mode | S_IFDIR, 0 /* rdev */);
+}
+
+#endif
+
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+
 int apfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 		bool excl)
 {
 	return apfs_mknod(dir, dentry, mode, 0 /* rdev */);
 }
+
+#else
+
+int apfs_create(struct user_namespace *mnt_userns, struct inode *dir,
+		struct dentry *dentry, umode_t mode, bool excl)
+{
+	return apfs_mknod(mnt_userns, dir, dentry, mode, 0 /* rdev */);
+}
+
+#endif
+
 
 /**
  * apfs_prepare_dentry_for_link - Assign a sibling id and records to a dentry
@@ -1235,9 +1267,15 @@ int apfs_rmdir(struct inode *dir, struct dentry *dentry)
 	return apfs_unlink(dir, dentry);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 int apfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		struct inode *new_dir, struct dentry *new_dentry,
 		unsigned int flags)
+#else
+int apfs_rename(struct user_namespace *mnt_userns, struct inode *old_dir,
+		struct dentry *old_dentry, struct inode *new_dir,
+		struct dentry *new_dentry, unsigned int flags)
+#endif
 {
 	struct super_block *sb = old_dir->i_sb;
 	struct inode *old_inode = d_inode(old_dentry);

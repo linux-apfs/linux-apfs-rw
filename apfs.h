@@ -632,18 +632,32 @@ extern int apfs_inode_by_name(struct inode *dir, const struct qstr *child,
 			      u64 *ino);
 extern int apfs_mkany(struct inode *dir, struct dentry *dentry,
 		      umode_t mode, dev_t rdev, const char *symname);
-extern int apfs_mknod(struct inode *dir, struct dentry *dentry,
-		      umode_t mode, dev_t rdev);
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+extern int apfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
+		      dev_t rdev);
 extern int apfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode);
+extern int apfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+		       struct inode *new_dir, struct dentry *new_dentry,
+		       unsigned int flags);
 extern int apfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 		       bool excl);
+#else
+extern int apfs_mknod(struct user_namespace *mnt_userns, struct inode *dir,
+		      struct dentry *dentry, umode_t mode, dev_t rdev);
+extern int apfs_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
+		      struct dentry *dentry, umode_t mode);
+extern int apfs_rename(struct user_namespace *mnt_userns, struct inode *old_dir,
+		       struct dentry *old_dentry, struct inode *new_dir,
+		       struct dentry *new_dentry, unsigned int flags);
+extern int apfs_create(struct user_namespace *mnt_userns, struct inode *dir,
+		       struct dentry *dentry, umode_t mode, bool excl);
+#endif
+
 extern int apfs_link(struct dentry *old_dentry, struct inode *dir,
 		     struct dentry *dentry);
 extern int apfs_unlink(struct inode *dir, struct dentry *dentry);
 extern int apfs_rmdir(struct inode *dir, struct dentry *dentry);
-extern int apfs_rename(struct inode *old_dir, struct dentry *old_dentry,
-		       struct inode *new_dir, struct dentry *new_dentry,
-		       unsigned int flags);
 extern int apfs_delete_orphan_link(struct inode *inode);
 extern int APFS_DELETE_ORPHAN_LINK_MAXOPS(void);
 
@@ -669,14 +683,27 @@ extern struct inode *apfs_new_inode(struct inode *dir, umode_t mode,
 extern int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 				 struct dentry *dentry);
 extern int APFS_CREATE_INODE_REC_MAXOPS(void);
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 extern int apfs_setattr(struct dentry *dentry, struct iattr *iattr);
+#else
+extern int apfs_setattr(struct user_namespace *mnt_userns,
+			struct dentry *dentry, struct iattr *iattr);
+#endif
+
 long apfs_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 long apfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0) /* No statx yet... */
-extern int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat);
+extern int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
+			struct kstat *stat);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+extern int apfs_getattr(const struct path *path, struct kstat *stat,
+			u32 request_mask, unsigned int query_flags);
 #else
-extern int apfs_getattr(const struct path *path, struct kstat *stat, u32 request_mask, unsigned int query_flags);
+extern int apfs_getattr(struct user_namespace *mnt_userns,
+		const struct path *path, struct kstat *stat, u32 request_mask,
+		unsigned int query_flags);
 #endif
 
 extern int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta);

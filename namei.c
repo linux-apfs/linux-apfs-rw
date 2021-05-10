@@ -30,7 +30,13 @@ static struct dentry *apfs_lookup(struct inode *dir, struct dentry *dentry,
 	return d_splice_alias(inode, dentry);
 }
 
-static int apfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+static int apfs_symlink(struct inode *dir, struct dentry *dentry,
+			const char *symname)
+#else
+static int apfs_symlink(struct user_namespace *mnt_userns, struct inode *dir,
+			struct dentry *dentry, const char *symname)
+#endif
 {
 	/* Symlink permissions don't mean anything and their value is fixed */
 	return apfs_mkany(dir, dentry, S_IFLNK | 0x1ed, 0 /* rdev */, symname);
