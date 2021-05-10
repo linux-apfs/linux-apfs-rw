@@ -423,10 +423,16 @@ int APFS_XATTR_SET_MAXOPS(void)
 	return 1;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 static int apfs_xattr_osx_set(const struct xattr_handler *handler,
-			      struct dentry *unused, struct inode *inode,
-			      const char *name, const void *value,
-			      size_t size, int flags)
+	      struct dentry *unused, struct inode *inode, const char *name,
+	      const void *value, size_t size, int flags)
+#else
+static int apfs_xattr_osx_set(const struct xattr_handler *handler,
+		  struct user_namespace *mnt_userns, struct dentry *unused,
+		  struct inode *inode, const char *name, const void *value,
+		  size_t size, int flags)
+#endif
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_max_ops maxops;
