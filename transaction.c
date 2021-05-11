@@ -413,11 +413,13 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 	mutex_lock(&nxs_mutex); /* Don't mount during a transaction */
 
 	if (sb->s_flags & SB_RDONLY) {
-		/* A previous commit has failed; this should be rare */
-		err = -EROFS;
-		goto fail;
+		/* A previous transaction has failed; this should be rare */
+		mutex_unlock(&nxs_mutex);
+		up_write(&nxi->nx_big_sem);
+		return -EROFS;
 	}
 
+	/* TODO: rethink this now that transactions shouldn't fail */
 	if (!nx_trans->t_old_msb) {
 		/* Backup the old superblock buffers in case the transaction fails */
 		nx_trans->t_old_msb = nxi->nx_object.bh;
@@ -432,10 +434,6 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 		if (err)
 			goto fail;
 
-		/*
-		 * If the last transaction was aborted, the current spaceman structure
-		 * could be incorrect; just reread the whole thing, for now.
-		 */
 		err = apfs_read_spaceman(sb);
 		if (err)
 			goto fail;
