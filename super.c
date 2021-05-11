@@ -1244,6 +1244,7 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 out_deactivate_super:
 	deactivate_locked_super(sb);
 out_unmap_super:
+	list_del(&sbi->list);
 	apfs_unmap_main_super(sbi);
 out_free_sbi:
 	kfree(sbi);
