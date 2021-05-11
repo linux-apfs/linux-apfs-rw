@@ -356,6 +356,23 @@ fail:
 }
 
 /**
+ * apfs_free_queue_oldest_xid - Find the oldest xid among the free queue records
+ * @root: free queue root node
+ */
+static u64 apfs_free_queue_oldest_xid(struct apfs_node *root)
+{
+	struct apfs_spaceman_free_queue_key *key;
+	char *raw = root->object.bh->b_data;
+	int len, off;
+
+	len = apfs_node_locate_key(root, 0, &off);
+	if (len != sizeof(*key)) /* No records in queue (or corruption) */
+		return 0;
+	key = (struct apfs_spaceman_free_queue_key *)(raw + off);
+	return le64_to_cpu(key->sfqk_xid);
+}
+
+/**
  * apfs_flush_free_queue - Free ip blocks queued by old transactions
  * @sb:		superblock structure
  * @qid:	queue to be freed
@@ -395,9 +412,7 @@ static int apfs_flush_free_queue(struct super_block *sb, unsigned qid)
 			le64_add_cpu(&fq->sfq_count, -count);
 		}
 	}
-
-	/* TODO: may be incorrect if the fs was touched by Apple's driver */
-	fq->sfq_oldest_xid = cpu_to_le64(oldest + 1);
+	fq->sfq_oldest_xid = cpu_to_le64(apfs_free_queue_oldest_xid(fq_root));
 
 	apfs_obj_set_csum(sb, &sm_raw->sm_o);
 
