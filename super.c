@@ -1222,28 +1222,27 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 
 	if (sb->s_root) {
 		if ((flags ^ sb->s_flags) & SB_RDONLY) {
-			deactivate_locked_super(sb);
 			error = -EBUSY;
-			goto out_unmap_super;
+			goto out_deactivate_super;
 		}
 		--nxi->nx_refcnt; /* Only one reference per volume */
 	} else {
 		error = apfs_map_main_super(sb);
 		if (error)
-			goto out_unmap_super;
+			goto out_deactivate_super;
 		sb->s_mode = mode;
 		snprintf(sb->s_id, sizeof(sb->s_id), "%xg", sb->s_dev);
 		error = apfs_fill_super(sb, data, flags & SB_SILENT ? 1 : 0);
-		if (error) {
-			deactivate_locked_super(sb);
-			goto out_unmap_super;
-		}
+		if (error)
+			goto out_deactivate_super;
 		sb->s_flags |= SB_ACTIVE;
 	}
 
 	mutex_unlock(&nxs_mutex);
 	return dget(sb->s_root);
 
+out_deactivate_super:
+	deactivate_locked_super(sb);
 out_unmap_super:
 	apfs_unmap_main_super(sbi);
 out_free_sbi:
