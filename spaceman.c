@@ -473,7 +473,6 @@ int apfs_read_spaceman(struct super_block *sb)
 		goto fail;
 	}
 
-	/* XXX: we are leaking this buffer head, right? */
 	spaceman->sm_bh = sm_bh;
 	spaceman->sm_raw = sm_raw;
 	err = apfs_rotate_ip_bitmaps(sb);

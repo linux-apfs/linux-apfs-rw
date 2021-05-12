@@ -490,7 +490,6 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	struct apfs_bh_info *bhi, *tmp;
 	int err = 0;
 
-
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 	ASSERT(nx_trans->t_old_msb);
 
@@ -543,6 +542,8 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 
 	brelse(APFS_SM(sb)->sm_ip);
 	APFS_SM(sb)->sm_ip = NULL;
+	brelse(APFS_SM(sb)->sm_bh);
+	APFS_SM(sb)->sm_bh = NULL;
 	return 0;
 }
 
@@ -709,6 +710,8 @@ void apfs_transaction_abort(struct super_block *sb)
 
 	brelse(APFS_SM(sb)->sm_ip);
 	APFS_SM(sb)->sm_ip = NULL;
+	brelse(APFS_SM(sb)->sm_bh);
+	APFS_SM(sb)->sm_bh = NULL;
 
 	/* Set the filesystem read-only to simplify cleanup for the callers */
 	sb->s_flags |= SB_RDONLY; /* TODO: the other volumes */
