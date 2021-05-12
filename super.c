@@ -650,40 +650,6 @@ static void destroy_inodecache(void)
 	kmem_cache_destroy(apfs_inode_cachep);
 }
 
-static struct kmem_cache *apfs_query_cachep;
-
-static int __init init_querycache(void)
-{
-	apfs_query_cachep = kmem_cache_create("apfs_query_cache",
-					     sizeof(struct apfs_query),
-					     0, (SLAB_RECLAIM_ACCOUNT|
-						SLAB_MEM_SPREAD|SLAB_ACCOUNT),
-					     NULL);
-	if (apfs_query_cachep == NULL)
-		return -ENOMEM;
-	return 0;
-}
-
-struct apfs_query *apfs_alloc_query_item(void)
-{
-	struct apfs_query *qi;
-	qi = kmem_cache_alloc(apfs_query_cachep, GFP_KERNEL);
-	if(!qi)
-		return NULL;
-	memset(qi, 0, sizeof(struct apfs_query));
-	return qi;
-}
-
-void apfs_free_query_item(struct apfs_query *qi)
-{
-	kmem_cache_free(apfs_query_cachep, qi);
-}
-
-static void destroy_querycache(void)
-{
-	kmem_cache_destroy(apfs_query_cachep);
-}
-
 /**
  * apfs_count_used_blocks - Count the blocks in use across all volumes
  * @sb:		filesystem superblock
@@ -1269,23 +1235,15 @@ static int __init init_apfs_fs(void)
 	err = init_inodecache();
 	if (err)
 		return err;
-	err = init_querycache();
-	if (err) {
-		destroy_inodecache();
-		return err;
-	}
 	err = register_filesystem(&apfs_fs_type);
-	if (err) {
-		destroy_querycache();
+	if (err)
 		destroy_inodecache();
-	}
 	return err;
 }
 
 static void __exit exit_apfs_fs(void)
 {
 	unregister_filesystem(&apfs_fs_type);
-	destroy_querycache();
 	destroy_inodecache();
 }
 

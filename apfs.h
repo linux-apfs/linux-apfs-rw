@@ -494,10 +494,6 @@ static inline u32 apfs_query_storage(struct apfs_query *query)
 	BUG();
 }
 
-/* super.c */
-struct apfs_query *apfs_alloc_query_item(void);
-void apfs_free_query_item(struct apfs_query *qi);
-
 /*
  * Extent record data in memory
  */
