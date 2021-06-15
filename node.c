@@ -233,6 +233,7 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 		break;
 	default:
 		ASSERT(false);
+		return ERR_PTR(-EINVAL); /* Prevent compiler warnings */
 	}
 
 	bh = apfs_sb_bread(sb, bno);
