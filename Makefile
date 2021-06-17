@@ -5,6 +5,7 @@
 
 KERNELRELEASE ?= $(shell uname -r)
 KERNEL_DIR    ?= /lib/modules/$(KERNELRELEASE)/build
+PWD           := $(shell pwd)
 
 obj-m = apfs.o
 apfs-y := btree.o compress.o dir.o extents.o file.o inode.o key.o message.o \
@@ -12,6 +13,6 @@ apfs-y := btree.o compress.o dir.o extents.o file.o inode.o key.o message.o \
 	  unicode.o xattr.o xfield.o
 
 default:
-	make -C $(KERNEL_DIR) M=$(shell pwd)
+	make -C $(KERNEL_DIR) M=$(PWD)
 clean:
-	make -C $(KERNEL_DIR) M=$(shell pwd) clean
+	make -C $(KERNEL_DIR) M=$(PWD) clean
