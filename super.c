@@ -285,7 +285,7 @@ static void apfs_update_software_info(struct super_block *sb)
 static inline void apfs_unmap_main_super(struct apfs_sb_info *sbi)
 {
 	struct apfs_nxsb_info *nxi = sbi->s_nxi;
-	fmode_t mode = FMODE_READ;
+	fmode_t mode = FMODE_READ | FMODE_EXCL;
 
 	if (nxi->nx_flags & APFS_READWRITE)
 		mode |= FMODE_WRITE;
@@ -1108,28 +1108,40 @@ static int apfs_set_super(struct super_block *sb, void *data)
 	return err;
 }
 
+static struct file_system_type apfs_fs_type;
+
 /**
  * apfs_attach_nxi - Attach container sb info to a volume's sb info
  * @sbi:	new superblock info structure for the volume to be mounted
- * @bdev:	block device for the container
+ * @dev_name:	path name for the container's block device
  * @mode:	FMODE_* mask
  *
  * Returns 0 on success, or a negative error code in case of failure.
  */
-static int apfs_attach_nxi(struct apfs_sb_info *sbi, struct block_device *bdev, fmode_t mode)
+static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode_t mode)
 {
 	struct apfs_nxsb_info *nxi;
+	struct block_device *bdev;
 
 	lockdep_assert_held(&nxs_mutex);
 
+	bdev = lookup_bdev(dev_name);
+	if (IS_ERR(bdev))
+		return PTR_ERR(bdev);
+
 	nxi = apfs_nx_find_by_dev(bdev);
-	if (nxi) {
-		/* The whole container holds a single reference to the device */
-		blkdev_put(bdev, mode);
-	} else {
+	bdput(bdev);
+	bdev = NULL;
+	if (!nxi) {
 		nxi = kzalloc(sizeof(*nxi), GFP_KERNEL);
 		if (!nxi)
 			return -ENOMEM;
+
+		bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type);
+		if (IS_ERR(bdev)) {
+			kfree(nxi);
+			return PTR_ERR(bdev);
+		}
 
 		nxi->nx_bdev = bdev;
 		init_rwsem(&nxi->nx_big_sem);
@@ -1150,10 +1162,9 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 				 const char *dev_name, void *data)
 {
 	struct apfs_nxsb_info *nxi;
-	struct block_device *bdev;
 	struct super_block *sb;
 	struct apfs_sb_info *sbi;
-	fmode_t mode = FMODE_READ; /* XXX: why not FMODE_EXCL? */
+	fmode_t mode = FMODE_READ | FMODE_EXCL;
 	int error = 0;
 
 	if (!(flags & SB_RDONLY))
@@ -1161,24 +1172,16 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 
 	mutex_lock(&nxs_mutex);
 
-	bdev = blkdev_get_by_path(dev_name, mode, fs_type);
-	if (IS_ERR(bdev)) {
-		error = PTR_ERR(bdev);
-		goto out_unlock;
-	}
-
 	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
 	if (!sbi) {
-		blkdev_put(bdev, mode);
+		error = -ENOMEM;
 		goto out_unlock;
 	}
 	sbi->s_vol_nr = apfs_get_vol_number(data);
 
-	error = apfs_attach_nxi(sbi, bdev, mode);
-	if (error) {
-		blkdev_put(bdev, mode);
+	error = apfs_attach_nxi(sbi, dev_name, mode);
+	if (error)
 		goto out_free_sbi;
-	}
 	nxi = sbi->s_nxi;
 
 	/* TODO: lockfs stuff? Btrfs doesn't seem to care */
