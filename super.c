@@ -1194,7 +1194,10 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 			error = -EBUSY;
 			goto out_deactivate_super;
 		}
-		--nxi->nx_refcnt; /* Only one reference per volume */
+		/* Only one superblock per volume */
+		list_del(&sbi->list);
+		apfs_unmap_main_super(sbi);
+		kfree(sbi);
 	} else {
 		error = apfs_map_main_super(sb);
 		if (error)
