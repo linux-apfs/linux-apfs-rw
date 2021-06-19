@@ -14,5 +14,7 @@ apfs-y := btree.o compress.o dir.o extents.o file.o inode.o key.o message.o \
 
 default:
 	make -C $(KERNEL_DIR) M=$(PWD)
+install:
+	make -C $(KERNEL_DIR) M=$(PWD) modules_install
 clean:
 	make -C $(KERNEL_DIR) M=$(PWD) clean
