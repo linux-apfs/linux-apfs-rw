@@ -292,6 +292,7 @@ static inline void apfs_unmap_main_super(struct apfs_sb_info *sbi)
 
 	lockdep_assert_held(&nxs_mutex);
 
+	list_del(&sbi->list);
 	if (--nxi->nx_refcnt)
 		goto out;
 
@@ -552,7 +553,6 @@ fail:
 	apfs_unmap_volume_super(sb);
 
 	mutex_lock(&nxs_mutex);
-	list_del(&sbi->list);
 	apfs_unmap_main_super(sbi);
 	mutex_unlock(&nxs_mutex);
 
@@ -1195,7 +1195,6 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 			goto out_deactivate_super;
 		}
 		/* Only one superblock per volume */
-		list_del(&sbi->list);
 		apfs_unmap_main_super(sbi);
 		kfree(sbi);
 	} else {
@@ -1216,7 +1215,6 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 out_deactivate_super:
 	deactivate_locked_super(sb);
 out_unmap_super:
-	list_del(&sbi->list);
 	apfs_unmap_main_super(sbi);
 out_free_sbi:
 	kfree(sbi);
