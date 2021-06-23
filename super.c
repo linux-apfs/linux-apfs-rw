@@ -25,12 +25,12 @@ static LIST_HEAD(nxs);
 
 /**
  * apfs_nx_find_by_dev - Search for a device in the list of mounted containers
- * @bdev:	block device for the wanted container
+ * @dev:	device number of block device for the wanted container
  *
  * Returns a pointer to the container structure in the list, or NULL if the
  * container isn't currently mounted.
  */
-static struct apfs_nxsb_info *apfs_nx_find_by_dev(struct block_device *bdev)
+static struct apfs_nxsb_info *apfs_nx_find_by_dev(dev_t dev)
 {
 	struct apfs_nxsb_info *curr;
 
@@ -38,7 +38,7 @@ static struct apfs_nxsb_info *apfs_nx_find_by_dev(struct block_device *bdev)
 	list_for_each_entry(curr, &nxs, nx_list) {
 		struct block_device *curr_bdev = curr->nx_bdev;
 
-		if (curr_bdev == bdev)
+		if (curr_bdev->bd_dev == dev)
 			return curr;
 	}
 	return NULL;
@@ -1110,6 +1110,26 @@ static int apfs_set_super(struct super_block *sb, void *data)
 
 static struct file_system_type apfs_fs_type;
 
+/*
+ * Wrapper for lookup_bdev() that supports older kernels.
+ */
+static int apfs_lookup_bdev(const char *pathname, dev_t *dev)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+	struct block_device *bdev;
+
+	bdev = lookup_bdev(pathname);
+	if (IS_ERR(bdev))
+		return PTR_ERR(bdev);
+
+	*dev = bdev->bd_dev;
+	bdput(bdev);
+	return 0;
+#else
+	return lookup_bdev(pathname, dev);
+#endif
+}
+
 /**
  * apfs_attach_nxi - Attach container sb info to a volume's sb info
  * @sbi:	new superblock info structure for the volume to be mounted
@@ -1121,18 +1141,19 @@ static struct file_system_type apfs_fs_type;
 static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode_t mode)
 {
 	struct apfs_nxsb_info *nxi;
-	struct block_device *bdev;
+	dev_t dev = 0;
+	int ret;
 
 	lockdep_assert_held(&nxs_mutex);
 
-	bdev = lookup_bdev(dev_name);
-	if (IS_ERR(bdev))
-		return PTR_ERR(bdev);
+	ret = apfs_lookup_bdev(dev_name, &dev);
+	if (ret)
+		return ret;
 
-	nxi = apfs_nx_find_by_dev(bdev);
-	bdput(bdev);
-	bdev = NULL;
+	nxi = apfs_nx_find_by_dev(dev);
 	if (!nxi) {
+		struct block_device *bdev;
+
 		nxi = kzalloc(sizeof(*nxi), GFP_KERNEL);
 		if (!nxi)
 			return -ENOMEM;
