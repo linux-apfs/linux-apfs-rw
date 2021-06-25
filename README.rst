@@ -6,9 +6,10 @@ The Apple File System (APFS) is the copy-on-write filesystem currently used on
 all Apple devices. This module provides a degree of experimental support on
 Linux.
 
-It's supposed to work with a range of kernel versions starting at 4.9 or before,
-but only a few of those have actually been tested. If you run into any problem,
-please send a report to <linux-apfs@googlegroups.com> or file a github issue at
+It's supposed to work with a range of kernel versions starting at 4.19, but
+only a few of those have actually been tested. If you run into any problem, or
+if you need support for an older version, please send a report to
+<linux-apfs@googlegroups.com> or file a github issue at
 https://github.com/eafer/linux-apfs-rw/issues.
 
 To help test write support, a set of userland tools is also under development.
