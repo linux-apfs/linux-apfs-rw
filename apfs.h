@@ -19,10 +19,6 @@
 #define EFSBADCRC	EBADMSG		/* Bad CRC detected */
 #define EFSCORRUPTED	EUCLEAN		/* Filesystem is corrupted */
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0) /* SB_RDONLY came in 4.14 */
-	SB_RDONLY = MS_RDONLY;
-#endif
-
 #define APFS_IOC_SET_DFLT_PFK	_IOW('@', 0x80, struct apfs_wrapped_crypto_state)
 #define APFS_IOC_SET_DIR_CLASS	_IOW('@', 0x81, u32)
 #define APFS_IOC_SET_PFK	_IOW('@', 0x82, struct apfs_wrapped_crypto_state)
@@ -694,10 +690,7 @@ extern int apfs_setattr(struct user_namespace *mnt_userns,
 long apfs_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 long apfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0) /* No statx yet... */
-extern int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
-			struct kstat *stat);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 extern int apfs_getattr(const struct path *path, struct kstat *stat,
 			u32 request_mask, unsigned int query_flags);
 #else
