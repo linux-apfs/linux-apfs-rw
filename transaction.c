@@ -647,6 +647,22 @@ int apfs_transaction_join(struct super_block *sb, struct buffer_head *bh)
 }
 
 /**
+ * apfs_force_readonly - Set the whole container as read-only
+ * @nxi: container superblock info
+ */
+static void apfs_force_readonly(struct apfs_nxsb_info *nxi)
+{
+	struct apfs_sb_info *sbi = NULL;
+	struct super_block *sb = NULL;
+
+	list_for_each_entry(sbi, &nxi->vol_list, list) {
+		sb = sbi->s_vobject.sb;
+		sb->s_flags |= SB_RDONLY;
+	}
+	nxi->nx_flags &= ~APFS_READWRITE;
+}
+
+/**
  * apfs_transaction_abort - Abort the current transaction
  * @sb: superblock structure
  *
@@ -713,8 +729,11 @@ void apfs_transaction_abort(struct super_block *sb)
 	brelse(APFS_SM(sb)->sm_bh);
 	APFS_SM(sb)->sm_bh = NULL;
 
-	/* Set the filesystem read-only to simplify cleanup for the callers */
-	sb->s_flags |= SB_RDONLY; /* TODO: the other volumes */
+	/*
+	 * It's not possible to undo in-memory changes from old operations in
+	 * the aborted transaction. To avoid corruption, never write again.
+	 */
+	apfs_force_readonly(nxi);
 
 	mutex_unlock(&nxs_mutex);
 	up_write(&nxi->nx_big_sem);
