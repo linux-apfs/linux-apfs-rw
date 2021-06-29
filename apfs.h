@@ -439,6 +439,26 @@ static inline void apfs_key_set_hdr(u64 type, u64 id, void *key)
 	hdr->obj_id_and_type = cpu_to_le64(id | type << APFS_OBJ_TYPE_SHIFT);
 }
 
+/**
+ * apfs_cat_type - Read the record type of a catalog key
+ * @key: the raw catalog key
+ */
+static inline int apfs_cat_type(struct apfs_key_header *key)
+{
+	return (le64_to_cpu(key->obj_id_and_type) & APFS_OBJ_TYPE_MASK) >> APFS_OBJ_TYPE_SHIFT;
+}
+
+/**
+ * apfs_cat_cnid - Read the cnid value on a catalog key
+ * @key: the raw catalog key
+ *
+ * TODO: rename this function, since it's not just for the catalog anymore
+ */
+static inline u64 apfs_cat_cnid(struct apfs_key_header *key)
+{
+	return le64_to_cpu(key->obj_id_and_type) & APFS_OBJ_ID_MASK;
+}
+
 /* Flags for the query structure */
 #define APFS_QUERY_TREE_MASK	0017	/* Which b-tree we query */
 #define APFS_QUERY_OMAP		0001	/* This is a b-tree object map query */
@@ -498,6 +518,16 @@ struct apfs_file_extent {
 	u64 phys_block_num;
 	u64 len;
 	u64 crypto_id;
+};
+
+/*
+ * Physical extent record data in memory
+ */
+struct apfs_phys_extent {
+	u64 bno;
+	u64 blkcount;
+	u64 len;	/* In bytes */
+	u32 refcnt;
 };
 
 /*

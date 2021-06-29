@@ -8,31 +8,6 @@
 #include "unicode.h"
 
 /**
- * apfs_cat_type - Read the record type of a catalog key
- * @key: the raw catalog key
- *
- * The record type is stored in the last byte of the cnid field; this function
- * returns that value.
- */
-static inline int apfs_cat_type(struct apfs_key_header *key)
-{
-	return (le64_to_cpu(key->obj_id_and_type) & APFS_OBJ_TYPE_MASK)
-			>> APFS_OBJ_TYPE_SHIFT;
-}
-
-/**
- * apfs_cat_cnid - Read the cnid value on a catalog key
- * @key: the raw catalog key
- *
- * The cnid value shares the its field with the record type. This function
- * masks that part away and returns the result.
- */
-static inline u64 apfs_cat_cnid(struct apfs_key_header *key)
-{
-	return le64_to_cpu(key->obj_id_and_type) & APFS_OBJ_ID_MASK;
-}
-
-/**
  * apfs_filename_cmp - Normalize and compare two APFS filenames
  * @sb:			filesystem superblock
  * @name1, @name2:	names to compare
