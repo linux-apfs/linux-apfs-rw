@@ -552,7 +552,7 @@ int apfs_btree_remove(struct apfs_query *query)
 	node_raw = (void *)query->node->object.bh->b_data;
 	apfs_assert_in_transaction(node->object.sb, &node_raw->btn_o);
 
-	if (node->records == 1)
+	if (query->parent && node->records == 1)
 		/* Just get rid of the node.  TODO: update the node heights? */
 		return apfs_delete_node(query);
 

@@ -298,6 +298,8 @@ int apfs_delete_node(struct apfs_query *query)
 	u64 bno = node->object.block_nr;
 	int err;
 
+	ASSERT(query->parent);
+
 	/*
 	 * For ephemeral nodes, it's important to do this before actually
 	 * deleting the node, because that involves moving blocks around.
