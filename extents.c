@@ -1034,6 +1034,10 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 	apfs_map_bh(bh_result, sb, phys_bno);
 	get_bh(bh_result);
 
+	/* Truly new buffers need to be marked as such, to get zeroed */
+	if (!buffer_uptodate(bh_result))
+		set_buffer_new(bh_result);
+
 	if (apfs_inode_cache_is_tail(inode) &&
 	    logical_addr == cache->logical_addr + cache->len &&
 	    phys_bno == cache->phys_block_num + cache_blks) {
