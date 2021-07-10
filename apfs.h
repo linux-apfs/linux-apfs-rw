@@ -546,6 +546,7 @@ struct apfs_inode_info {
 	gid_t			i_saved_gid;	 /* Group ID on disk */
 	u32			i_key_class;	 /* Security class for directory */
 	u64			i_int_flags;	 /* Internal flags */
+	u64			i_sparse_bytes;	 /* Sparse byte count in file */
 
 	struct inode vfs_inode;
 };
@@ -698,6 +699,7 @@ extern int apfs_flush_extent_cache(struct inode *inode);
 extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			      struct buffer_head *bh_result, int create);
 extern int APFS_GET_NEW_BLOCK_MAXOPS(void);
+extern int apfs_truncate(struct inode *inode, loff_t new_size);
 
 /* inode.c */
 extern struct inode *apfs_iget(struct super_block *sb, u64 cnid);
