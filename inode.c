@@ -402,7 +402,7 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 				if (err)
 					goto out_put_page;
 			}
-			if (!buffer_uptodate(bh)) {
+			if (buffer_mapped(bh) && !buffer_uptodate(bh)) {
 				get_bh(bh);
 				lock_buffer(bh);
 				bh->b_end_io = end_buffer_read_sync;

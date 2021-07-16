@@ -8,6 +8,15 @@
 #include "apfs.h"
 
 /**
+ * apfs_ext_is_hole - Does this extent represent a hole in a sparse file?
+ * @extent: the extent to check
+ */
+static inline bool apfs_ext_is_hole(struct apfs_file_extent *extent)
+{
+	return extent->phys_block_num == 0;
+}
+
+/**
  * apfs_extent_from_query - Read the extent found by a successful query
  * @query:	the query that found the record
  * @extent:	Return parameter.  The extent found.
@@ -131,7 +140,7 @@ int __apfs_get_block(struct inode *inode, sector_t iblock,
 	 */
 	map_len = bh_result->b_size;
 	/* Extents representing holes have block number 0 */
-	if (ext.phys_block_num != 0) {
+	if (!apfs_ext_is_hole(&ext)) {
 		/* Find the block number of iblock within the disk */
 		bno = ext.phys_block_num + blk_off;
 		apfs_map_bh(bh_result, sb, bno);
@@ -173,19 +182,19 @@ static inline void apfs_set_extent_length(struct apfs_file_extent_val *ext, u64 
 /**
  * apfs_shrink_extent_head - Shrink an extent record in its head
  * @query:	the query that found the record
+ * @inode:	vfs inode for the file
  * @start:	new logical start for the extent
  *
  * Also deletes the physical extent records for the head. Returns 0 on success
  * or a negative error code in case of failure.
  */
-static int apfs_shrink_extent_head(struct apfs_query *query, u64 start)
+static int apfs_shrink_extent_head(struct apfs_query *query, struct inode *inode, u64 start)
 {
 	struct super_block *sb = query->node->object.sb;
 	struct apfs_file_extent_key key;
 	struct apfs_file_extent_val val;
 	struct apfs_file_extent extent;
-	struct apfs_file_extent head = {0};
-	u64 new_len;
+	u64 new_len, head_len;
 	void *raw = NULL;
 	int err = 0;
 
@@ -197,36 +206,44 @@ static int apfs_shrink_extent_head(struct apfs_query *query, u64 start)
 	val = *(struct apfs_file_extent_val *)(raw + query->off);
 
 	new_len = extent.logical_addr + extent.len - start;
+	head_len = extent.len - new_len;
 
 	/* Delete the physical records for the blocks lost in the shrinkage */
-	head.phys_block_num = extent.phys_block_num;
-	head.len = extent.len - new_len;
-	err = apfs_delete_phys_extent(sb, &head);
-	if (err)
-		return err;
+	if (!apfs_ext_is_hole(&extent)) {
+		struct apfs_file_extent head = {0};
+
+		head.phys_block_num = extent.phys_block_num;
+		head.len = head_len;
+		err = apfs_delete_phys_extent(sb, &head);
+		if (err)
+			return err;
+	} else {
+		APFS_I(inode)->i_sparse_bytes -= head_len;
+	}
 
 	/* This is the actual shrinkage of the logical extent */
 	key.logical_addr = cpu_to_le64(start);
 	apfs_set_extent_length(&val, new_len);
-	le64_add_cpu(&val.phys_block_num, head.len >> sb->s_blocksize_bits);
+	if (!apfs_ext_is_hole(&extent))
+		le64_add_cpu(&val.phys_block_num, head_len >> sb->s_blocksize_bits);
 	return apfs_btree_replace(query, &key, sizeof(key), &val, sizeof(val));
 }
 
 /**
  * apfs_shrink_extent_tail - Shrink an extent record in its tail
  * @query:	the query that found the record
+ * @inode:	vfs inode for the file
  * @end:	new logical end for the extent
  *
  * Also deletes the physical extent records for the tail. Returns 0 on success
  * or a negative error code in case of failure.
  */
-static int apfs_shrink_extent_tail(struct apfs_query *query, u64 end)
+static int apfs_shrink_extent_tail(struct apfs_query *query, struct inode *inode, u64 end)
 {
 	struct super_block *sb = query->node->object.sb;
 	struct apfs_file_extent_val *val;
 	struct apfs_file_extent extent;
-	struct apfs_file_extent tail = {0};
-	u64 new_len, new_blkcount;
+	u64 new_len, new_blkcount, tail_len;
 	void *raw;
 	int err = 0;
 
@@ -242,13 +259,20 @@ static int apfs_shrink_extent_tail(struct apfs_query *query, u64 end)
 
 	new_len = end - extent.logical_addr;
 	new_blkcount = new_len >> sb->s_blocksize_bits;
+	tail_len = extent.len - new_len;
 
 	/* Delete the physical records for the blocks lost in the shrinkage */
-	tail.phys_block_num = extent.phys_block_num + new_blkcount;
-	tail.len = extent.len - new_len;
-	err = apfs_delete_phys_extent(sb, &tail);
-	if (err)
-		return err;
+	if (!apfs_ext_is_hole(&extent)) {
+		struct apfs_file_extent tail = {0};
+
+		tail.phys_block_num = extent.phys_block_num + new_blkcount;
+		tail.len = tail_len;
+		err = apfs_delete_phys_extent(sb, &tail);
+		if (err)
+			return err;
+	} else {
+		APFS_I(inode)->i_sparse_bytes -= tail_len;
+	}
 
 	/* This is the actual shrinkage of the logical extent */
 	apfs_set_extent_length(val, new_len);
@@ -333,7 +357,9 @@ static int apfs_update_tail_extent(struct inode *inode, const struct apfs_file_e
 			ret = apfs_btree_replace(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
 			if (ret)
 				goto out;
-			if (tail.phys_block_num != extent->phys_block_num) {
+			if (apfs_ext_is_hole(&tail)) {
+				ai->i_sparse_bytes -= tail.len;
+			} else if (tail.phys_block_num != extent->phys_block_num) {
 				ret = apfs_delete_phys_extent(sb, &tail);
 				if (ret)
 					goto out;
@@ -352,7 +378,7 @@ static int apfs_update_tail_extent(struct inode *inode, const struct apfs_file_e
 			 * the cache before a write...
 			 */
 			if (extent->logical_addr < tail.logical_addr + tail.len) {
-				ret = apfs_shrink_extent_tail(query, extent->logical_addr);
+				ret = apfs_shrink_extent_tail(query, inode, extent->logical_addr);
 				if (ret)
 					goto out;
 			}
@@ -408,7 +434,8 @@ static int apfs_split_extent(struct apfs_query *query, u64 div)
 
 	/* Insert the second half right after the first */
 	key2.logical_addr = cpu_to_le64(div);
-	val2.phys_block_num = cpu_to_le64(extent.phys_block_num + blkcount1);
+	if (!apfs_ext_is_hole(&extent))
+		val2.phys_block_num = cpu_to_le64(extent.phys_block_num + blkcount1);
 	apfs_set_extent_length(&val2, len2);
 	err = apfs_btree_insert(query, &key2, sizeof(key2), &val2, sizeof(val2));
 	if (err)
@@ -497,7 +524,9 @@ search_and_insert:
 		ret = apfs_btree_replace(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
 		if (ret)
 			goto out;
-		if (prev_ext.phys_block_num != extent->phys_block_num) {
+		if (apfs_ext_is_hole(&prev_ext)) {
+			ai->i_sparse_bytes -= prev_ext.len;
+		} else if (prev_ext.phys_block_num != extent->phys_block_num) {
 			ret = apfs_delete_phys_extent(sb, &prev_ext);
 			if (ret)
 				goto out;
@@ -513,7 +542,7 @@ search_and_insert:
 			ret = -EFSCORRUPTED;
 			goto out;
 		}
-		ret = apfs_shrink_extent_head(query, extent->logical_addr + extent->len);
+		ret = apfs_shrink_extent_head(query, inode, extent->logical_addr + extent->len);
 		if (ret)
 			goto out;
 		/* The query should point to the previous record, start again */
@@ -522,7 +551,7 @@ search_and_insert:
 		goto search_and_insert;
 	} else if (prev_end == extent->logical_addr + extent->len) {
 		/* The new extent is the last logical block of the old one */
-		ret = apfs_shrink_extent_tail(query, extent->logical_addr);
+		ret = apfs_shrink_extent_tail(query, inode, extent->logical_addr);
 		if (ret)
 			goto out;
 		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
@@ -1100,7 +1129,10 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 	apfs_map_bh(bh_result, sb, phys_bno);
 	get_bh(bh_result);
 
-	/* Truly new buffers need to be marked as such, to get zeroed */
+	/*
+	 * Truly new buffers need to be marked as such, to get zeroed; this
+	 * also takes care of holes in sparse files.
+	 */
 	if (!buffer_uptodate(bh_result))
 		set_buffer_new(bh_result);
 
@@ -1192,7 +1224,7 @@ static int apfs_shrink_and_zero_extent(struct apfs_query *query, struct inode *i
 
 	/* Easiest case: the file will have a whole number of blocks */
 	if (tail_bytes == 0)
-		return apfs_shrink_extent_tail(query, size);
+		return apfs_shrink_extent_tail(query, inode, size);
 
 	err = apfs_extent_from_query(query, &extent);
 	if (err)
@@ -1201,6 +1233,10 @@ static int apfs_shrink_and_zero_extent(struct apfs_query *query, struct inode *i
 	head_end = size - tail_bytes;
 	head_len = head_end - extent.logical_addr;
 	head_blks = head_len >> sb->s_blocksize_bits;
+
+	/* The last block of a hole extent doesn't need to be zeroed out */
+	if (apfs_ext_is_hole(&extent))
+		return apfs_shrink_extent_tail(query, inode, head_end + sb->s_blocksize);
 
 	/* We need to do copy-on-write to zero out the last block of the file */
 	err = apfs_spaceman_allocate_block(sb, &new_bno, false /* backwards */);
@@ -1245,7 +1281,7 @@ static int apfs_shrink_and_zero_extent(struct apfs_query *query, struct inode *i
 		if (err)
 			return err;
 	} else {
-		err = apfs_shrink_extent_tail(query, head_end);
+		err = apfs_shrink_extent_tail(query, inode, head_end);
 		if (err)
 			return err;
 		err = apfs_btree_insert(query, &key, sizeof(key), &val, sizeof(val));
@@ -1313,9 +1349,13 @@ static int apfs_shrink_file_last_extent(struct inode *inode, loff_t new_size)
 		ret = apfs_btree_remove(query);
 		if (ret)
 			goto out;
-		ret = apfs_delete_phys_extent(sb, &tail);
-		if (ret)
-			goto out;
+		if (apfs_ext_is_hole(&tail)) {
+			ai->i_sparse_bytes -= tail.len;
+		} else {
+			ret = apfs_delete_phys_extent(sb, &tail);
+			if (ret)
+				goto out;
+		}
 		ret = apfs_crypto_adj_refcnt(sb, tail.crypto_id, -1);
 		if (ret)
 			goto out;
