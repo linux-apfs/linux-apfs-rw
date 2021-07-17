@@ -345,7 +345,7 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno,
 	}
 	memcpy(new_bh->b_data, bh->b_data, sb->s_blocksize);
 
-	err = apfs_free_queue_insert(sb, bh->b_blocknr);
+	err = apfs_free_queue_insert(sb, bh->b_blocknr, 1);
 	brelse(bh);
 	bh = new_bh;
 	new_bh = NULL;

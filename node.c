@@ -310,7 +310,7 @@ int apfs_delete_node(struct apfs_query *query)
 
 	switch (query->flags & APFS_QUERY_TREE_MASK) {
 	case APFS_QUERY_CAT:
-		err = apfs_free_queue_insert(sb, bno);
+		err = apfs_free_queue_insert(sb, bno, 1);
 		if (err)
 			return err;
 		err = apfs_delete_omap_rec(sb, oid);
@@ -321,7 +321,7 @@ int apfs_delete_node(struct apfs_query *query)
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
 		return 0;
 	case APFS_QUERY_OMAP:
-		err = apfs_free_queue_insert(sb, bno);
+		err = apfs_free_queue_insert(sb, bno, 1);
 		if (err)
 			return err;
 		/* We don't write to the container's omap */

@@ -595,13 +595,14 @@ static inline int apfs_chunk_mark_free(struct super_block *sb, char *bitmap,
 }
 
 /**
- * apfs_free_queue_insert - Add a block to its free queue
+ * apfs_free_queue_insert - Add a block range to its free queue
  * @sb:		superblock structure
- * @bno:	block number to free
+ * @bno:	first block number to free
+ * @count:	number of consecutive blocks to free
  *
  * Returns 0 on success or a negative error code in case of failure.
  */
-int apfs_free_queue_insert(struct super_block *sb, u64 bno)
+int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_spaceman *sm = APFS_SM(sb);
@@ -610,6 +611,7 @@ int apfs_free_queue_insert(struct super_block *sb, u64 bno)
 	struct apfs_node *fq_root;
 	struct apfs_query *query = NULL;
 	struct apfs_spaceman_free_queue_key raw_key;
+	__le64 raw_val;
 	struct apfs_key key;
 	int err;
 
@@ -639,15 +641,19 @@ int apfs_free_queue_insert(struct super_block *sb, u64 bno)
 
 	raw_key.sfqk_xid = cpu_to_le64(nxi->nx_xid);
 	raw_key.sfqk_paddr = cpu_to_le64(bno);
-	/* A lack of value (ghost record) implies a single-block extent */
-	err = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
-				NULL /* val */, 0 /* val_len */);
+	if (count == 1) {
+		/* A lack of value (ghost record) means single-block extent */
+		err = apfs_btree_insert(query, &raw_key, sizeof(raw_key), NULL /* val */, 0 /* val_len */);
+	} else {
+		raw_val = cpu_to_le64(count);
+		err = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+	}
 	if (err)
 		goto fail;
 
 	if (!fq->sfq_oldest_xid)
 		fq->sfq_oldest_xid = cpu_to_le64(nxi->nx_xid);
-	le64_add_cpu(&fq->sfq_count, 1);
+	le64_add_cpu(&fq->sfq_count, count);
 	apfs_obj_set_csum(sb, &sm_raw->sm_o);
 
 fail:
@@ -730,7 +736,7 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 			goto fail;
 		}
 		memcpy(new_bmap_bh->b_data, bmap, sb->s_blocksize);
-		err = apfs_free_queue_insert(sb, bmap_bh->b_blocknr);
+		err = apfs_free_queue_insert(sb, bmap_bh->b_blocknr, 1);
 		brelse(bmap_bh);
 		bmap_bh = new_bmap_bh;
 		if (err)
@@ -756,7 +762,7 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 			goto fail;
 		}
 		memcpy(new_cib_bh->b_data, (*cib_bh)->b_data, sb->s_blocksize);
-		err = apfs_free_queue_insert(sb, (*cib_bh)->b_blocknr);
+		err = apfs_free_queue_insert(sb, (*cib_bh)->b_blocknr, 1);
 		brelse(*cib_bh);
 		*cib_bh = new_cib_bh;
 		if (err)

@@ -708,17 +708,11 @@ static int apfs_phys_ext_from_query(struct apfs_query *query, struct apfs_phys_e
 static int apfs_free_phys_ext(struct super_block *sb, struct apfs_phys_extent *pext)
 {
 	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
-	int err;
-	int i;
 
-	for (i = 0; i < pext->blkcount; ++i) {
-		err = apfs_free_queue_insert(sb, pext->bno + i);
-		if (err)
-			return err;
-	}
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -pext->blkcount);
-	return 0;
+
+	return apfs_free_queue_insert(sb, pext->bno, pext->blkcount);
 }
 
 /**

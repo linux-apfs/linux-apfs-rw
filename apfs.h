@@ -778,7 +778,7 @@ extern struct buffer_head *apfs_read_object_block(struct super_block *sb,
 
 /* spaceman.c */
 extern int apfs_read_spaceman(struct super_block *sb);
-extern int apfs_free_queue_insert(struct super_block *sb, u64 bno);
+extern int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count);
 extern int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backwards);
 
 /* super.c */
