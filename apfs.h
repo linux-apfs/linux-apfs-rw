@@ -719,6 +719,7 @@ extern int apfs_setattr(struct user_namespace *mnt_userns,
 			struct dentry *dentry, struct iattr *iattr);
 #endif
 
+extern int apfs_update_time(struct inode *inode, struct timespec64 *time, int flags);
 long apfs_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 long apfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 

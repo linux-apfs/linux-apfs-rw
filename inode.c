@@ -1460,6 +1460,38 @@ fail:
 	return err;
 }
 
+/* TODO: this only seems to be necessary because ->write_inode() isn't firing */
+int apfs_update_time(struct inode *inode, struct timespec64 *time, int flags)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_max_ops maxops;
+	int err;
+
+	maxops.cat = APFS_UPDATE_INODE_MAXOPS();
+	maxops.blks = 0;
+
+	err = apfs_transaction_start(sb, maxops);
+	if (err)
+		return err;
+
+	err = generic_update_time(inode, time, flags);
+	if (err)
+		goto fail;
+
+	err = apfs_update_inode(inode, NULL /* new_name */);
+	if (err)
+		goto fail;
+
+	err = apfs_transaction_commit(sb);
+	if (err)
+		goto fail;
+	return 0;
+
+fail:
+	apfs_transaction_abort(sb);
+	return err;
+}
+
 static int apfs_ioc_set_dflt_pfk(struct file *file, void __user *user_pfk)
 {
 	struct inode *inode = file_inode(file);

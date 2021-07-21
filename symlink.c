@@ -72,4 +72,5 @@ const struct inode_operations apfs_symlink_inode_operations = {
 	.get_link	= apfs_get_link,
 	.getattr	= apfs_getattr,
 	.listxattr	= apfs_listxattr,
+	.update_time	= apfs_update_time,
 };

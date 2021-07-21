@@ -18,4 +18,5 @@ const struct inode_operations apfs_file_inode_operations = {
 	.getattr	= apfs_getattr,
 	.listxattr	= apfs_listxattr,
 	.setattr	= apfs_setattr,
+	.update_time	= apfs_update_time,
 };
