@@ -321,6 +321,7 @@ int apfs_delete_node(struct apfs_query *query)
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
 		return 0;
 	case APFS_QUERY_OMAP:
+	case APFS_QUERY_EXTENTREF:
 		err = apfs_free_queue_insert(sb, bno, 1);
 		if (err)
 			return err;
@@ -338,6 +339,7 @@ int apfs_delete_node(struct apfs_query *query)
 			return err;
 		return 0;
 	default:
+		apfs_debug(sb, "new query type must implement node deletion");
 		return -EOPNOTSUPP;
 	}
 }
