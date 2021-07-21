@@ -803,6 +803,7 @@ extern int __apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 			    size_t size);
 extern int apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 			  size_t size);
+extern int apfs_delete_all_xattrs(struct inode *inode);
 extern int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 			  size_t size, int flags);
 extern int APFS_XATTR_SET_MAXOPS(void);

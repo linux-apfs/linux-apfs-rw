@@ -316,6 +316,66 @@ static int apfs_delete_xattr(struct apfs_query *query)
 }
 
 /**
+ * apfs_delete_any_xattr - Delete any single xattr for a given inode
+ * @inode: the vfs inode
+ *
+ * Intended to be called repeatedly, to delete all the xattrs one by one.
+ * Returns -EAGAIN on success until the process is complete, then it returns
+ * 0. Returns other negative error codes in case of failure.
+ */
+static int apfs_delete_any_xattr(struct inode *inode)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_key key;
+	struct apfs_query *query;
+	int ret;
+
+	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+
+	apfs_init_xattr_key(apfs_ino(inode), NULL /* name */, &key);
+	query->key = &key;
+	query->flags = APFS_QUERY_CAT | APFS_QUERY_ANY_NAME | APFS_QUERY_EXACT;
+
+	ret = apfs_btree_query(sb, &query);
+	if (ret) {
+		if (ret == -ENODATA)
+			ret = 0; /* No more xattrs, we are done */
+		goto out;
+	}
+
+	ret = apfs_delete_xattr(query);
+	if (!ret)
+		ret = -EAGAIN;
+
+out:
+	apfs_free_query(sb, query);
+	return ret;
+}
+
+/**
+ * apfs_delete_all_xattrs - Delete all xattrs for a given inode
+ * @inode: the vfs inode
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+int apfs_delete_all_xattrs(struct inode *inode)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(inode->i_sb);
+	int ret;
+
+	lockdep_assert_held_write(&nxi->nx_big_sem);
+
+	do {
+		ret = apfs_delete_any_xattr(inode);
+	} while (ret == -EAGAIN);
+
+	return ret;
+}
+
+/**
  * apfs_build_xattr_key - Allocate and initialize the key for a xattr record
  * @name:	xattr name
  * @ino:	inode number for xattr's owner

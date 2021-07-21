@@ -1173,6 +1173,10 @@ static int apfs_delete_inode(struct inode *inode)
 	struct apfs_query *query;
 	int ret;
 
+	ret = apfs_delete_all_xattrs(inode);
+	if (ret)
+		return ret;
+
 	ret = apfs_truncate(inode, 0 /* new_size */);
 	if (ret)
 		return ret;
