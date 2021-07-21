@@ -295,6 +295,27 @@ static int apfs_xattr_osx_get(const struct xattr_handler *handler,
 }
 
 /**
+ * apfs_delete_xattr - Delete an extended attribute
+ * @query:	successful query pointing to the xattr to delete
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_delete_xattr(struct apfs_query *query)
+{
+	struct apfs_xattr xattr;
+	int err;
+
+	err = apfs_xattr_from_query(query, &xattr);
+	if (err)
+		return err;
+
+	if (xattr.has_dstream)
+		return -EOPNOTSUPP; /* TODO */
+
+	return apfs_btree_remove(query);
+}
+
+/**
  * apfs_build_xattr_key - Allocate and initialize the key for a xattr record
  * @name:	xattr name
  * @ino:	inode number for xattr's owner
@@ -389,6 +410,9 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 			goto done;
 	} else if (flags & XATTR_CREATE) {
 		ret = -EEXIST;
+		goto done;
+	} else if (!value) {
+		ret = apfs_delete_xattr(query);
 		goto done;
 	}
 
