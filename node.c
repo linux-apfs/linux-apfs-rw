@@ -1263,9 +1263,9 @@ static int apfs_node_free_list_alloc(struct apfs_node *node, u16 len, bool value
 		if (curr_len >= len) {
 			if (abs_off + curr_len > sb->s_blocksize)
 				return -EFSCORRUPTED;
+			*list_len -= curr_len;
 			apfs_node_free_list_unlink(prev, curr);
 			apfs_node_free_list_add(node, abs_off + len, curr_len - len);
-			*list_len -= len;
 			return abs_off;
 		}
 
