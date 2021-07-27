@@ -474,6 +474,67 @@ void apfs_btree_change_node_count(struct apfs_query *query, int change)
 }
 
 /**
+ * apfs_query_refresh - Recreate a catalog query invalidated by node splits
+ * @old_query: the catalog query to refresh
+ *
+ * On success, @old_query is left pointing to the same leaf record, but with
+ * valid ancestor queries as well. Returns a negative error code in case of
+ * failure, or 0 on success.
+ */
+static int apfs_query_refresh(struct apfs_query *old_query)
+{
+	struct apfs_node *node = old_query->node;
+	struct super_block *sb = node->object.sb;
+	char *raw = node->object.bh->b_data;
+	struct apfs_query *new_query, *ancestor;
+	struct apfs_key new_key;
+	bool hashed = apfs_is_normalization_insensitive(sb);
+	int err = 0;
+
+	/*
+	 * This function is for handling multiple splits of the same node,
+	 * which are only expected when large inline xattr values are involved.
+	 */
+	if ((old_query->flags & APFS_QUERY_TREE_MASK) != APFS_QUERY_CAT) {
+		apfs_warn(sb, "attempt to refresh a non-catalog query");
+		return -EFSCORRUPTED;
+	}
+	if (!apfs_node_is_leaf(node)) {
+		apfs_warn(sb, "attempt to refresh a non-leaf query");
+		return -EFSCORRUPTED;
+	}
+
+	/* Build a new query that points exactly to the same key */
+	err = apfs_read_cat_key(raw + old_query->key_off, old_query->key_len, &new_key, hashed);
+	if (err)
+		return err;
+	new_query = apfs_alloc_query(APFS_SB(sb)->s_cat_root, NULL /* parent */);
+	if (!new_query)
+		return -ENOMEM;
+	new_query->key = &new_key;
+	new_query->flags = APFS_QUERY_CAT | APFS_QUERY_EXACT;
+
+	err = apfs_btree_query(sb, &new_query);
+	if (err)
+		goto fail;
+
+	/* Set the original query flags and key on the new query */
+	for (ancestor = new_query; ancestor; ancestor = ancestor->parent) {
+		ancestor->flags = old_query->flags;
+		ancestor->key = old_query->key;
+	}
+
+	/* Replace the parent of the original query with the new valid one */
+	apfs_free_query(sb, old_query->parent);
+	old_query->parent = new_query->parent;
+	new_query->parent = NULL;
+
+fail:
+	apfs_free_query(sb, new_query);
+	return err;
+}
+
+/**
  * apfs_btree_insert - Insert a new record into a b-tree
  * @query:	query run to search for the record
  * @key:	on-disk record key
@@ -489,6 +550,7 @@ int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
 		      void *val, int val_len)
 {
 	struct apfs_node *node = query->node;
+	struct super_block *sb = node->object.sb;
 	struct apfs_btree_node_phys *node_raw;
 	int err;
 
@@ -508,6 +570,15 @@ again:
 
 	err = apfs_node_insert(query, key, key_len, val, val_len);
 	if (err == -ENOSPC) {
+		if (!query->parent && !apfs_node_is_root(node)) {
+			if (node->records == 1) {
+				apfs_warn(sb, "huge inline xattr fills a node");
+				return -EOPNOTSUPP;
+			}
+			err = apfs_query_refresh(query);
+			if (err)
+				return err;
+		}
 		err = apfs_node_split(query);
 		if (err)
 			return err;
@@ -648,6 +719,15 @@ again:
 
 	err = apfs_node_replace(query, key, key_len, val, val_len);
 	if (err == -ENOSPC) {
+		if (!query->parent && !apfs_node_is_root(node)) {
+			if (node->records == 1) {
+				apfs_warn(sb, "huge inline xattr fills a node");
+				return -EOPNOTSUPP;
+			}
+			err = apfs_query_refresh(query);
+			if (err)
+				return err;
+		}
 		err = apfs_node_split(query);
 		if (err)
 			return err;

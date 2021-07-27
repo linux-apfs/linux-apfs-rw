@@ -995,6 +995,8 @@ int apfs_node_split(struct apfs_query *query)
 		err = apfs_btree_inc_height(query);
 		if (err)
 			return err;
+	} else if (!query->parent) {
+		return -EFSCORRUPTED;
 	}
 	old_node = query->node;
 
