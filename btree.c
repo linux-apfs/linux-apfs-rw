@@ -535,6 +535,26 @@ fail:
 }
 
 /**
+ * apfs_query_is_orphan - Check if all of a query's ancestors are set
+ * @query: the query to check
+ *
+ * A query may lose some of its ancestors during a node split. This can be
+ * used to check if that has happened.
+ *
+ * TODO: running this check early on the insert, remove and replace functions
+ * could be used to simplify several callers that do their own query refresh.
+ */
+static bool apfs_query_is_orphan(const struct apfs_query *query)
+{
+	while (query) {
+		if (apfs_node_is_root(query->node))
+			return false;
+		query = query->parent;
+	}
+	return true;
+}
+
+/**
  * apfs_btree_insert - Insert a new record into a b-tree
  * @query:	query run to search for the record
  * @key:	on-disk record key
@@ -696,9 +716,15 @@ int apfs_btree_replace(struct apfs_query *query, void *key, int key_len,
 	ASSERT(key || val);
 
 	/* Do this first, or node splits may cause @query->parent to be gone */
-	if (apfs_node_is_leaf(node))
+	if (apfs_node_is_leaf(node)) {
+		if (apfs_query_is_orphan(query)) {
+			err = apfs_query_refresh(query);
+			if (err)
+				return err;
+		}
 		apfs_btree_change_rec_count(query, 0 /* change */,
 					    key_len, val_len);
+	}
 
 	err = apfs_query_join_transaction(query);
 	if (err)
