@@ -355,6 +355,7 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 	pgoff_t index = pos >> PAGE_SHIFT;
 	sector_t iblock = (sector_t)index << (PAGE_SHIFT - inode->i_blkbits);
 	int blkcount = (len + sb->s_blocksize - 1) >> inode->i_blkbits;
+	loff_t i_blks_end;
 	struct apfs_max_ops maxops;
 	int err;
 
@@ -390,8 +391,16 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 	/* CoW moves existing blocks, so read them but mark them as unmapped */
 	head = page_buffers(page);
 	blocksize = head->b_size;
-	from = pos & (PAGE_SIZE - 1);
-	to = from + min(inode->i_size - pos, (loff_t)len);
+	i_blks_end = (inode->i_size + sb->s_blocksize - 1) >> inode->i_blkbits;
+	i_blks_end <<= inode->i_blkbits;
+	if (i_blks_end >= pos) {
+		from = pos & (PAGE_SIZE - 1);
+		to = from + min(i_blks_end - pos, (loff_t)len);
+	} else {
+		/* TODO: deal with preallocated tail blocks */
+		from = UINT_MAX;
+		to = 0;
+	}
 	for (bh = head, block_start = 0; bh != head || !block_start;
 	     block_start = block_end, bh = bh->b_this_page, ++iblock) {
 		block_end = block_start + blocksize;
