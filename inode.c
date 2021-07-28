@@ -782,12 +782,13 @@ static int apfs_build_inode_val(struct inode *inode, struct qstr *qname,
 	struct apfs_inode_val *val;
 	struct apfs_x_field xkey;
 	int total_xlen, val_len;
-	__le32 rdev = cpu_to_le32(inode->i_rdev);
+	bool is_device = S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode);
+	__le32 rdev;
 
 	/* The only required xfield is the name, and the id if it's a device */
 	total_xlen = sizeof(struct apfs_xf_blob);
 	total_xlen += sizeof(xkey) + round_up(qname->len + 1, 8);
-	if (inode->i_rdev)
+	if (is_device)
 		total_xlen += sizeof(xkey) + round_up(sizeof(rdev), 8);
 
 	val_len = sizeof(*val) + total_xlen;
@@ -816,7 +817,8 @@ static int apfs_build_inode_val(struct inode *inode, struct qstr *qname,
 	xkey.x_flags = APFS_XF_DO_NOT_COPY;
 	xkey.x_size = cpu_to_le16(qname->len + 1);
 	apfs_insert_xfield(val->xfields, total_xlen, &xkey, qname->name);
-	if (inode->i_rdev) {
+	if (is_device) {
+		rdev = cpu_to_le32(inode->i_rdev);
 		xkey.x_type = APFS_INO_EXT_TYPE_RDEV;
 		xkey.x_flags = 0; /* TODO: proper flags here? */
 		xkey.x_size = cpu_to_le16(sizeof(rdev));
