@@ -643,9 +643,16 @@ int apfs_btree_remove(struct apfs_query *query)
 	node_raw = (void *)query->node->object.bh->b_data;
 	apfs_assert_in_transaction(node->object.sb, &node_raw->btn_o);
 
-	if (query->parent && node->records == 1)
-		/* Just get rid of the node.  TODO: update the node heights? */
-		return apfs_delete_node(query);
+	if (node->records == 1) {
+		if (query->parent) {
+			/* Just get rid of the node */
+			return apfs_delete_node(query);
+		} else {
+			/* All descendants are gone, root is the whole tree */
+			node_raw->btn_level = 0;
+			node->flags |= APFS_BTNODE_LEAF;
+		}
+	}
 
 	/* The first key in a node must match the parent record's */
 	if (query->parent && query->index == 0) {
