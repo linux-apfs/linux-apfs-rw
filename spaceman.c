@@ -527,8 +527,10 @@ static u64 apfs_ip_find_free(struct super_block *sb)
 	if (bitcount > sb->s_blocksize * 8)
 		return 0;
 	offset = find_next_zero_bit_le(bitmap, bitcount, 0 /* offset */);
-	if (offset >= bitcount)
+	if (offset >= bitcount) {
+		apfs_warn(sb, "internal pool seems full");
 		return 0;
+	}
 	return le64_to_cpu(sm_raw->sm_ip_base) + offset;
 }
 
