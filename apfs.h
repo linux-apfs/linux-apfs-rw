@@ -20,7 +20,7 @@
 #define EFSCORRUPTED	EUCLEAN		/* Filesystem is corrupted */
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0) /* SB_RDONLY came in 4.14 */
-	SB_RDONLY = MS_RDONLY;
+#define SB_RDONLY	MS_RDONLY
 #endif
 
 #define APFS_IOC_SET_DFLT_PFK	_IOW('@', 0x80, struct apfs_wrapped_crypto_state)
