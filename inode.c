@@ -747,7 +747,20 @@ fail:
 	return ERR_PTR(err);
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0) /* No statx yet... */
+
+int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
+		 struct kstat *stat)
+{
+	struct inode *inode = d_inode(dentry);
+
+	generic_fillattr(inode, stat);
+	stat->ino = apfs_ino(inode);
+	return 0;
+}
+
+
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 int apfs_getattr(const struct path *path, struct kstat *stat,
 		 u32 request_mask, unsigned int query_flags)
 #else

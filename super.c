@@ -5,7 +5,6 @@
 
 #include <linux/backing-dev.h>
 #include <linux/blkdev.h>
-#include <linux/iversion.h>
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/magic.h>
@@ -15,6 +14,10 @@
 #include <linux/statfs.h>
 #include <linux/seq_file.h>
 #include "apfs.h"
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0) /* iversion came in 4.16 */
+#include <linux/iversion.h>
+#endif
 
 /* Keep a list of mounted containers, so that their volumes can share them */
 DEFINE_MUTEX(nxs_mutex);
@@ -569,7 +572,11 @@ static struct inode *apfs_alloc_inode(struct super_block *sb)
 	ai = kmem_cache_alloc(apfs_inode_cachep, GFP_KERNEL);
 	if (!ai)
 		return NULL;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0) /* iversion came in 4.16 */
 	inode_set_iversion(&ai->vfs_inode, 1);
+#else
+	ai->vfs_inode.i_version = 1;
+#endif
 	ai->i_cached_extent.len = 0;
 	ai->i_extent_dirty = false;
 	ai->i_nchildren = 0;
