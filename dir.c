@@ -1283,6 +1283,9 @@ int apfs_rename(struct user_namespace *mnt_userns, struct inode *old_dir,
 	struct apfs_max_ops maxops;
 	int err;
 
+	if (new_inode && APFS_I(new_inode)->i_nchildren)
+		return -ENOTEMPTY;
+
 	if (flags & ~RENAME_NOREPLACE) /* TODO: support RENAME_EXCHANGE */
 		return -EINVAL;
 
