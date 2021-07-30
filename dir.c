@@ -598,6 +598,16 @@ static void apfs_undo_create_dentry(struct dentry *dentry)
 	--APFS_I(parent)->i_nchildren;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
+
+static inline void discard_new_inode(struct inode *inode)
+{
+	unlock_new_inode(inode);
+	iput(inode);
+}
+
+#endif
+
 int apfs_mkany(struct inode *dir, struct dentry *dentry, umode_t mode,
 	       dev_t rdev, const char *symname)
 {
