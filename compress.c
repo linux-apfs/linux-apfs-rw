@@ -9,6 +9,38 @@
 
 #include "apfs.h"
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
+
+#include <linux/vmalloc.h>
+
+static inline void *kvmalloc(size_t size, gfp_t flags)
+{
+	gfp_t kmalloc_flags = flags;
+	void *ret;
+
+	if ((flags & GFP_KERNEL) != GFP_KERNEL)
+		return kmalloc(size, flags);
+
+	if (size > PAGE_SIZE)
+		kmalloc_flags |= __GFP_NOWARN | __GFP_NORETRY;
+
+	ret = kmalloc(size, flags);
+	if (ret || size < PAGE_SIZE)
+		return ret;
+
+	return vmalloc(size);
+}
+
+static void kvfree(const void *addr)
+{
+	if (is_vmalloc_addr(addr))
+		vfree(addr);
+	else
+		kfree(addr);
+}
+
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0) */
+
 /* maximum size of compressed data currently supported */
 #define MAX_FBUF_SIZE		(128 * 1024 * 1024)
 
