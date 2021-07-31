@@ -23,6 +23,10 @@
 #define SB_RDONLY	MS_RDONLY
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 3, 0)
+#define lockdep_assert_held_write(l)	((void)(l))
+#endif
+
 #define APFS_IOC_SET_DFLT_PFK	_IOW('@', 0x80, struct apfs_wrapped_crypto_state)
 #define APFS_IOC_SET_DIR_CLASS	_IOW('@', 0x81, u32)
 #define APFS_IOC_SET_PFK	_IOW('@', 0x82, struct apfs_wrapped_crypto_state)

@@ -9,6 +9,7 @@
 #define _APFS_RAW_H
 
 #include <linux/types.h>
+#include <linux/uuid.h>
 
 /* Object identifiers constants */
 #define APFS_OID_NX_SUPERBLOCK			1
@@ -855,6 +856,10 @@ enum {
 
 	APFS_NX_NUM_COUNTERS		= 32
 };
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 13, 0)
+#define UUID_SIZE 16
+#endif
 
 /*
  * On-disk representation of the container superblock
