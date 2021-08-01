@@ -31,14 +31,6 @@ static inline void *kvmalloc(size_t size, gfp_t flags)
 	return vmalloc(size);
 }
 
-static void kvfree(const void *addr)
-{
-	if (is_vmalloc_addr(addr))
-		vfree(addr);
-	else
-		kfree(addr);
-}
-
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0) */
 
 /* maximum size of compressed data currently supported */
