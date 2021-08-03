@@ -1121,7 +1121,9 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
 
 	apfs_map_bh(bh_result, sb, phys_bno);
-	get_bh(bh_result);
+	err = apfs_transaction_join(sb, bh_result);
+	if (err)
+		return err;
 
 	/*
 	 * Truly new buffers need to be marked as such, to get zeroed; this

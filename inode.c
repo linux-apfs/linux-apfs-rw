@@ -447,7 +447,6 @@ static int apfs_write_end(struct file *file, struct address_space *mapping,
 {
 	struct inode *inode = mapping->host;
 	struct super_block *sb = inode->i_sb;
-	struct buffer_head *bh, *head;
 	int ret, err;
 
 	ret = generic_write_end(file, mapping, pos, len, copied, page, fsdata);
@@ -456,14 +455,6 @@ static int apfs_write_end(struct file *file, struct address_space *mapping,
 		err = -EIO;
 		goto out_abort;
 	}
-
-	bh = head = page_buffers(page);
-	do {
-		if (buffer_dirty(bh))
-			sync_dirty_buffer(bh);
-		put_bh(bh);
-		bh = bh->b_this_page;
-	} while (bh != head);
 
 	/* TODO: write all metadata for inodes at transaction commit instead? */
 	err = apfs_flush_extent_cache(inode);
