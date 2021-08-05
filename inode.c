@@ -484,6 +484,9 @@ static const struct address_space_operations apfs_aops = {
 #endif
 	.write_begin	= apfs_write_begin,
 	.write_end	= apfs_write_end,
+
+	/* The intention is to keep bhs around until the transaction is over */
+	.invalidatepage	= noop_invalidatepage,
 };
 
 /**
