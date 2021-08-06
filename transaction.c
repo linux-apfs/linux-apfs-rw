@@ -426,6 +426,7 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 		get_bh(nx_trans->t_old_msb);
 
 		++nxi->nx_xid;
+		INIT_LIST_HEAD(&nx_trans->t_inodes);
 		INIT_LIST_HEAD(&nx_trans->t_buffers);
 		nx_trans->t_buffers_count = 0;
 		nx_trans->t_starts_count = 0;
@@ -488,14 +489,50 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	struct apfs_sb_info *sbi;
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	struct apfs_bh_info *bhi, *tmp;
-	int err = 0;
+	int err = 0, curr_err;
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 	ASSERT(nx_trans->t_old_msb);
 
+	/* Before committing the bhs, write all inode metadata to them */
+	while (!list_empty(&nx_trans->t_inodes)) {
+		struct apfs_inode_info *ai;
+		struct inode *inode;
+
+		ai = list_first_entry(&nx_trans->t_inodes, struct apfs_inode_info, i_list);
+		inode = &ai->vfs_inode;
+
+		/* This is a bit wasteful if the inode will get deleted */
+		curr_err = apfs_update_inode(inode, NULL /* new_name */);
+		if (curr_err)
+			err = curr_err;
+
+		/*
+		 * The same inode may get dirtied again as soon as we release
+		 * the lock, and we don't want to miss that.
+		 */
+		list_del_init(&ai->i_list);
+
+		nx_trans->commiting = true;
+		mutex_unlock(&nxs_mutex);
+		up_write(&nxi->nx_big_sem);
+
+		/* Unlocked, so it may call ->evict_inode() */
+		iput(inode);
+
+		down_write(&nxi->nx_big_sem);
+		mutex_lock(&nxs_mutex);
+		nx_trans->commiting = false;
+
+		/* Transaction aborted by ->evict_inode(), error code is lost */
+		if (sb->s_flags & SB_RDONLY)
+			return -EROFS;
+	}
+	if (err)
+		return err;
+
 	list_for_each_entry_safe(bhi, tmp, &nx_trans->t_buffers, list) {
 		struct buffer_head *bh = bhi->bh;
-		int curr_err;
 
 		ASSERT(buffer_trans(bh));
 
@@ -557,6 +594,10 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 
+	/* Avoid nested commits on ->evict_inode() */
+	if (nx_trans->commiting)
+		return false;
+
 	if (nx_trans->force_commit) {
 		nx_trans->force_commit = false;
 		return true;
@@ -616,6 +657,28 @@ int apfs_transaction_commit(struct super_block *sb)
 }
 
 /**
+ * apfs_inode_join_transaction - Add an inode to the current transaction
+ * @sb:		superblock structure
+ * @inode:	vfs inode to add
+ */
+void apfs_inode_join_transaction(struct super_block *sb, struct inode *inode)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
+	struct apfs_inode_info *ai = APFS_I(inode);
+
+	ASSERT(!(sb->s_flags & SB_RDONLY));
+	ASSERT(nx_trans->t_old_msb);
+	lockdep_assert_held_write(&nxi->nx_big_sem);
+
+	if (!list_empty(&ai->i_list)) /* Already in the transaction */
+		return;
+
+	ihold(inode);
+	list_add(&ai->i_list, &nx_trans->t_inodes);
+}
+
+/**
  * apfs_transaction_join - Add a buffer head to the current transaction
  * @sb:	superblock structure
  * @bh:	the buffer head
@@ -628,6 +691,7 @@ int apfs_transaction_join(struct super_block *sb, struct buffer_head *bh)
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 	ASSERT(nx_trans->t_old_msb);
+	lockdep_assert_held_write(&nxi->nx_big_sem);
 
 	if (buffer_trans(bh)) /* Already part of the only transaction */
 		return 0;
@@ -676,6 +740,17 @@ void apfs_transaction_abort(struct super_block *sb)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	struct apfs_bh_info *bhi, *tmp;
+	struct apfs_inode_info *ai, *ai_tmp;
+
+	if (sb->s_flags & SB_RDONLY) {
+		/* Transaction already aborted, do nothing */
+		ASSERT(!nx_trans->t_old_msb);
+		ASSERT(list_empty(&nx_trans->t_inodes));
+		ASSERT(list_empty(&nx_trans->t_buffers));
+		mutex_unlock(&nxs_mutex);
+		up_write(&nxi->nx_big_sem);
+		return;
+	}
 
 	ASSERT(nx_trans->t_old_msb);
 	nx_trans->force_commit = false;
@@ -737,4 +812,10 @@ void apfs_transaction_abort(struct super_block *sb)
 
 	mutex_unlock(&nxs_mutex);
 	up_write(&nxi->nx_big_sem);
+
+	/* ->evict_inode() will just fail if it starts a new transaction */
+	list_for_each_entry_safe(ai, ai_tmp, &nx_trans->t_inodes, i_list) {
+		list_del_init(&ai->i_list);
+		iput(&ai->vfs_inode);
+	}
 }

@@ -127,7 +127,9 @@ struct apfs_spaceman {
 struct apfs_nx_transaction {
 	struct buffer_head *t_old_msb;  /* Main superblock being replaced */
 	bool force_commit;		/* If set, commit is guaranteed */
+	bool commiting;			/* The transaction is being commited */
 
+	struct list_head t_inodes;	/* List of inodes in the transaction */
 	struct list_head t_buffers;	/* List of buffers in the transaction */
 	size_t t_buffers_count;		/* Count of items on the list */
 	int t_starts_count;		/* Count of starts for transaction */
@@ -559,6 +561,7 @@ struct apfs_inode_info {
 	u32			i_key_class;	 /* Security class for directory */
 	u64			i_int_flags;	 /* Internal flags */
 	u64			i_sparse_bytes;	 /* Sparse byte count in file */
+	struct list_head	i_list;		 /* List of inodes in transaction */
 
 	struct inode vfs_inode;
 };
@@ -807,6 +810,7 @@ extern void apfs_cpoint_data_allocate(struct super_block *sb, u64 *bno);
 extern int apfs_cpoint_data_free(struct super_block *sb, u64 bno);
 extern int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops);
 extern int apfs_transaction_commit(struct super_block *sb);
+extern void apfs_inode_join_transaction(struct super_block *sb, struct inode *inode);
 extern int apfs_transaction_join(struct super_block *sb,
 				 struct buffer_head *bh);
 void apfs_transaction_abort(struct super_block *sb);

@@ -518,9 +518,6 @@ static void apfs_put_super(struct super_block *sb)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 
-	iput(sbi->s_private_dir);
-	sbi->s_private_dir = NULL;
-
 	/* Update the volume's unmount time */
 	if (!(sb->s_flags & SB_RDONLY)) {
 		struct apfs_superblock *vsb_raw;
@@ -548,6 +545,9 @@ static void apfs_put_super(struct super_block *sb)
 	}
 
 fail:
+	iput(sbi->s_private_dir);
+	sbi->s_private_dir = NULL;
+
 	apfs_node_put(sbi->s_cat_root);
 	apfs_node_put(sbi->s_omap_root);
 	apfs_unmap_volume_super(sb);
@@ -580,6 +580,7 @@ static struct inode *apfs_alloc_inode(struct super_block *sb)
 	ai->i_cached_extent.len = 0;
 	ai->i_extent_dirty = false;
 	ai->i_nchildren = 0;
+	INIT_LIST_HEAD(&ai->i_list);
 	return &ai->vfs_inode;
 }
 

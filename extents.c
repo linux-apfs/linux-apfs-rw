@@ -102,9 +102,15 @@ static int apfs_extent_read(struct inode *inode, sector_t iblock,
 		goto done;
 	}
 
-	spin_lock(&ai->i_extent_lock);
-	*cache = *extent;
-	spin_unlock(&ai->i_extent_lock);
+	/*
+	 * For now prioritize the deferral of writes.
+	 * i_extent_dirty is protected by the read semaphore.
+	 */
+	if (!ai->i_extent_dirty) {
+		spin_lock(&ai->i_extent_lock);
+		*cache = *extent;
+		spin_unlock(&ai->i_extent_lock);
+	}
 
 done:
 	apfs_free_query(sb, query);
@@ -1011,6 +1017,7 @@ int apfs_flush_extent_cache(struct inode *inode)
 
 	if (!ai->i_extent_dirty)
 		return 0;
+	ASSERT(ext->len > 0);
 
 	err = apfs_update_extent(inode, ext);
 	if (err)
@@ -1397,9 +1404,17 @@ int apfs_truncate(struct inode *inode, loff_t new_size)
 	struct super_block *sb = inode->i_sb;
 	struct apfs_inode_info *ai = APFS_I(inode);
 	u64 old_blks, new_blks;
+	struct apfs_file_extent *cache = &ai->i_cached_extent;
+	int err;
+
+	/* TODO: don't write the cached extent if it will be deleted */
+	err = apfs_flush_extent_cache(inode);
+	if (err)
+		return err;
+	ai->i_extent_dirty = false;
 
 	/* TODO: keep the cache valid on truncation */
-	ai->i_cached_extent.len = 0;
+	cache->len = 0;
 
 	if (new_size < inode->i_size)
 		return apfs_shrink_file(inode, new_size);

@@ -578,10 +578,8 @@ static int apfs_create_dentry(struct dentry *dentry, struct inode *inode)
 	/* Now update the parent inode */
 	parent->i_mtime = parent->i_ctime = current_time(inode);
 	++APFS_I(parent)->i_nchildren;
-	err = apfs_update_inode(parent, NULL /* new_name */);
-	if (err)
-		--APFS_I(parent)->i_nchildren;
-	return err;
+	apfs_inode_join_transaction(parent->i_sb, parent);
+	return 0;
 }
 #define APFS_CREATE_DENTRY_MAXOPS	(APFS_CREATE_SIBLING_RECS_MAXOPS + \
 					 APFS_CREATE_DENTRY_REC_MAXOPS + \
@@ -781,9 +779,7 @@ static int __apfs_link(struct dentry *old_dentry, struct inode *dir,
 	/* First update the inode's link count */
 	inc_nlink(inode);
 	inode->i_ctime = current_time(inode);
-	err = apfs_update_inode(inode, NULL /* new_name */);
-	if (err)
-		goto fail;
+	apfs_inode_join_transaction(inode->i_sb, inode);
 
 	if (inode->i_nlink == 2) {
 		/* A single link may lack sibling records, so create them now */
@@ -955,9 +951,7 @@ static int apfs_delete_dentry(struct dentry *dentry)
 	/* Now update the parent inode */
 	parent->i_mtime = parent->i_ctime = current_time(parent);
 	--APFS_I(parent)->i_nchildren;
-	err = apfs_update_inode(parent, NULL /* new_name */);
-	if (err)
-		++APFS_I(parent)->i_nchildren;
+	apfs_inode_join_transaction(sb, parent);
 	return err;
 }
 #define APFS_DELETE_DENTRY_MAXOPS	(1 + APFS_DELETE_SIBLING_LINK_REC_MAXOPS + \
@@ -1115,11 +1109,7 @@ static int apfs_create_orphan_link(struct inode *inode, char **name,
 	/* Now update the child count for private-dir */
 	priv_dir->i_mtime = priv_dir->i_ctime = current_time(priv_dir);
 	++APFS_I(priv_dir)->i_nchildren;
-	err = apfs_update_inode(priv_dir, NULL /* new_name */);
-	if (err) {
-		--APFS_I(priv_dir)->i_nchildren;
-		goto fail;
-	}
+	apfs_inode_join_transaction(sb, priv_dir);
 
 	*name = (char *)qname.name;
 	*parent = apfs_ino(priv_dir);
@@ -1165,9 +1155,7 @@ int apfs_delete_orphan_link(struct inode *inode)
 	/* Now update the child count for private-dir */
 	priv_dir->i_mtime = priv_dir->i_ctime = current_time(priv_dir);
 	--APFS_I(priv_dir)->i_nchildren;
-	err = apfs_update_inode(priv_dir, NULL /* new_name */);
-	if (err)
-		++APFS_I(priv_dir)->i_nchildren;
+	apfs_inode_join_transaction(sb, priv_dir);
 
 fail:
 	apfs_free_query(sb, query);
@@ -1226,6 +1214,7 @@ static int __apfs_unlink(struct inode *dir, struct dentry *dentry)
 		goto fail;
 
 	inode->i_ctime = dir->i_ctime;
+	/* TODO: defer write of the primary name? */
 	err = apfs_update_inode(inode, primary_name);
 
 fail:
