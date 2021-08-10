@@ -4,6 +4,7 @@
  */
 
 #include <linux/blkdev.h>
+#include <linux/rmap.h>
 #include "apfs.h"
 
 #define TRANSACTION_MAIN_QUEUE_MAX	4096
@@ -542,6 +543,11 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		curr_err = sync_dirty_buffer(bh);
 		if (curr_err)
 			err = curr_err;
+
+		/* Future writes to mmapped areas should fault for CoW */
+		trylock_page(bh->b_page);
+		page_mkclean(bh->b_page);
+		unlock_page(bh->b_page);
 
 		bh->b_private = NULL;
 		clear_buffer_trans(bh);

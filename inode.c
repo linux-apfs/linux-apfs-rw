@@ -406,6 +406,8 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 	     block_start = block_end, bh = bh->b_this_page, ++iblock) {
 		block_end = block_start + blocksize;
 		if (to > block_start && from < block_end) {
+			if (buffer_trans(bh))
+				continue;
 			if (!buffer_mapped(bh)) {
 				err = __apfs_get_block(inode, iblock, bh,
 						       false /* create */);
