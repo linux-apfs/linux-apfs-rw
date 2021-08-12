@@ -1059,6 +1059,9 @@ fail:
  * @query:	the query that found the inode record
  *
  * Returns 0 on success, or a negative error code in case of failure.
+ *
+ * TODO: should the xfield be removed if the count reaches 0? Should the inode
+ * flag change?
  */
 static int apfs_inode_resize_sparse(struct inode *inode, struct apfs_query *query)
 {
@@ -1132,6 +1135,8 @@ int apfs_update_inode(struct inode *inode, char *new_name)
 	err = apfs_inode_resize_sparse(inode, query);
 	if (err)
 		goto fail;
+	if (ai->i_sparse_bytes)
+		ai->i_int_flags |= APFS_INODE_IS_SPARSE;
 
 	/* TODO: just use apfs_btree_replace()? */
 	err = apfs_query_join_transaction(query);

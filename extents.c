@@ -1085,7 +1085,6 @@ static int apfs_create_hole(struct inode *inode, u64 start, u64 end)
 
 	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
 	ai->i_sparse_bytes += end - start;
-	ai->i_int_flags |= APFS_INODE_IS_SPARSE;
 
 out:
 	apfs_free_query(sb, query);
