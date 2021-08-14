@@ -253,6 +253,8 @@ static int apfs_shrink_extent_tail(struct apfs_query *query, struct inode *inode
 	void *raw;
 	int err = 0;
 
+	ASSERT((end & (sb->s_blocksize - 1)) == 0);
+
 	err = apfs_query_join_transaction(query);
 	if (err)
 		return err;
@@ -1103,6 +1105,69 @@ static inline u64 apfs_size_to_blocks(struct super_block *sb, u64 size)
 	return (size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
 }
 
+/**
+ * apfs_zero_inode_tail - Zero out stale bytes in an inode's last block
+ * @inode: the vfs inode
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_zero_inode_tail(struct inode *inode)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_inode_info *ai = APFS_I(inode);
+	struct buffer_head tmp;
+	struct buffer_head *bh;
+	u64 inode_blks;
+	int valid_length;
+	int err;
+
+	/* No stale bytes if no actual content */
+	if (inode->i_size <= ai->i_sparse_bytes)
+		return 0;
+
+	/* No stale tail if the last block is fully used */
+	valid_length = inode->i_size & (sb->s_blocksize - 1);
+	if (valid_length == 0)
+		return 0;
+
+	inode_blks = apfs_size_to_blocks(sb, inode->i_size);
+
+	/* XXX: refactor this to get rid of the fake buffer head */
+	tmp.b_blocknr = -1;
+	err = __apfs_get_block(inode, inode_blks - 1, &tmp, false /* create */);
+	if (err)
+		return err;
+	if (tmp.b_blocknr == -1) /* No stale bytes in holes */
+		return 0;
+
+	bh = apfs_sb_bread(inode->i_sb, tmp.b_blocknr);
+	if (!bh)
+		return -EIO;
+
+	/*
+	 * We are only modifying stale data, so no need to join the
+	 * transaction. TODO: snapshots?
+	 */
+	memset(bh->b_data + valid_length, 0, sb->s_blocksize - valid_length);
+	mark_buffer_dirty(bh);
+	sync_dirty_buffer(bh); /* TODO: add to trans but mark as no-CoWed? */
+	brelse(bh);
+	return 0;
+}
+
+/**
+ * apfs_zero_bh_tail - Zero out stale bytes in a buffer head
+ * @sb:		filesystem superblock
+ * @bh:		buffer head to zero
+ * @length:	length of valid bytes to be left alone
+ */
+static void apfs_zero_bh_tail(struct super_block *sb, struct buffer_head *bh, u64 length)
+{
+	ASSERT(buffer_trans(bh));
+	if (length < sb->s_blocksize)
+		memset(bh->b_data + length, 0, sb->s_blocksize - length);
+}
+
 int apfs_get_new_block(struct inode *inode, sector_t iblock,
 		       struct buffer_head *bh_result, int create)
 {
@@ -1117,7 +1182,7 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 
 	cache_blks = apfs_size_to_blocks(sb, cache->len);
 
-	/* TODO: preallocate tail blocks, support sparse files */
+	/* TODO: preallocate tail blocks */
 	logical_addr = iblock << inode->i_blkbits;
 
 	err = apfs_spaceman_allocate_block(sb, &phys_bno, false /* backwards */);
@@ -1131,12 +1196,16 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 	if (err)
 		return err;
 
-	/*
-	 * Truly new buffers need to be marked as such, to get zeroed; this
-	 * also takes care of holes in sparse files.
-	 */
-	if (!buffer_uptodate(bh_result))
+	if (!buffer_uptodate(bh_result)) {
+		/*
+		 * Truly new buffers need to be marked as such, to get zeroed;
+		 * this also takes care of holes in sparse files.
+		 */
 		set_buffer_new(bh_result);
+	} else if (inode->i_size > logical_addr) {
+		/* The last block may have stale data left from a truncation */
+		apfs_zero_bh_tail(sb, bh_result, inode->i_size - logical_addr);
+	}
 
 	if (apfs_inode_cache_is_tail(inode) &&
 	    logical_addr == cache->logical_addr + cache->len &&
@@ -1148,6 +1217,9 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 
 	inode_blks = apfs_size_to_blocks(sb, inode->i_size);
 	if (inode_blks < iblock) {
+		err = apfs_zero_inode_tail(inode);
+		if (err)
+			return err;
 		err = apfs_create_hole(inode, inode_blks, iblock);
 		if (err)
 			return err;
@@ -1166,132 +1238,6 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 int APFS_GET_NEW_BLOCK_MAXOPS(void)
 {
 	return APFS_FLUSH_EXTENT_CACHE;
-}
-
-/**
- * apfs_copy_and_zero_block - Copy the first part of a block, zero out the rest
- * @sb:		filesystem superblock
- * @dest:	destination block of the operation
- * @src:	source block of the operation
- * @n:		number of bytes to copy, the rest is set to zero
- *
- * Returns 0 on success or a negative error code in case of failure.
- */
-static int apfs_copy_and_zero_block(struct super_block *sb, u64 dest, u64 src, u64 n)
-{
-	struct buffer_head *dest_bh, *src_bh;
-	int err;
-
-	ASSERT(n < sb->s_blocksize);
-
-	dest_bh = apfs_sb_bread(sb, dest);
-	src_bh = apfs_sb_bread(sb, src);
-
-	if (dest_bh && src_bh) {
-		memcpy(dest_bh->b_data, src_bh->b_data, n);
-		memset(dest_bh->b_data + n, 0, sb->s_blocksize - n);
-		err = apfs_transaction_join(sb, dest_bh);
-	} else {
-		err = -EIO;
-	}
-
-	brelse(dest_bh);
-	brelse(src_bh);
-	return err;
-}
-
-/**
- * apfs_shrink_and_zero_extent - Shrink tail extent and zero out leftover bytes
- * @query:	the query that found the extent record
- * @inode:	vfs inode for the extent
- * @size:	new length for the file
- *
- * Also deletes the physical extent records for the tail. Returns 0 on success
- * or a negative error code in case of failure.
- */
-static int apfs_shrink_and_zero_extent(struct apfs_query *query, struct inode *inode, u64 size)
-{
-	struct super_block *sb = inode->i_sb;
-	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
-	struct apfs_file_extent_key key;
-	struct apfs_file_extent_val val;
-	struct apfs_file_extent extent = {0};
-	void *raw;
-	u64 head_blks, head_len, head_end;
-	u64 extent_id = APFS_I(inode)->i_extent_id;
-	u64 tail_crypto = apfs_vol_is_encrypted(sb) ? extent_id : 0;
-	u64 tail_bytes = size & (sb->s_blocksize - 1);
-	u64 new_bno = 0;
-	int err = 0;
-
-	/* Easiest case: the file will have a whole number of blocks */
-	if (tail_bytes == 0)
-		return apfs_shrink_extent_tail(query, inode, size);
-
-	err = apfs_extent_from_query(query, &extent);
-	if (err)
-		return err;
-	/* What will be left of the original extent */
-	head_end = size - tail_bytes;
-	head_len = head_end - extent.logical_addr;
-	head_blks = head_len >> sb->s_blocksize_bits;
-
-	/* The last block of a hole extent doesn't need to be zeroed out */
-	if (apfs_ext_is_hole(&extent))
-		return apfs_shrink_extent_tail(query, inode, head_end + sb->s_blocksize);
-
-	/* We need to do copy-on-write to zero out the last block of the file */
-	err = apfs_spaceman_allocate_block(sb, &new_bno, false /* backwards */);
-	if (err)
-		return err;
-	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
-	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
-	err = apfs_copy_and_zero_block(sb, new_bno, extent.phys_block_num + head_blks, tail_bytes);
-	if (err)
-		return err;
-	{
-		/* TODO: just move this to a separate function in all cases */
-		struct apfs_file_extent tail = {0};
-
-		tail.phys_block_num = new_bno;
-		tail.len = sb->s_blocksize;
-		err = apfs_insert_phys_extent(inode, &tail);
-		if (err)
-			return err;
-	}
-
-	/* Prepare the file extent record for the new tail block */
-	raw = query->node->object.bh->b_data;
-	key = *(struct apfs_file_extent_key *)(raw + query->key_off);
-	val = *(struct apfs_file_extent_val *)(raw + query->off);
-	key.logical_addr = cpu_to_le64(head_end);
-	apfs_set_extent_length(&val, sb->s_blocksize);
-	val.phys_block_num = cpu_to_le64(new_bno);
-	val.crypto_id = cpu_to_le64(tail_crypto);
-
-	if (head_len == 0) {
-		/* Extent has only one block left, so CoW replaces it whole */
-		err = apfs_btree_replace(query, &key, sizeof(key), &val, sizeof(val));
-		if (err)
-			return err;
-		err = apfs_delete_phys_extent(sb, &extent);
-		if (err)
-			return err;
-		if (tail_crypto == extent.crypto_id)
-			return 0;
-		err = apfs_crypto_adj_refcnt(sb, extent.crypto_id, -1);
-		if (err)
-			return err;
-	} else {
-		err = apfs_shrink_extent_tail(query, inode, head_end);
-		if (err)
-			return err;
-		err = apfs_btree_insert(query, &key, sizeof(key), &val, sizeof(val));
-		if (err)
-			return err;
-	}
-
-	return apfs_crypto_adj_refcnt(sb, tail_crypto, 1);
 }
 
 /**
@@ -1363,8 +1309,12 @@ static int apfs_shrink_file_last_extent(struct inode *inode, loff_t new_size)
 			goto out;
 		ret = tail.logical_addr == new_size ? 0 : -EAGAIN;
 	} else {
-		/* The file is being truncated in the middle of this extent */
-		ret = apfs_shrink_and_zero_extent(query, inode, new_size);
+		/*
+		 * The file is being truncated in the middle of this extent.
+		 * TODO: preserve the physical tail to be overwritten later.
+		 */
+		new_size = apfs_size_to_blocks(sb, new_size) << sb->s_blocksize_bits;
+		ret = apfs_shrink_extent_tail(query, inode, new_size);
 	}
 
 out:
@@ -1418,6 +1368,9 @@ int apfs_truncate(struct inode *inode, loff_t new_size)
 	if (new_size < inode->i_size)
 		return apfs_shrink_file(inode, new_size);
 
+	err = apfs_zero_inode_tail(inode);
+	if (err)
+		return err;
 	new_blks = apfs_size_to_blocks(sb, new_size);
 	old_blks = apfs_size_to_blocks(sb, inode->i_size);
 	return apfs_create_hole(inode, old_blks, new_blks);
