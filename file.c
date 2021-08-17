@@ -101,12 +101,25 @@ static int apfs_file_mmap(struct file * file, struct vm_area_struct * vma)
 	return 0;
 }
 
+/*
+ * Just flush the whole transaction for now (TODO), since that's technically
+ * correct and easy to implement.
+ */
+int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
+{
+	struct inode *inode = file->f_mapping->host;
+	struct super_block *sb = inode->i_sb;
+
+	return apfs_sync_fs(sb, true /* wait */);
+}
+
 const struct file_operations apfs_file_operations = {
 	.llseek		= generic_file_llseek,
 	.read_iter	= generic_file_read_iter,
 	.write_iter	= generic_file_write_iter,
 	.mmap		= apfs_file_mmap,
 	.open		= generic_file_open,
+	.fsync		= apfs_fsync,
 	.unlocked_ioctl	= apfs_file_ioctl,
 };
 

@@ -716,6 +716,9 @@ extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 extern int APFS_GET_NEW_BLOCK_MAXOPS(void);
 extern int apfs_truncate(struct inode *inode, loff_t new_size);
 
+/* file.c */
+extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync);
+
 /* inode.c */
 extern struct inode *apfs_iget(struct super_block *sb, u64 cnid);
 extern int apfs_update_inode(struct inode *inode, char *new_name);
@@ -804,6 +807,7 @@ extern int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool b
 extern int apfs_map_volume_super(struct super_block *sb, bool write);
 extern int apfs_read_omap(struct super_block *sb, bool write);
 extern int apfs_read_catalog(struct super_block *sb, bool write);
+extern int apfs_sync_fs(struct super_block *sb, int wait);
 
 /* transaction.c */
 extern void apfs_cpoint_data_allocate(struct super_block *sb, u64 *bno);

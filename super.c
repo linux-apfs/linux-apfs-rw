@@ -788,12 +788,29 @@ static int apfs_show_options(struct seq_file *seq, struct dentry *root)
 	return 0;
 }
 
+/* TODO: don't ignore @wait */
+int apfs_sync_fs(struct super_block *sb, int wait)
+{
+	struct apfs_max_ops maxops = {0};
+	int err;
+
+	err = apfs_transaction_start(sb, maxops);
+	if (err)
+		return err;
+	APFS_SB(sb)->s_nxi->nx_transaction.force_commit = true;
+	err = apfs_transaction_commit(sb);
+	if (err)
+		apfs_transaction_abort(sb);
+	return err;
+}
+
 static const struct super_operations apfs_sops = {
 	.alloc_inode	= apfs_alloc_inode,
 	.destroy_inode	= apfs_destroy_inode,
 	.write_inode	= apfs_write_inode,
 	.evict_inode	= apfs_evict_inode,
 	.put_super	= apfs_put_super,
+	.sync_fs	= apfs_sync_fs,
 	.statfs		= apfs_statfs,
 	.show_options	= apfs_show_options,
 };

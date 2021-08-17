@@ -232,6 +232,7 @@ const struct file_operations apfs_dir_operations = {
 	.llseek		= generic_file_llseek,
 	.read		= generic_read_dir,
 	.iterate_shared	= apfs_readdir,
+	.fsync		= apfs_fsync,
 	.unlocked_ioctl	= apfs_dir_ioctl,
 };
 
