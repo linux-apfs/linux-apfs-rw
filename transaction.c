@@ -350,12 +350,23 @@ static int apfs_checkpoint_end(struct super_block *sb)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_obj_phys *obj = &nxi->nx_raw->nx_o;
 	struct buffer_head *bh = nxi->nx_object.bh;
+	struct inode *bdev_inode = nxi->nx_bdev->bd_inode;
+	struct address_space *bdev_map = bdev_inode->i_mapping;
+	int err;
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 
+	err = filemap_write_and_wait(bdev_map);
+	if (err)
+		return err;
+
 	apfs_obj_set_csum(sb, obj);
 	mark_buffer_dirty(bh);
-	return sync_dirty_buffer(bh);
+	err = sync_dirty_buffer(bh);
+	if (err)
+		return err;
+
+	return filemap_write_and_wait(bdev_map);
 }
 
 /**
