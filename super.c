@@ -536,7 +536,7 @@ static void apfs_put_super(struct super_block *sb)
 		set_buffer_csum(vsb_bh);
 
 		/* Guarantee commit */
-		sbi->s_nxi->nx_transaction.force_commit = true;
+		sbi->s_nxi->nx_transaction.t_state = APFS_NX_TRANS_FORCE_COMMIT;
 		if (apfs_transaction_commit(sb)) {
 			apfs_transaction_abort(sb);
 			goto fail;
@@ -797,7 +797,7 @@ int apfs_sync_fs(struct super_block *sb, int wait)
 	err = apfs_transaction_start(sb, maxops);
 	if (err)
 		return err;
-	APFS_SB(sb)->s_nxi->nx_transaction.force_commit = true;
+	APFS_SB(sb)->s_nxi->nx_transaction.t_state = APFS_NX_TRANS_FORCE_COMMIT;
 	err = apfs_transaction_commit(sb);
 	if (err)
 		apfs_transaction_abort(sb);

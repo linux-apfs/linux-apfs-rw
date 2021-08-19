@@ -121,13 +121,18 @@ struct apfs_spaceman {
 	u32 sm_addr_offset;		/* Offset of cib addresses in @sm_raw */
 };
 
+/* Possible states for the container transaction structure */
+#define APFS_NX_TRANS_NORMAL		0	/* Default state */
+#define APFS_NX_TRANS_FORCE_COMMIT	1	/* Commit guaranteed */
+#define APFS_NX_TRANS_DEFER_COMMIT	2	/* Commit banned right now */
+#define APFS_NX_TRANS_COMMITTING	3	/* Commit ongoing */
+
 /*
  * Structure that keeps track of a container transaction.
  */
 struct apfs_nx_transaction {
 	struct buffer_head *t_old_msb;  /* Main superblock being replaced */
-	bool force_commit;		/* If set, commit is guaranteed */
-	bool commiting;			/* The transaction is being commited */
+	unsigned int t_state;
 
 	struct list_head t_inodes;	/* List of inodes in the transaction */
 	struct list_head t_buffers;	/* List of buffers in the transaction */

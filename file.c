@@ -68,6 +68,9 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 		goto out_abort;
 	set_page_dirty(page);
 
+	/* An immediate commit would leave the page unlocked */
+	APFS_SB(sb)->s_nxi->nx_transaction.t_state = APFS_NX_TRANS_DEFER_COMMIT;
+
 	err = apfs_transaction_commit(sb);
 	if (err)
 		goto out_unlock;

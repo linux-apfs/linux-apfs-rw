@@ -455,7 +455,7 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 	/* Don't start transactions unless we are sure they fit in disk */
 	if (!apfs_transaction_has_room(sb, maxops)) {
 		/* Commit what we have so far to flush the queues */
-		nx_trans->force_commit = true;
+		nx_trans->t_state = APFS_NX_TRANS_FORCE_COMMIT;
 		err = apfs_transaction_commit(sb);
 		return err ? err : -ENOSPC;
 	}
@@ -525,7 +525,7 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		 */
 		list_del_init(&ai->i_list);
 
-		nx_trans->commiting = true;
+		nx_trans->t_state = APFS_NX_TRANS_COMMITTING;
 		mutex_unlock(&nxs_mutex);
 		up_write(&nxi->nx_big_sem);
 
@@ -534,7 +534,7 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 
 		down_write(&nxi->nx_big_sem);
 		mutex_lock(&nxs_mutex);
-		nx_trans->commiting = false;
+		nx_trans->t_state = APFS_NX_TRANS_NORMAL;
 
 		/* Transaction aborted by ->evict_inode(), error code is lost */
 		if (sb->s_flags & SB_RDONLY)
@@ -611,12 +611,17 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 
+	if (nx_trans->t_state == APFS_NX_TRANS_DEFER_COMMIT) {
+		nx_trans->t_state = APFS_NX_TRANS_NORMAL;
+		return false;
+	}
+
 	/* Avoid nested commits on ->evict_inode() */
-	if (nx_trans->commiting)
+	if (nx_trans->t_state == APFS_NX_TRANS_COMMITTING)
 		return false;
 
-	if (nx_trans->force_commit) {
-		nx_trans->force_commit = false;
+	if (nx_trans->t_state == APFS_NX_TRANS_FORCE_COMMIT) {
+		nx_trans->t_state = APFS_NX_TRANS_NORMAL;
 		return true;
 	}
 
@@ -770,7 +775,7 @@ void apfs_transaction_abort(struct super_block *sb)
 	}
 
 	ASSERT(nx_trans->t_old_msb);
-	nx_trans->force_commit = false;
+	nx_trans->t_state = APFS_NX_TRANS_NORMAL;
 	apfs_warn(sb, "aborting transaction");
 
 	--nxi->nx_xid;
