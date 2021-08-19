@@ -1215,6 +1215,10 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 		return 0;
 	}
 
+	err = apfs_flush_extent_cache(inode);
+	if (err)
+		return err;
+
 	inode_blks = apfs_size_to_blocks(sb, inode->i_size);
 	if (inode_blks < iblock) {
 		err = apfs_zero_inode_tail(inode);
@@ -1224,10 +1228,6 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 		if (err)
 			return err;
 	}
-
-	err = apfs_flush_extent_cache(inode);
-	if (err)
-		return err;
 
 	cache->logical_addr = logical_addr;
 	cache->phys_block_num = phys_bno;
