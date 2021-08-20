@@ -215,12 +215,10 @@ static int apfs_readdir(struct file *file, struct dir_context *ctx)
 			if (!dir_emit(ctx, drec.name, drec.name_len,
 				      drec.ino, drec.type))
 				break;
+			++ctx->pos;
 		}
 		pos--;
 	}
-
-	if (pos < 0)
-		ctx->pos -= pos;
 	apfs_free_query(sb, query);
 
 out:
