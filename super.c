@@ -804,6 +804,28 @@ int apfs_sync_fs(struct super_block *sb, int wait)
 	return err;
 }
 
+/* Only supports read-only remounts, everything else is silently ignored */
+static int apfs_remount(struct super_block *sb, int *flags, char *data)
+{
+	int err = 0;
+
+	err = sync_filesystem(sb);
+	if (err)
+		return err;
+
+	/* TODO: race? Could a new transaction have started already? */
+	if (*flags & SB_RDONLY)
+		sb->s_flags |= SB_RDONLY;
+
+	/*
+	 * TODO: readwrite remounts seem simple enough, but I worry about
+	 * remounting aborted transactions. I would probably also need a
+	 * dry-run version of parse_options().
+	 */
+	apfs_notice(sb, "all remounts can do is turn a volume read-only");
+	return 0;
+}
+
 static const struct super_operations apfs_sops = {
 	.alloc_inode	= apfs_alloc_inode,
 	.destroy_inode	= apfs_destroy_inode,
@@ -812,6 +834,7 @@ static const struct super_operations apfs_sops = {
 	.put_super	= apfs_put_super,
 	.sync_fs	= apfs_sync_fs,
 	.statfs		= apfs_statfs,
+	.remount_fs	= apfs_remount,
 	.show_options	= apfs_show_options,
 };
 
