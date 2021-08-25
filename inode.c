@@ -359,6 +359,9 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 	struct apfs_max_ops maxops;
 	int err;
 
+	if (unlikely(pos >= APFS_MAX_FILE_SIZE))
+		return -EFBIG;
+
 	maxops.cat = APFS_CREATE_DSTREAM_REC_MAXOPS +
 		     APFS_CREATE_CRYPTO_REC_MAXOPS +
 		     APFS_UPDATE_INODE_MAXOPS() +
@@ -1443,7 +1446,11 @@ int apfs_setattr(struct user_namespace *mnt_userns,
 	struct inode *inode = d_inode(dentry);
 	struct super_block *sb = inode->i_sb;
 	struct apfs_max_ops maxops;
+	bool resizing = S_ISREG(inode->i_mode) && (iattr->ia_valid & ATTR_SIZE);
 	int err;
+
+	if (resizing && iattr->ia_size > APFS_MAX_FILE_SIZE)
+		return -EFBIG;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	err = setattr_prepare(dentry, iattr);
@@ -1462,7 +1469,7 @@ int apfs_setattr(struct user_namespace *mnt_userns,
 		return err;
 	apfs_inode_join_transaction(sb, inode);
 
-	if (S_ISREG(inode->i_mode) && (iattr->ia_valid & ATTR_SIZE)) {
+	if (resizing) {
 		err = apfs_setsize(inode, iattr->ia_size);
 		if (err)
 			goto fail;

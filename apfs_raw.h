@@ -263,6 +263,14 @@ struct extref_record {
 #define APFS_FILE_EXTENT_FLAG_SHIFT	56
 
 /*
+ * Put a bound on maximum file size so that a growing truncation will always
+ * produce a single hole extent, even if 64k block sizes were in use. Larger
+ * file sizes could be supported with multiple extents of course, but it takes
+ * some work and I don't see the point.
+ */
+#define APFS_MAX_FILE_SIZE		0x00ffffffffff0000ULL
+
+/*
  * Structure of a file extent record
  */
 struct apfs_file_extent_val {
