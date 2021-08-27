@@ -5,6 +5,7 @@
 
 #include <linux/slab.h>
 #include <linux/buffer_head.h>
+#include <linux/mount.h>
 #include <linux/mpage.h>
 #include <linux/blk_types.h>
 #include "apfs.h"
@@ -555,6 +556,12 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 	ai->i_saved_gid = le32_to_cpu(inode_val->group);
 	i_gid_write(inode, ai->i_saved_gid);
 
+	ai->i_bsd_flags = bsd_flags = le32_to_cpu(inode_val->bsd_flags);
+	if (bsd_flags & APFS_INOBSD_IMMUTABLE)
+		inode->i_flags |= S_IMMUTABLE;
+	if (bsd_flags & APFS_INOBSD_APPEND)
+		inode->i_flags |= S_APPEND;
+
 	if (!S_ISDIR(inode->i_mode)) {
 		/*
 		 * Directory inodes don't store their link count, so to provide
@@ -572,7 +579,6 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 	ai->i_crtime = ns_to_timespec64(le64_to_cpu(inode_val->create_time));
 
 	inode->i_size = inode->i_blocks = 0;
-	bsd_flags = le32_to_cpu(inode_val->bsd_flags);
 	if ((bsd_flags & APFS_INOBSD_COMPRESSED) && !S_ISDIR(inode->i_mode)) {
 		if (!apfs_compress_get_size(inode, &inode->i_size)) {
 			inode->i_blocks = (inode->i_size + 511) >> 9;
@@ -767,9 +773,18 @@ int apfs_getattr(struct user_namespace *mnt_userns,
 	stat->result_mask |= STATX_BTIME;
 	stat->btime = ai->i_crtime;
 
-	if (apfs_xattr_get(inode, APFS_XATTR_NAME_COMPRESSED, NULL, 0) >= 0)
+	if (ai->i_bsd_flags & APFS_INOBSD_APPEND)
+		stat->attributes |= STATX_ATTR_APPEND;
+	if (ai->i_bsd_flags & APFS_INOBSD_IMMUTABLE)
+		stat->attributes |= STATX_ATTR_IMMUTABLE;
+	if (ai->i_bsd_flags & APFS_INOBSD_NODUMP)
+		stat->attributes |= STATX_ATTR_NODUMP;
+	if (ai->i_bsd_flags & APFS_INOBSD_COMPRESSED)
 		stat->attributes |= STATX_ATTR_COMPRESSED;
 
+	stat->attributes_mask |= STATX_ATTR_APPEND;
+	stat->attributes_mask |= STATX_ATTR_IMMUTABLE;
+	stat->attributes_mask |= STATX_ATTR_NODUMP;
 	stat->attributes_mask |= STATX_ATTR_COMPRESSED;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
@@ -1159,6 +1174,7 @@ int apfs_update_inode(struct inode *inode, char *new_name)
 	inode_raw->group = cpu_to_le32(i_gid_read(inode));
 	inode_raw->default_protection_class = cpu_to_le32(ai->i_key_class);
 	inode_raw->internal_flags = cpu_to_le64(ai->i_int_flags);
+	inode_raw->bsd_flags = cpu_to_le32(ai->i_bsd_flags);
 
 	/* Don't persist the uid/gid provided by the user on mount */
 	if (uid_valid(sbi->s_uid))
@@ -1329,6 +1345,7 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 	else
 		ai->i_key_class = 0;
 	ai->i_int_flags = APFS_INODE_NO_RSRC_FORK;
+	ai->i_bsd_flags = 0;
 	ai->i_sparse_bytes = 0;
 
 	now = current_time(inode);
@@ -1698,11 +1715,154 @@ fail:
 	return err;
 }
 
+/**
+ * apfs_getflags - Read an inode's bsd flags in FS_IOC_GETFLAGS format
+ * @inode: the vfs inode
+ */
+static unsigned int apfs_getflags(struct inode *inode)
+{
+	struct apfs_inode_info *ai = APFS_I(inode);
+	unsigned int flags = 0;
+
+	if (ai->i_bsd_flags & APFS_INOBSD_APPEND)
+		flags |= FS_APPEND_FL;
+	if (ai->i_bsd_flags & APFS_INOBSD_IMMUTABLE)
+		flags |= FS_IMMUTABLE_FL;
+	if (ai->i_bsd_flags & APFS_INOBSD_NODUMP)
+		flags |= FS_NODUMP_FL;
+	return flags;
+}
+
+/**
+ * apfs_ioc_getflags - Ioctl handler for FS_IOC_GETFLAGS
+ * @file:	affected file
+ * @arg:	ioctl argument
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_ioc_getflags(struct file *file, int __user *arg)
+{
+	unsigned int flags = apfs_getflags(file_inode(file));
+
+	return put_user(flags, arg);
+}
+
+/**
+ * apfs_setflags - Set an inode's bsd flags
+ * @inode: the vfs inode
+ * @flags: flags to set, in FS_IOC_SETFLAGS format
+ */
+static void apfs_setflags(struct inode *inode, unsigned int flags)
+{
+	struct apfs_inode_info *ai = APFS_I(inode);
+	unsigned int i_flags = 0;
+
+	if (flags & FS_APPEND_FL) {
+		ai->i_bsd_flags |= APFS_INOBSD_APPEND;
+		i_flags |= S_APPEND;
+	} else {
+		ai->i_bsd_flags &= ~APFS_INOBSD_APPEND;
+	}
+
+	if (flags & FS_IMMUTABLE_FL) {
+		ai->i_bsd_flags |= APFS_INOBSD_IMMUTABLE;
+		i_flags |= S_IMMUTABLE;
+	} else {
+		ai->i_bsd_flags &= ~APFS_INOBSD_IMMUTABLE;
+	}
+
+	if (flags & FS_NODUMP_FL)
+		ai->i_bsd_flags |= APFS_INOBSD_NODUMP;
+	else
+		ai->i_bsd_flags &= ~APFS_INOBSD_NODUMP;
+
+	inode_set_flags(inode, i_flags, S_IMMUTABLE | S_APPEND);
+}
+
+/**
+ * apfs_do_ioc_setflags - Actual work for apfs_ioc_setflags(), after preparation
+ * @inode:	affected vfs inode
+ * @newflags:	inode flags to set, in FS_IOC_SETFLAGS format
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_do_ioc_setflags(struct inode *inode, unsigned int newflags)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_max_ops maxops;
+	unsigned int oldflags;
+	int err;
+
+	lockdep_assert_held_write(&inode->i_rwsem);
+
+	oldflags = apfs_getflags(inode);
+	err = vfs_ioc_setflags_prepare(inode, oldflags, newflags);
+	if (err)
+		return err;
+
+	maxops.cat = APFS_UPDATE_INODE_MAXOPS();
+	maxops.blks = 0;
+	err = apfs_transaction_start(sb, maxops);
+	if (err)
+		return err;
+
+	apfs_inode_join_transaction(sb, inode);
+	apfs_setflags(inode, newflags);
+	inode->i_ctime = current_time(inode);
+
+	err = apfs_transaction_commit(sb);
+	if (err)
+		apfs_transaction_abort(sb);
+	return err;
+}
+
+/**
+ * apfs_ioc_setflags - Ioctl handler for FS_IOC_SETFLAGS
+ * @file:	affected file
+ * @arg:	ioctl argument
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_ioc_setflags(struct file *file, int __user *arg)
+{
+	struct inode *inode = file_inode(file);
+	struct super_block *sb = inode->i_sb;
+	unsigned int newflags;
+	int err;
+
+	if (sb->s_flags & SB_RDONLY)
+		return -EROFS;
+
+	if (!inode_owner_or_capable(inode))
+		return -EPERM;
+
+	if (get_user(newflags, arg))
+		return -EFAULT;
+
+	if (newflags & ~(FS_APPEND_FL | FS_IMMUTABLE_FL | FS_NODUMP_FL))
+		return -EOPNOTSUPP;
+
+	err = mnt_want_write_file(file);
+	if (err)
+		return err;
+
+	inode_lock(inode);
+	err = apfs_do_ioc_setflags(inode, newflags);
+	inode_unlock(inode);
+
+	mnt_drop_write_file(file);
+	return err;
+}
+
 long apfs_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	void __user *argp = (void __user *)arg;
 
 	switch (cmd) {
+	case FS_IOC_GETFLAGS:
+		return apfs_ioc_getflags(file, argp);
+	case FS_IOC_SETFLAGS:
+		return apfs_ioc_setflags(file, argp);
 	case APFS_IOC_SET_DFLT_PFK:
 		return apfs_ioc_set_dflt_pfk(file, argp);
 	case APFS_IOC_SET_DIR_CLASS:
@@ -1719,6 +1879,10 @@ long apfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	void __user *argp = (void __user *)arg;
 
 	switch (cmd) {
+	case FS_IOC_GETFLAGS:
+		return apfs_ioc_getflags(file, argp);
+	case FS_IOC_SETFLAGS:
+		return apfs_ioc_setflags(file, argp);
 	case APFS_IOC_SET_PFK:
 		return apfs_ioc_set_pfk(file, argp);
 	case APFS_IOC_GET_CLASS:

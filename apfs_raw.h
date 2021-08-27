@@ -348,6 +348,9 @@ struct apfs_crypto_state_val {
 						| APFS_INODE_PINNED_TO_TIER2)
 
 /* BSD flags */
+#define APFS_INOBSD_NODUMP			0x00000001
+#define APFS_INOBSD_IMMUTABLE			0x00000002
+#define APFS_INOBSD_APPEND			0x00000004
 #define APFS_INOBSD_COMPRESSED			0x00000020
 
 /*
