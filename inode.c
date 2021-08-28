@@ -68,8 +68,10 @@ static int apfs_create_dstream_rec(struct inode *inode)
 
 	apfs_key_set_hdr(APFS_TYPE_DSTREAM_ID, ai->i_extent_id, &raw_key);
 	raw_val.refcnt = cpu_to_le32(1);
-	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
-				&raw_val, sizeof(raw_val));
+	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+	if (ret)
+		goto out;
+	ai->i_has_dstream = true;
 out:
 	apfs_free_query(sb, query);
 	return ret;
@@ -579,6 +581,7 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 	ai->i_crtime = ns_to_timespec64(le64_to_cpu(inode_val->create_time));
 
 	inode->i_size = inode->i_blocks = 0;
+	ai->i_has_dstream = false;
 	if ((bsd_flags & APFS_INOBSD_COMPRESSED) && !S_ISDIR(inode->i_mode)) {
 		if (!apfs_compress_get_size(inode, &inode->i_size)) {
 			inode->i_blocks = (inode->i_size + 511) >> 9;
@@ -593,6 +596,7 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 
 			inode->i_size = le64_to_cpu(dstream->size);
 			inode->i_blocks = le64_to_cpu(dstream->alloced_size) >> 9;
+			ai->i_has_dstream = true;
 		}
 	}
 	xval = NULL;
@@ -991,11 +995,16 @@ fail:
  */
 static int apfs_inode_resize(struct inode *inode, struct apfs_query *query)
 {
+	struct apfs_inode_info *ai = APFS_I(inode);
 	char *raw;
 	struct apfs_inode_val *inode_raw;
 	char *xval;
 	int xlen;
 	int err;
+
+	/* All dstream records must have a matching xfield, even if empty */
+	if (!ai->i_has_dstream)
+		return 0;
 
 	err = apfs_query_join_transaction(query);
 	if (err)
@@ -1006,8 +1015,6 @@ static int apfs_inode_resize(struct inode *inode, struct apfs_query *query)
 	xlen = apfs_find_xfield(inode_raw->xfields,
 				query->len - sizeof(*inode_raw),
 				APFS_INO_EXT_TYPE_DSTREAM, &xval);
-	if (!xlen && !inode->i_size) /* Empty file: no dstream needed yet */
-		return 0;
 
 	if (xlen) {
 		struct apfs_dstream *dstream;
@@ -1347,6 +1354,7 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 	ai->i_int_flags = APFS_INODE_NO_RSRC_FORK;
 	ai->i_bsd_flags = 0;
 	ai->i_sparse_bytes = 0;
+	ai->i_has_dstream = false;
 
 	now = current_time(inode);
 	inode->i_atime = inode->i_mtime = inode->i_ctime = ai->i_crtime = now;

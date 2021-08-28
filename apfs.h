@@ -567,6 +567,7 @@ struct apfs_inode_info {
 	u64			i_int_flags;	 /* Internal flags */
 	u32			i_bsd_flags;	 /* BSD flags */
 	u64			i_sparse_bytes;	 /* Sparse byte count in file */
+	bool			i_has_dstream;	 /* Is there a dstream record? */
 	struct list_head	i_list;		 /* List of inodes in transaction */
 
 	struct inode vfs_inode;
