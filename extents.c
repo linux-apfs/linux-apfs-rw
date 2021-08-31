@@ -54,36 +54,35 @@ int apfs_extent_from_query(struct apfs_query *query,
 
 /**
  * apfs_extent_read - Read the extent record that covers a block
- * @inode:	inode that owns the record
- * @iblock:	logical number of the wanted block
+ * @dstream:	data stream info
+ * @dsblock:	logical number of the wanted block
  * @extent:	Return parameter.  The extent found.
  *
  * Finds and caches the extent record.  On success, returns a pointer to the
  * cache record; on failure, returns an error code.
  */
-static int apfs_extent_read(struct inode *inode, sector_t iblock,
+static int apfs_extent_read(struct apfs_dstream_info *dstream, sector_t dsblock,
 			    struct apfs_file_extent *extent)
 {
-	struct super_block *sb = inode->i_sb;
+	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_key key;
 	struct apfs_query *query;
-	struct apfs_file_extent *cache = &ai->i_cached_extent;
-	u64 iaddr = iblock << inode->i_blkbits;
+	struct apfs_file_extent *cache = &dstream->ds_cached_ext;
+	u64 iaddr = dsblock << sb->s_blocksize_bits;
 	int ret = 0;
 
-	spin_lock(&ai->i_extent_lock);
+	spin_lock(&dstream->ds_ext_lock);
 	if (iaddr >= cache->logical_addr &&
 	    iaddr < cache->logical_addr + cache->len) {
 		*extent = *cache;
-		spin_unlock(&ai->i_extent_lock);
+		spin_unlock(&dstream->ds_ext_lock);
 		return 0;
 	}
-	spin_unlock(&ai->i_extent_lock);
+	spin_unlock(&dstream->ds_ext_lock);
 
 	/* We will search for the extent that covers iblock */
-	apfs_init_file_extent_key(ai->i_extent_id, iaddr, &key);
+	apfs_init_file_extent_key(dstream->ds_id, iaddr, &key);
 
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
@@ -97,8 +96,7 @@ static int apfs_extent_read(struct inode *inode, sector_t iblock,
 
 	ret = apfs_extent_from_query(query, extent);
 	if (ret) {
-		apfs_alert(sb, "bad extent record for inode 0x%llx",
-			   apfs_ino(inode));
+		apfs_alert(sb, "bad extent record for dstream 0x%llx", dstream->ds_id);
 		goto done;
 	}
 
@@ -106,10 +104,10 @@ static int apfs_extent_read(struct inode *inode, sector_t iblock,
 	 * For now prioritize the deferral of writes.
 	 * i_extent_dirty is protected by the read semaphore.
 	 */
-	if (!ai->i_extent_dirty) {
-		spin_lock(&ai->i_extent_lock);
+	if (!dstream->ds_ext_dirty) {
+		spin_lock(&dstream->ds_ext_lock);
 		*cache = *extent;
-		spin_unlock(&ai->i_extent_lock);
+		spin_unlock(&dstream->ds_ext_lock);
 	}
 
 done:
@@ -118,25 +116,25 @@ done:
 }
 
 /* This does the same as apfs_get_block(), but without taking any locks */
-int __apfs_get_block(struct inode *inode, sector_t iblock,
+int __apfs_get_block(struct apfs_dstream_info *dstream, sector_t dsblock,
 		     struct buffer_head *bh_result, int create)
 {
-	struct super_block *sb = inode->i_sb;
+	struct super_block *sb = dstream->ds_sb;
 	struct apfs_file_extent ext;
 	u64 blk_off, bno, map_len;
 	int ret;
 
 	ASSERT(!create);
 
-	ret = apfs_extent_read(inode, iblock, &ext);
+	ret = apfs_extent_read(dstream, dsblock, &ext);
 	if (ret)
 		return ret;
 
 	/* Find the block offset of iblock within the extent */
-	blk_off = iblock - (ext.logical_addr >> inode->i_blkbits);
+	blk_off = dsblock - (ext.logical_addr >> sb->s_blocksize_bits);
 
 	/* Make sure we don't read past the extent boundaries */
-	map_len = ext.len - (blk_off << inode->i_blkbits);
+	map_len = ext.len - (blk_off << sb->s_blocksize_bits);
 	if (bh_result->b_size > map_len)
 		bh_result->b_size = map_len;
 
@@ -159,10 +157,11 @@ int apfs_get_block(struct inode *inode, sector_t iblock,
 		   struct buffer_head *bh_result, int create)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(inode->i_sb);
+	struct apfs_inode_info *ai = APFS_I(inode);
 	int ret;
 
 	down_read(&nxi->nx_big_sem);
-	ret = __apfs_get_block(inode, iblock, bh_result, create);
+	ret = __apfs_get_block(&ai->i_dstream, iblock, bh_result, create);
 	up_read(&nxi->nx_big_sem);
 	return ret;
 }
@@ -188,13 +187,13 @@ static inline void apfs_set_extent_length(struct apfs_file_extent_val *ext, u64 
 /**
  * apfs_shrink_extent_head - Shrink an extent record in its head
  * @query:	the query that found the record
- * @inode:	vfs inode for the file
+ * @dstream:	data stream info
  * @start:	new logical start for the extent
  *
  * Also deletes the physical extent records for the head. Returns 0 on success
  * or a negative error code in case of failure.
  */
-static int apfs_shrink_extent_head(struct apfs_query *query, struct inode *inode, u64 start)
+static int apfs_shrink_extent_head(struct apfs_query *query, struct apfs_dstream_info *dstream, u64 start)
 {
 	struct super_block *sb = query->node->object.sb;
 	struct apfs_file_extent_key key;
@@ -224,7 +223,7 @@ static int apfs_shrink_extent_head(struct apfs_query *query, struct inode *inode
 		if (err)
 			return err;
 	} else {
-		APFS_I(inode)->i_sparse_bytes -= head_len;
+		dstream->ds_sparse_bytes -= head_len;
 	}
 
 	/* This is the actual shrinkage of the logical extent */
@@ -238,13 +237,13 @@ static int apfs_shrink_extent_head(struct apfs_query *query, struct inode *inode
 /**
  * apfs_shrink_extent_tail - Shrink an extent record in its tail
  * @query:	the query that found the record
- * @inode:	vfs inode for the file
+ * @dstream:	data stream info
  * @end:	new logical end for the extent
  *
  * Also deletes the physical extent records for the tail. Returns 0 on success
  * or a negative error code in case of failure.
  */
-static int apfs_shrink_extent_tail(struct apfs_query *query, struct inode *inode, u64 end)
+static int apfs_shrink_extent_tail(struct apfs_query *query, struct apfs_dstream_info *dstream, u64 end)
 {
 	struct super_block *sb = query->node->object.sb;
 	struct apfs_file_extent_val *val;
@@ -279,7 +278,7 @@ static int apfs_shrink_extent_tail(struct apfs_query *query, struct inode *inode
 		if (err)
 			return err;
 	} else {
-		APFS_I(inode)->i_sparse_bytes -= tail_len;
+		dstream->ds_sparse_bytes -= tail_len;
 	}
 
 	/* This is the actual shrinkage of the logical extent */
@@ -303,23 +302,22 @@ static inline bool apfs_query_found_extent(struct apfs_query *query)
 }
 
 /**
- * apfs_update_tail_extent - Grow the tail extent for an inode
- * @inode:	the vfs inode
+ * apfs_update_tail_extent - Grow the tail extent for a data stream
+ * @dstream:	data stream info
  * @extent:	new in-memory extent
  *
  * Also takes care of any needed changes to the physical extent records. Returns
  * 0 on success or a negative error code in case of failure.
  */
-static int apfs_update_tail_extent(struct inode *inode, const struct apfs_file_extent *extent)
+static int apfs_update_tail_extent(struct apfs_dstream_info *dstream, const struct apfs_file_extent *extent)
 {
-	struct super_block *sb = inode->i_sb;
+	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_file_extent_key raw_key;
 	struct apfs_file_extent_val raw_val;
-	u64 extent_id = ai->i_extent_id;
+	u64 extent_id = dstream->ds_id;
 	int ret;
 	u64 new_crypto;
 
@@ -366,7 +364,7 @@ static int apfs_update_tail_extent(struct inode *inode, const struct apfs_file_e
 			if (ret)
 				goto out;
 			if (apfs_ext_is_hole(&tail)) {
-				ai->i_sparse_bytes -= tail.len;
+				dstream->ds_sparse_bytes -= tail.len;
 			} else if (tail.phys_block_num != extent->phys_block_num) {
 				ret = apfs_delete_phys_extent(sb, &tail);
 				if (ret)
@@ -386,7 +384,7 @@ static int apfs_update_tail_extent(struct inode *inode, const struct apfs_file_e
 			 * the cache before a write...
 			 */
 			if (extent->logical_addr < tail.logical_addr + tail.len) {
-				ret = apfs_shrink_extent_tail(query, inode, extent->logical_addr);
+				ret = apfs_shrink_extent_tail(query, dstream, extent->logical_addr);
 				if (ret)
 					goto out;
 			}
@@ -453,24 +451,23 @@ static int apfs_split_extent(struct apfs_query *query, u64 div)
 }
 
 /**
- * apfs_update_mid_extent - Create or update a non-tail extent for an inode
- * @inode:	the vfs inode
+ * apfs_update_mid_extent - Create or update a non-tail extent for a dstream
+ * @dstream:	data stream info
  * @extent:	new in-memory extent
  *
  * Also takes care of any needed changes to the physical extent records. Returns
  * 0 on success or a negative error code in case of failure.
  */
-static int apfs_update_mid_extent(struct inode *inode, const struct apfs_file_extent *extent)
+static int apfs_update_mid_extent(struct apfs_dstream_info *dstream, const struct apfs_file_extent *extent)
 {
-	struct super_block *sb = inode->i_sb;
+	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_file_extent_key raw_key;
 	struct apfs_file_extent_val raw_val;
 	struct apfs_file_extent prev_ext;
-	u64 extent_id = ai->i_extent_id;
+	u64 extent_id = dstream->ds_id;
 	u64 prev_crypto, new_crypto;
 	u64 prev_start, prev_end;
 	bool second_run = false;
@@ -505,7 +502,7 @@ search_and_insert:
 		 * beginning of the file.
 		 */
 		if (!second_run) {
-			apfs_alert(sb, "missing extent on inode 0x%llx", apfs_ino(inode));
+			apfs_alert(sb, "missing extent on dstream 0x%llx", extent_id);
 			ret = -EFSCORRUPTED;
 		} else {
 			ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
@@ -514,7 +511,7 @@ search_and_insert:
 	}
 
 	if (apfs_extent_from_query(query, &prev_ext)) {
-		apfs_alert(sb, "bad mid extent record on inode 0x%llx", apfs_ino(inode));
+		apfs_alert(sb, "bad mid extent record on dstream 0x%llx", extent_id);
 		ret = -EFSCORRUPTED;
 		goto out;
 	}
@@ -533,7 +530,7 @@ search_and_insert:
 		if (ret)
 			goto out;
 		if (apfs_ext_is_hole(&prev_ext)) {
-			ai->i_sparse_bytes -= prev_ext.len;
+			dstream->ds_sparse_bytes -= prev_ext.len;
 		} else if (prev_ext.phys_block_num != extent->phys_block_num) {
 			ret = apfs_delete_phys_extent(sb, &prev_ext);
 			if (ret)
@@ -546,11 +543,11 @@ search_and_insert:
 		/* The new extent is the first logical block of the old one */
 		if (second_run) {
 			/* I don't know if this is possible, but be safe */
-			apfs_alert(sb, "recursion shrinking extent head for inode 0x%llx", apfs_ino(inode));
+			apfs_alert(sb, "recursion shrinking extent head for dstream 0x%llx", extent_id);
 			ret = -EFSCORRUPTED;
 			goto out;
 		}
-		ret = apfs_shrink_extent_head(query, inode, extent->logical_addr + extent->len);
+		ret = apfs_shrink_extent_head(query, dstream, extent->logical_addr + extent->len);
 		if (ret)
 			goto out;
 		/* The query should point to the previous record, start again */
@@ -559,7 +556,7 @@ search_and_insert:
 		goto search_and_insert;
 	} else if (prev_end == extent->logical_addr + extent->len) {
 		/* The new extent is the last logical block of the old one */
-		ret = apfs_shrink_extent_tail(query, inode, extent->logical_addr);
+		ret = apfs_shrink_extent_tail(query, dstream, extent->logical_addr);
 		if (ret)
 			goto out;
 		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
@@ -569,7 +566,7 @@ search_and_insert:
 		/* The new extent is logically in the middle of the old one */
 		if (second_run) {
 			/* I don't know if this is possible, but be safe */
-			apfs_alert(sb, "recursion when splitting extents for inode 0x%llx", apfs_ino(inode));
+			apfs_alert(sb, "recursion when splitting extents for dstream 0x%llx", extent_id);
 			ret = -EFSCORRUPTED;
 			goto out;
 		}
@@ -582,7 +579,7 @@ search_and_insert:
 		goto search_and_insert;
 	} else {
 		/* I don't know what this is, be safe */
-		apfs_alert(sb, "strange extents for inode 0x%llx", apfs_ino(inode));
+		apfs_alert(sb, "strange extents for dstream 0x%llx", extent_id);
 		ret = -EFSCORRUPTED;
 		goto out;
 	}
@@ -596,37 +593,36 @@ out:
 
 /**
  * apfs_update_extent - Create or update the extent record for an extent
- * @inode:	the vfs inode
+ * @dstream:	data stream info
  * @extent:	new in-memory file extent
  *
- * The @extent must either be a new tail for the file, or a single block.
+ * The @extent must either be a new tail for the dstream, or a single block.
  * Returns 0 on success or a negative error code in case of failure.
  */
-static int apfs_update_extent(struct inode *inode, const struct apfs_file_extent *extent)
+static int apfs_update_extent(struct apfs_dstream_info *dstream, const struct apfs_file_extent *extent)
 {
-	struct super_block *sb = inode->i_sb;
+	struct super_block *sb = dstream->ds_sb;
 
-	if (extent->logical_addr + extent->len >= inode->i_size)
-		return apfs_update_tail_extent(inode, extent);
+	if (extent->logical_addr + extent->len >= dstream->ds_size)
+		return apfs_update_tail_extent(dstream, extent);
 	if (extent->len > sb->s_blocksize)
 		return -EOPNOTSUPP;
-	return apfs_update_mid_extent(inode, extent);
+	return apfs_update_mid_extent(dstream, extent);
 }
 #define APFS_UPDATE_EXTENTS_MAXOPS	(1 + 2 * APFS_CRYPTO_ADJ_REFCNT_MAXOPS())
 
 /**
  * apfs_insert_phys_extent - Create or grow the physical record for an extent
- * @inode:	the vfs inode
+ * @dstream:	data stream info for the extent
  * @extent:	new in-memory file extent
  *
  * Only works for appending to extents, for now. TODO: reference counting.
  * Returns 0 on success or a negative error code in case of failure.
  */
-static int apfs_insert_phys_extent(struct inode *inode, const struct apfs_file_extent *extent)
+static int apfs_insert_phys_extent(struct apfs_dstream_info *dstream, const struct apfs_file_extent *extent)
 {
-	struct super_block *sb = inode->i_sb;
+	struct super_block *sb = dstream->ds_sb;
 	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
-	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_node *extref_root;
 	struct apfs_key key;
 	struct apfs_query *query = NULL;
@@ -661,7 +657,7 @@ static int apfs_insert_phys_extent(struct inode *inode, const struct apfs_file_e
 
 	apfs_key_set_hdr(APFS_TYPE_EXTENT, extent->phys_block_num, &raw_key);
 	raw_val.len_and_kind = cpu_to_le64(kind | blkcnt);
-	raw_val.owning_obj_id = cpu_to_le64(ai->i_extent_id);
+	raw_val.owning_obj_id = cpu_to_le64(dstream->ds_id);
 	raw_val.refcnt = cpu_to_le32(1);
 
 	if (ret)
@@ -993,38 +989,36 @@ fail:
 }
 
 /**
- * apfs_inode_cache_is_tail - Is the tail of this inode in its extent cache?
- * @inode: inode to check
+ * apfs_dstream_cache_is_tail - Is the tail of this dstream in its extent cache?
+ * @dstream: dstream to check
  */
-static inline bool apfs_inode_cache_is_tail(struct inode *inode)
+static inline bool apfs_dstream_cache_is_tail(struct apfs_dstream_info *dstream)
 {
-	struct apfs_inode_info *ai = APFS_I(inode);
-	struct apfs_file_extent *cache = &ai->i_cached_extent;
+	struct apfs_file_extent *cache = &dstream->ds_cached_ext;
 
 	/* nx_big_sem provides the locking for the cache here */
-	return cache->len && (inode->i_size <= cache->logical_addr + cache->len);
+	return cache->len && (dstream->ds_size <= cache->logical_addr + cache->len);
 }
 
 /**
  * apfs_flush_extent_cache - Write the cached extent to the catalog, if dirty
- * @inode: the inode to flush
+ * @dstream: data stream to flush
  *
  * Returns 0 on success or a negative error code in case of failure.
  */
-int apfs_flush_extent_cache(struct inode *inode)
+int apfs_flush_extent_cache(struct apfs_dstream_info *dstream)
 {
-	struct apfs_inode_info *ai = APFS_I(inode);
-	struct apfs_file_extent *ext = &ai->i_cached_extent;
+	struct apfs_file_extent *ext = &dstream->ds_cached_ext;
 	int err;
 
-	if (!ai->i_extent_dirty)
+	if (!dstream->ds_ext_dirty)
 		return 0;
 	ASSERT(ext->len > 0);
 
-	err = apfs_update_extent(inode, ext);
+	err = apfs_update_extent(dstream, ext);
 	if (err)
 		return err;
-	err = apfs_insert_phys_extent(inode, ext);
+	err = apfs_insert_phys_extent(dstream, ext);
 	if (err)
 		return err;
 
@@ -1035,30 +1029,29 @@ int apfs_flush_extent_cache(struct inode *inode)
 	 * stat(), so I'm ignoring it for now.
 	 */
 
-	ai->i_extent_dirty = false;
+	dstream->ds_ext_dirty = false;
 	return 0;
 }
 #define APFS_FLUSH_EXTENT_CACHE	APFS_UPDATE_EXTENTS_MAXOPS
 
 /**
- * apfs_create_hole - Create and insert a hole extent for the file
- * @inode:	vfs inode
+ * apfs_create_hole - Create and insert a hole extent for the dstream
+ * @dstream:	data stream info
  * @start:	first logical block number for the hole
  * @end:	first logical block number right after the hole
  *
  * Returns 0 on success, or a negative error code in case of failure.
  * TODO: what happens to the crypto refcount?
  */
-static int apfs_create_hole(struct inode *inode, u64 start, u64 end)
+static int apfs_create_hole(struct apfs_dstream_info *dstream, u64 start, u64 end)
 {
-	struct super_block *sb = inode->i_sb;
+	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_file_extent_key raw_key;
 	struct apfs_file_extent_val raw_val;
-	u64 extent_id = ai->i_extent_id;
+	u64 extent_id = dstream->ds_id;
 	int ret;
 
 	if (start == end)
@@ -1086,7 +1079,7 @@ static int apfs_create_hole(struct inode *inode, u64 start, u64 end)
 		goto out;
 
 	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
-	ai->i_sparse_bytes += end - start;
+	dstream->ds_sparse_bytes += end - start;
 
 out:
 	apfs_free_query(sb, query);
@@ -1106,41 +1099,40 @@ static inline u64 apfs_size_to_blocks(struct super_block *sb, u64 size)
 }
 
 /**
- * apfs_zero_inode_tail - Zero out stale bytes in an inode's last block
- * @inode: the vfs inode
+ * apfs_zero_dstream_tail - Zero out stale bytes in a data stream's last block
+ * @dstream: data stream info
  *
  * Returns 0 on success, or a negative error code in case of failure.
  */
-static int apfs_zero_inode_tail(struct inode *inode)
+static int apfs_zero_dstream_tail(struct apfs_dstream_info *dstream)
 {
-	struct super_block *sb = inode->i_sb;
-	struct apfs_inode_info *ai = APFS_I(inode);
+	struct super_block *sb = dstream->ds_sb;
 	struct buffer_head tmp;
 	struct buffer_head *bh;
-	u64 inode_blks;
+	u64 dstream_blks;
 	int valid_length;
 	int err;
 
 	/* No stale bytes if no actual content */
-	if (inode->i_size <= ai->i_sparse_bytes)
+	if (dstream->ds_size <= dstream->ds_sparse_bytes)
 		return 0;
 
 	/* No stale tail if the last block is fully used */
-	valid_length = inode->i_size & (sb->s_blocksize - 1);
+	valid_length = dstream->ds_size & (sb->s_blocksize - 1);
 	if (valid_length == 0)
 		return 0;
 
-	inode_blks = apfs_size_to_blocks(sb, inode->i_size);
+	dstream_blks = apfs_size_to_blocks(sb, dstream->ds_size);
 
 	/* XXX: refactor this to get rid of the fake buffer head */
 	tmp.b_blocknr = -1;
-	err = __apfs_get_block(inode, inode_blks - 1, &tmp, false /* create */);
+	err = __apfs_get_block(dstream, dstream_blks - 1, &tmp, false /* create */);
 	if (err)
 		return err;
 	if (tmp.b_blocknr == -1) /* No stale bytes in holes */
 		return 0;
 
-	bh = apfs_sb_bread(inode->i_sb, tmp.b_blocknr);
+	bh = apfs_sb_bread(sb, tmp.b_blocknr);
 	if (!bh)
 		return -EIO;
 
@@ -1168,22 +1160,26 @@ static void apfs_zero_bh_tail(struct super_block *sb, struct buffer_head *bh, u6
 		memset(bh->b_data + length, 0, sb->s_blocksize - length);
 }
 
-int apfs_get_new_block(struct inode *inode, sector_t iblock,
-		       struct buffer_head *bh_result, int create)
+/**
+ * apfs_dstream_get_new_block - Like the get_block_t function, but for dstreams
+ * @dstream:	data stream info
+ * @dsblock:	logical dstream block to map
+ * @bh_result:	buffer head to map
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsblock, struct buffer_head *bh_result)
 {
-	struct super_block *sb = inode->i_sb;
+	struct super_block *sb = dstream->ds_sb;
 	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
-	struct apfs_inode_info *ai = APFS_I(inode);
-	struct apfs_file_extent *cache = &ai->i_cached_extent;
-	u64 phys_bno, logical_addr, cache_blks, inode_blks;
+	struct apfs_file_extent *cache = &dstream->ds_cached_ext;
+	u64 phys_bno, logical_addr, cache_blks, dstream_blks;
 	int err;
-
-	ASSERT(create);
 
 	cache_blks = apfs_size_to_blocks(sb, cache->len);
 
 	/* TODO: preallocate tail blocks */
-	logical_addr = iblock << inode->i_blkbits;
+	logical_addr = dsblock << sb->s_blocksize_bits;
 
 	err = apfs_spaceman_allocate_block(sb, &phys_bno, false /* backwards */);
 	if (err)
@@ -1202,29 +1198,29 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 		 * this also takes care of holes in sparse files.
 		 */
 		set_buffer_new(bh_result);
-	} else if (inode->i_size > logical_addr) {
+	} else if (dstream->ds_size > logical_addr) {
 		/* The last block may have stale data left from a truncation */
-		apfs_zero_bh_tail(sb, bh_result, inode->i_size - logical_addr);
+		apfs_zero_bh_tail(sb, bh_result, dstream->ds_size - logical_addr);
 	}
 
-	if (apfs_inode_cache_is_tail(inode) &&
+	if (apfs_dstream_cache_is_tail(dstream) &&
 	    logical_addr == cache->logical_addr + cache->len &&
 	    phys_bno == cache->phys_block_num + cache_blks) {
 		cache->len += sb->s_blocksize;
-		ai->i_extent_dirty = true;
+		dstream->ds_ext_dirty = true;
 		return 0;
 	}
 
-	err = apfs_flush_extent_cache(inode);
+	err = apfs_flush_extent_cache(dstream);
 	if (err)
 		return err;
 
-	inode_blks = apfs_size_to_blocks(sb, inode->i_size);
-	if (inode_blks < iblock) {
-		err = apfs_zero_inode_tail(inode);
+	dstream_blks = apfs_size_to_blocks(sb, dstream->ds_size);
+	if (dstream_blks < dsblock) {
+		err = apfs_zero_dstream_tail(dstream);
 		if (err)
 			return err;
-		err = apfs_create_hole(inode, inode_blks, iblock);
+		err = apfs_create_hole(dstream, dstream_blks, dsblock);
 		if (err)
 			return err;
 	}
@@ -1232,7 +1228,7 @@ int apfs_get_new_block(struct inode *inode, sector_t iblock,
 	cache->logical_addr = logical_addr;
 	cache->phys_block_num = phys_bno;
 	cache->len = sb->s_blocksize;
-	ai->i_extent_dirty = true;
+	dstream->ds_ext_dirty = true;
 	return 0;
 }
 int APFS_GET_NEW_BLOCK_MAXOPS(void)
@@ -1240,27 +1236,35 @@ int APFS_GET_NEW_BLOCK_MAXOPS(void)
 	return APFS_FLUSH_EXTENT_CACHE;
 }
 
+int apfs_get_new_block(struct inode *inode, sector_t iblock,
+		       struct buffer_head *bh_result, int create)
+{
+	struct apfs_inode_info *ai = APFS_I(inode);
+
+	ASSERT(create);
+	return apfs_dstream_get_new_block(&ai->i_dstream, iblock, bh_result);
+}
+
 /**
- * apfs_shrink_file_last_extent - Shrink the last extent of a file being resized
- * @inode:	vfs inode for the file
- * @new_size:	the new size for the whole file
+ * apfs_shrink_dstream_last_extent - Shrink last extent of dstream being resized
+ * @dstream:	data stream info
+ * @new_size:	new size for the whole data stream
  *
  * Deletes, shrinks or zeroes the last extent, as needed for the truncation of
- * the file.
+ * the data stream.
  *
  * Only works with the last extent, so it needs to be called repeatedly to
  * complete the truncation. Returns -EAGAIN in that case, or 0 when the process
  * is complete. Returns other negative error codes in case of failure.
  */
-static int apfs_shrink_file_last_extent(struct inode *inode, loff_t new_size)
+static int apfs_shrink_dstream_last_extent(struct apfs_dstream_info *dstream, loff_t new_size)
 {
-	struct super_block *sb = inode->i_sb;
+	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_file_extent tail;
-	u64 extent_id = ai->i_extent_id;
+	u64 extent_id = dstream->ds_id;
 	int ret = 0;
 
 	apfs_init_file_extent_key(extent_id, -1, &key);
@@ -1298,7 +1302,7 @@ static int apfs_shrink_file_last_extent(struct inode *inode, loff_t new_size)
 		if (ret)
 			goto out;
 		if (apfs_ext_is_hole(&tail)) {
-			ai->i_sparse_bytes -= tail.len;
+			dstream->ds_sparse_bytes -= tail.len;
 		} else {
 			ret = apfs_delete_phys_extent(sb, &tail);
 			if (ret)
@@ -1314,7 +1318,7 @@ static int apfs_shrink_file_last_extent(struct inode *inode, loff_t new_size)
 		 * TODO: preserve the physical tail to be overwritten later.
 		 */
 		new_size = apfs_size_to_blocks(sb, new_size) << sb->s_blocksize_bits;
-		ret = apfs_shrink_extent_tail(query, inode, new_size);
+		ret = apfs_shrink_extent_tail(query, dstream, new_size);
 	}
 
 out:
@@ -1323,55 +1327,53 @@ out:
 }
 
 /**
- * apfs_shrink_file - Shrink a file's extents to a new length
- * @inode:	vfs inode for the file
+ * apfs_shrink_dstream - Shrink a data stream's extents to a new length
+ * @dstream:	data stream info
  * @new_size:	the new size
  *
  * Returns 0 on success, or a negative error code in case of failure.
  */
-static int apfs_shrink_file(struct inode *inode, loff_t new_size)
+static int apfs_shrink_dstream(struct apfs_dstream_info *dstream, loff_t new_size)
 {
 	int ret;
 
 	do {
-		ret = apfs_shrink_file_last_extent(inode, new_size);
+		ret = apfs_shrink_dstream_last_extent(dstream, new_size);
 	} while (ret == -EAGAIN);
 
 	return ret;
 }
 
 /**
- * apfs_truncate - Truncate a file's content
- * @inode:	vfs inode for the file
+ * apfs_truncate - Truncate a data stream's content
+ * @dstream:	data stream info
  * @new_size:	the new size
  *
- * Doesn't make any changes to the reported size. Returns 0 on success, or a
- * negative error code in case of failure.
+ * Returns 0 on success, or a negative error code in case of failure.
  */
-int apfs_truncate(struct inode *inode, loff_t new_size)
+int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size)
 {
-	struct super_block *sb = inode->i_sb;
-	struct apfs_inode_info *ai = APFS_I(inode);
+	struct super_block *sb = dstream->ds_sb;
 	u64 old_blks, new_blks;
-	struct apfs_file_extent *cache = &ai->i_cached_extent;
+	struct apfs_file_extent *cache = &dstream->ds_cached_ext;
 	int err;
 
 	/* TODO: don't write the cached extent if it will be deleted */
-	err = apfs_flush_extent_cache(inode);
+	err = apfs_flush_extent_cache(dstream);
 	if (err)
 		return err;
-	ai->i_extent_dirty = false;
+	dstream->ds_ext_dirty = false;
 
 	/* TODO: keep the cache valid on truncation */
 	cache->len = 0;
 
-	if (new_size < inode->i_size)
-		return apfs_shrink_file(inode, new_size);
+	if (new_size < dstream->ds_size)
+		return apfs_shrink_dstream(dstream, new_size);
 
-	err = apfs_zero_inode_tail(inode);
+	err = apfs_zero_dstream_tail(dstream);
 	if (err)
 		return err;
 	new_blks = apfs_size_to_blocks(sb, new_size);
-	old_blks = apfs_size_to_blocks(sb, inode->i_size);
-	return apfs_create_hole(inode, old_blks, new_blks);
+	old_blks = apfs_size_to_blocks(sb, dstream->ds_size);
+	return apfs_create_hole(dstream, old_blks, new_blks);
 }

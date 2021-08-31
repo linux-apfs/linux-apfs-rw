@@ -550,15 +550,24 @@ struct apfs_phys_extent {
 };
 
 /*
+ * Data stream info in memory
+ */
+struct apfs_dstream_info {
+	struct super_block	*ds_sb;		/* Filesystem superblock */
+	u64			ds_id;		/* ID of the extent records */
+	u64			ds_size;	/* Length of the stream */
+	u64			ds_sparse_bytes;/* Hole byte count in stream */
+	struct apfs_file_extent	ds_cached_ext;	/* Latest extent record */
+	bool			ds_ext_dirty;	/* Is ds_cached_ext dirty? */
+	spinlock_t		ds_ext_lock;	/* Protects ds_cached_ext */
+};
+
+/*
  * APFS inode data in memory
  */
 struct apfs_inode_info {
 	u64			i_ino64;	 /* 32-bit-safe inode number */
 	u64			i_parent_id;	 /* ID of primary parent */
-	u64			i_extent_id;	 /* ID of the extent records */
-	struct apfs_file_extent	i_cached_extent; /* Latest extent record */
-	bool			i_extent_dirty;	 /* Is i_cached_extent dirty? */
-	spinlock_t		i_extent_lock;	 /* Protects i_cached_extent */
 	struct timespec64	i_crtime;	 /* Time of creation */
 	u32			i_nchildren;	 /* Child count for directory */
 	uid_t			i_saved_uid;	 /* User ID on disk */
@@ -566,9 +575,10 @@ struct apfs_inode_info {
 	u32			i_key_class;	 /* Security class for directory */
 	u64			i_int_flags;	 /* Internal flags */
 	u32			i_bsd_flags;	 /* BSD flags */
-	u64			i_sparse_bytes;	 /* Sparse byte count in file */
-	bool			i_has_dstream;	 /* Is there a dstream record? */
 	struct list_head	i_list;		 /* List of inodes in transaction */
+
+	bool			 i_has_dstream;	 /* Is there a dstream record? */
+	struct apfs_dstream_info i_dstream;	 /* Dstream data, if any */
 
 	struct inode vfs_inode;
 };
@@ -713,15 +723,16 @@ extern int APFS_DELETE_ORPHAN_LINK_MAXOPS(void);
 /* extents.c */
 extern int apfs_extent_from_query(struct apfs_query *query,
 				  struct apfs_file_extent *extent);
-extern int __apfs_get_block(struct inode *inode, sector_t iblock,
+extern int __apfs_get_block(struct apfs_dstream_info *dstream, sector_t iblock,
 			    struct buffer_head *bh_result, int create);
 extern int apfs_get_block(struct inode *inode, sector_t iblock,
 			  struct buffer_head *bh_result, int create);
-extern int apfs_flush_extent_cache(struct inode *inode);
+extern int apfs_flush_extent_cache(struct apfs_dstream_info *dstream);
+extern int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsblock, struct buffer_head *bh_result);
 extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			      struct buffer_head *bh_result, int create);
 extern int APFS_GET_NEW_BLOCK_MAXOPS(void);
-extern int apfs_truncate(struct inode *inode, loff_t new_size);
+extern int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size);
 
 /* file.c */
 extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync);

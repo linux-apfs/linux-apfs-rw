@@ -568,17 +568,20 @@ static struct kmem_cache *apfs_inode_cachep;
 static struct inode *apfs_alloc_inode(struct super_block *sb)
 {
 	struct apfs_inode_info *ai;
+	struct apfs_dstream_info *dstream;
 
 	ai = kmem_cache_alloc(apfs_inode_cachep, GFP_KERNEL);
 	if (!ai)
 		return NULL;
+	dstream = &ai->i_dstream;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0) /* iversion came in 4.16 */
 	inode_set_iversion(&ai->vfs_inode, 1);
 #else
 	ai->vfs_inode.i_version = 1;
 #endif
-	ai->i_cached_extent.len = 0;
-	ai->i_extent_dirty = false;
+	dstream->ds_sb = sb;
+	dstream->ds_cached_ext.len = 0;
+	dstream->ds_ext_dirty = false;
 	ai->i_nchildren = 0;
 	INIT_LIST_HEAD(&ai->i_list);
 	return &ai->vfs_inode;
@@ -599,8 +602,9 @@ static void apfs_destroy_inode(struct inode *inode)
 static void init_once(void *p)
 {
 	struct apfs_inode_info *ai = (struct apfs_inode_info *)p;
+	struct apfs_dstream_info *dstream = &ai->i_dstream;
 
-	spin_lock_init(&ai->i_extent_lock);
+	spin_lock_init(&dstream->ds_ext_lock);
 	inode_init_once(&ai->vfs_inode);
 }
 
