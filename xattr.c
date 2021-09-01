@@ -57,6 +57,26 @@ static int apfs_xattr_from_query(struct apfs_query *query,
 }
 
 /**
+ * apfs_dstream_from_xattr - Get the dstream info for a dstream xattr
+ * @sb:		filesystem superblock
+ * @xattr:	in-memory xattr record (already sanity-checked)
+ * @dstream:	on return, the data stream info
+ */
+static void apfs_dstream_from_xattr(struct super_block *sb, struct apfs_xattr *xattr, struct apfs_dstream_info *dstream)
+{
+	struct apfs_xattr_dstream *xdata = (void *)xattr->xdata;
+
+	dstream->ds_sb = sb;
+	dstream->ds_id = le64_to_cpu(xdata->xattr_obj_id);
+	dstream->ds_size = le64_to_cpu(xdata->dstream.size);
+	dstream->ds_sparse_bytes = 0; /* Irrelevant for xattrs */
+
+	dstream->ds_cached_ext.len = 0;
+	dstream->ds_ext_dirty = false;
+	spin_lock_init(&dstream->ds_ext_lock);
+}
+
+/**
  * apfs_xattr_extents_read - Read the value of a xattr from its extents
  * @parent:	inode the attribute belongs to
  * @xattr:	the xattr structure
@@ -75,94 +95,69 @@ static int apfs_xattr_extents_read(struct inode *parent,
 				   void *buffer, size_t size, bool only_whole)
 {
 	struct super_block *sb = parent->i_sb;
-	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
-	struct apfs_query *query;
-	struct apfs_xattr_dstream *xdata;
-	u64 extent_id;
-	int length;
+	struct apfs_dstream_info *dstream;
+	int length, blkcnt, i;
 	int ret;
-	int i;
 
-	xdata = (struct apfs_xattr_dstream *) xattr->xdata;
-	length = le64_to_cpu(xdata->dstream.size);
-	if (length < 0 || length < le64_to_cpu(xdata->dstream.size))
-		return -E2BIG;
+	dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
+	if (!dstream)
+		return -ENOMEM;
+	apfs_dstream_from_xattr(sb, xattr, dstream);
 
-	if (!buffer) /* All we want is the length */
-		return length;
+	if (dstream->ds_size > XATTR_SIZE_MAX) {
+		ret = -E2BIG;
+		goto out;
+	}
+	length = dstream->ds_size;
+
+	if (!buffer) {
+		/* All we want is the length */
+		ret = length;
+		goto out;
+	}
+
 	if (only_whole) {
-		if (length > size) /* xattr won't fit in the buffer */
-			return -ERANGE;
+		if (length > size) {
+			/* xattr won't fit in the buffer */
+			ret = -ERANGE;
+			goto out;
+		}
 	} else {
 		if (length > size)
 			length = size;
 	}
 
-	extent_id = le64_to_cpu(xdata->xattr_obj_id);
-	/* We will read all the extents, starting with the last one */
-	apfs_init_file_extent_key(extent_id, 0 /* offset */, &key);
+	blkcnt = (length + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
+	for (i = 0; i < blkcnt; i++) {
+		struct buffer_head tmp; /* XXX */
+		struct buffer_head *bh;
+		int off, tocopy;
 
-	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
-	if (!query)
-		return -ENOMEM;
-	query->key = &key;
-	query->flags = APFS_QUERY_CAT | APFS_QUERY_MULTIPLE | APFS_QUERY_EXACT;
-
-	/*
-	 * The logic in this loop would allow a crafted filesystem with a large
-	 * number of redundant extents to become stuck for a long time. We use
-	 * the xattr length to put a limit on the number of iterations.
-	 */
-	ret = -EFSCORRUPTED;
-	for (i = 0; i < (length >> parent->i_blkbits) + 2; i++) {
-		struct apfs_file_extent ext;
-		u64 block_count, file_off;
-		int err;
-		int j;
-
-		err = apfs_btree_query(sb, &query);
-		if (err == -ENODATA) { /* No more records to search */
-			ret = length;
-			goto done;
-		}
-		if (err) {
-			ret = err;
-			goto done;
+		tmp.b_blocknr = -1;
+		ret = __apfs_get_block(dstream, i, &tmp, false /* create */);
+		if (ret)
+			goto out;
+		if (tmp.b_blocknr == -1) {
+			/* No holes in xattr dstreams, I believe */
+			ret = -EFSCORRUPTED;
+			goto out;
 		}
 
-		err = apfs_extent_from_query(query, &ext);
-		if (err) {
-			apfs_alert(sb, "bad extent for xattr in inode 0x%llx",
-				   apfs_ino(parent));
-			ret = err;
-			goto done;
+		bh = apfs_sb_bread(sb, tmp.b_blocknr);
+		if (!bh) {
+			ret = -EIO;
+			goto out;
 		}
 
-		block_count = ext.len >> sb->s_blocksize_bits;
-		file_off = ext.logical_addr;
-		for (j = 0; j < block_count; ++j) {
-			struct buffer_head *bh;
-			int bytes;
-
-			if (length <= file_off) /* Read the whole extent */
-				break;
-			bytes = min(sb->s_blocksize,
-				    (unsigned long)(length - file_off));
-
-			bh = apfs_sb_bread(sb, ext.phys_block_num + j);
-			if (!bh) {
-				ret = -EIO;
-				goto done;
-			}
-			memcpy(buffer + file_off, bh->b_data, bytes);
-			brelse(bh);
-			file_off = file_off + bytes;
-		}
+		off = i << sb->s_blocksize_bits;
+		tocopy = min(sb->s_blocksize, (unsigned long)(length - off));
+		memcpy(buffer + off, bh->b_data, tocopy);
+		brelse(bh);
 	}
+	ret = length;
 
-done:
-	apfs_free_query(sb, query);
+out:
+	kfree(dstream);
 	return ret;
 }
 
