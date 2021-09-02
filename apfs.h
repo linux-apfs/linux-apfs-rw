@@ -562,6 +562,20 @@ struct apfs_dstream_info {
 	spinlock_t		ds_ext_lock;	/* Protects ds_cached_ext */
 };
 
+/**
+ * apfs_alloced_size - Return the alloced size for a data stream
+ * @dstream: data stream info
+ *
+ * TODO: is this always correct? Or could the extents have an unused tail?
+ */
+static inline u64 apfs_alloced_size(struct apfs_dstream_info *dstream)
+{
+	struct super_block *sb = dstream->ds_sb;
+	u64 blks = (dstream->ds_size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
+
+	return blks << sb->s_blocksize_bits;
+}
+
 /*
  * APFS inode data in memory
  */

@@ -304,8 +304,19 @@ static int apfs_delete_xattr(struct apfs_query *query)
 	if (err)
 		return err;
 
-	if (xattr.has_dstream)
-		return -EOPNOTSUPP; /* TODO */
+	if (xattr.has_dstream) {
+		struct super_block *sb = query->node->object.sb;
+		struct apfs_dstream_info *dstream;
+
+		dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
+		if (!dstream)
+			return -ENOMEM;
+		apfs_dstream_from_xattr(sb, &xattr, dstream);
+		err = apfs_truncate(dstream, 0);
+		kfree(dstream);
+		if (err)
+			return err;
+	}
 
 	return apfs_btree_remove(query);
 }
@@ -398,14 +409,46 @@ static int apfs_build_xattr_key(const char *name, u64 ino, struct apfs_xattr_key
 }
 
 /**
- * apfs_build_xattr_val - Allocate and initialize the value for an inline xattr
+ * apfs_build_dstream_xattr_val - Allocate and init value for a dstream xattr
+ * @dstream:	data stream info
+ * @val_p:	on return, a pointer to the new on-disk value structure
+ *
+ * Returns the length of the value, or a negative error code in case of failure.
+ */
+static int apfs_build_dstream_xattr_val(struct apfs_dstream_info *dstream, struct apfs_xattr_val **val_p)
+{
+	struct apfs_xattr_val *val;
+	struct apfs_xattr_dstream *dstream_raw;
+	int val_len;
+
+	val_len = sizeof(*val) + sizeof(*dstream_raw);
+	val = kzalloc(val_len, GFP_KERNEL);
+	if (!val)
+		return -ENOMEM;
+
+	val->flags = cpu_to_le16(APFS_XATTR_DATA_STREAM);
+	val->xdata_len = cpu_to_le16(sizeof(*dstream_raw));
+
+	dstream_raw = (void *)val->xdata;
+	dstream_raw->xattr_obj_id = cpu_to_le64(dstream->ds_id);
+	dstream_raw->dstream.size = cpu_to_le64(dstream->ds_size);
+	dstream_raw->dstream.alloced_size = cpu_to_le64(apfs_alloced_size(dstream));
+	if (apfs_vol_is_encrypted(dstream->ds_sb))
+		dstream_raw->dstream.default_crypto_id = cpu_to_le64(dstream->ds_id);
+
+	*val_p = val;
+	return val_len;
+}
+
+/**
+ * apfs_build_inline_xattr_val - Allocate and init value for an inline xattr
  * @value:	content of the xattr
  * @size:	size of @value
  * @val_p:	on return, a pointer to the new on-disk value structure
  *
  * Returns the length of the value, or a negative error code in case of failure.
  */
-static int apfs_build_xattr_val(const void *value, size_t size, struct apfs_xattr_val **val_p)
+static int apfs_build_inline_xattr_val(const void *value, size_t size, struct apfs_xattr_val **val_p)
 {
 	struct apfs_xattr_val *val;
 	int val_len;
@@ -424,6 +467,102 @@ static int apfs_build_xattr_val(const void *value, size_t size, struct apfs_xatt
 }
 
 /**
+ * apfs_create_xattr_dstream - Create the extents for a dstream xattr
+ * @sb:		filesystem superblock
+ * @value:	value for the attribute
+ * @size:	sizeo of @value
+ *
+ * Returns the info for the created data stream, or an error pointer in case
+ * of failure.
+ */
+static struct apfs_dstream_info *apfs_create_xattr_dstream(struct super_block *sb, const void *value, size_t size)
+{
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	struct apfs_dstream_info *dstream;
+	int blkcnt, i;
+	int err;
+
+	dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
+	if (!dstream)
+		return ERR_PTR(-ENOMEM);
+	dstream->ds_sb = sb;
+	spin_lock_init(&dstream->ds_ext_lock);
+
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+	dstream->ds_id = le64_to_cpu(vsb_raw->apfs_next_obj_id);
+	le64_add_cpu(&vsb_raw->apfs_next_obj_id, 1);
+
+	blkcnt = (size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
+	for (i = 0; i < blkcnt; i++) {
+		struct buffer_head tmp; /* XXX */
+		struct buffer_head *bh;
+		int off, tocopy;
+
+		set_buffer_trans(&tmp); /* Prevent the fake bh from joining */
+		err = apfs_dstream_get_new_block(dstream, i, &tmp);
+		if (err)
+			goto fail;
+		bh = apfs_sb_bread(sb, tmp.b_blocknr);
+		if (!bh) {
+			err = -EIO;
+			goto fail;
+		}
+
+		err = apfs_transaction_join(sb, bh);
+		if (err) {
+			brelse(bh);
+			goto fail;
+		}
+
+		off = i << sb->s_blocksize_bits;
+		tocopy = min(sb->s_blocksize, (unsigned long)(size - off));
+		memcpy(bh->b_data, value + off, tocopy);
+		if (tocopy < sb->s_blocksize)
+			memset(bh->b_data + tocopy, 0, sb->s_blocksize - tocopy);
+		brelse(bh);
+
+		dstream->ds_size += tocopy;
+	}
+
+	err = apfs_flush_extent_cache(dstream);
+	if (err)
+		goto fail;
+	return dstream;
+
+fail:
+	kfree(dstream);
+	return ERR_PTR(err);
+}
+
+/**
+ * apfs_xattr_dstream_from_query - Extract the dstream from a xattr record
+ * @query:	the query that found the record
+ * @dstream_p:	on return, the newly allocated dstream info (or NULL if none)
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_xattr_dstream_from_query(struct apfs_query *query, struct apfs_dstream_info **dstream_p)
+{
+	struct super_block *sb = query->node->object.sb;
+	struct apfs_dstream_info *dstream = NULL;
+	struct apfs_xattr xattr;
+	int err;
+
+	err = apfs_xattr_from_query(query, &xattr);
+	if (err)
+		return err;
+
+	if (xattr.has_dstream) {
+		dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
+		if (!dstream)
+			return -ENOMEM;
+		apfs_dstream_from_xattr(sb, &xattr, dstream);
+	}
+	*dstream_p = dstream;
+	return 0;
+}
+
+/**
  * apfs_xattr_set - Write a named attribute
  * @inode:	inode the attribute will belong to
  * @name:	name for the attribute
@@ -439,21 +578,28 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_key key;
-	struct apfs_query *query;
+	struct apfs_query *query = NULL;
 	u64 cnid = apfs_ino(inode);
 	int key_len, val_len;
 	struct apfs_xattr_key *raw_key = NULL;
 	struct apfs_xattr_val *raw_val = NULL;
+	struct apfs_dstream_info *dstream = NULL;
+	struct apfs_dstream_info *old_dstream = NULL;
 	int ret;
 
-	if (size > APFS_XATTR_MAX_EMBEDDED_SIZE)
-		return -ERANGE; /* TODO: support dstream xattrs */
+	if (size > APFS_XATTR_MAX_EMBEDDED_SIZE) {
+		dstream = apfs_create_xattr_dstream(sb, value, size);
+		if (IS_ERR(dstream))
+			return PTR_ERR(dstream);
+	}
 
 	apfs_init_xattr_key(cnid, name, &key);
 
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
-	if (!query)
-		return -ENOMEM;
+	if (!query) {
+		ret = -ENOMEM;
+		goto done;
+	}
 	query->key = &key;
 	query->flags = APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
@@ -469,6 +615,11 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 	} else if (!value) {
 		ret = apfs_delete_xattr(query);
 		goto done;
+	} else {
+		/* Remember the old dstream to clean it up later */
+		ret = apfs_xattr_dstream_from_query(query, &old_dstream);
+		if (ret)
+			goto done;
 	}
 
 	key_len = apfs_build_xattr_key(name, cnid, &raw_key);
@@ -476,7 +627,11 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 		ret = key_len;
 		goto done;
 	}
-	val_len = apfs_build_xattr_val(value, size, &raw_val);
+
+	if (dstream)
+		val_len = apfs_build_dstream_xattr_val(dstream, &raw_val);
+	else
+		val_len = apfs_build_inline_xattr_val(value, size, &raw_val);
 	if (val_len < 0) {
 		ret = val_len;
 		goto done;
@@ -490,8 +645,15 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 		ret = apfs_btree_insert(query, raw_key, key_len, raw_val, val_len);
 	else
 		ret = apfs_btree_replace(query, raw_key, key_len, raw_val, val_len);
+	if (ret)
+		goto done;
+
+	if (old_dstream)
+		ret = apfs_truncate(old_dstream, 0);
 
 done:
+	kfree(dstream);
+	kfree(old_dstream);
 	kfree(raw_val);
 	kfree(raw_key);
 	apfs_free_query(sb, query);

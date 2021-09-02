@@ -939,20 +939,6 @@ fail:
 #define APFS_INODE_RENAME_MAXOPS	1
 
 /**
- * apfs_alloced_size - Return the alloced size for an inode's dstream
- * @inode: the vfs inode
- *
- * TODO: is this always correct? Or could the extents have an unused tail?
- */
-static inline u64 apfs_alloced_size(struct inode *inode)
-{
-	struct super_block *sb = inode->i_sb;
-	u64 blks = (inode->i_size + sb->s_blocksize - 1) >> inode->i_blkbits;
-
-	return blks << inode->i_blkbits;
-}
-
-/**
  * apfs_create_dstream_xfield - Create the inode xfield for a new data stream
  * @inode:	the in-memory inode
  * @query:	the query that found the inode record
@@ -979,7 +965,7 @@ static int apfs_create_dstream_xfield(struct inode *inode,
 	memcpy(new_val, raw + query->off, query->len);
 
 	dstream_raw.size = cpu_to_le64(inode->i_size);
-	dstream_raw.alloced_size = cpu_to_le64(apfs_alloced_size(inode));
+	dstream_raw.alloced_size = cpu_to_le64(apfs_alloced_size(dstream));
 	if(apfs_vol_is_encrypted(inode->i_sb))
 		dstream_raw.default_crypto_id = cpu_to_le64(dstream->ds_id);
 
@@ -1046,7 +1032,7 @@ static int apfs_inode_resize(struct inode *inode, struct apfs_query *query)
 
 		/* TODO: count bytes read and written */
 		dstream->size = cpu_to_le64(inode->i_size);
-		dstream->alloced_size = cpu_to_le64(apfs_alloced_size(inode));
+		dstream->alloced_size = cpu_to_le64(apfs_alloced_size(&ai->i_dstream));
 		return 0;
 	}
 	/* This inode has no dstream xfield, so we need to create it */
