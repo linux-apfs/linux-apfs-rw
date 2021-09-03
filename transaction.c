@@ -457,7 +457,9 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 		/* Commit what we have so far to flush the queues */
 		nx_trans->t_state = APFS_NX_TRANS_FORCE_COMMIT;
 		err = apfs_transaction_commit(sb);
-		return err ? err : -ENOSPC;
+		if (err)
+			goto fail;
+		return -ENOSPC;
 	}
 
 	if (!vol_trans->t_old_vsb) {
@@ -655,8 +657,9 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
  * apfs_transaction_commit - Possibly commit the current transaction
  * @sb: superblock structure
  *
- * Also releases the big filesystem lock; returns 0 on success or a negative
- * error code in case of failure.
+ * On success returns 0 and releases the big filesystem lock. On failure,
+ * returns a negative error code, and the caller is responsibly for aborting
+ * the transaction.
  */
 int apfs_transaction_commit(struct super_block *sb)
 {
@@ -667,15 +670,13 @@ int apfs_transaction_commit(struct super_block *sb)
 		err = apfs_transaction_commit_nx(sb);
 		if (err) {
 			apfs_warn(sb, "transaction commit failed");
-			apfs_transaction_abort(sb);
 			return err;
 		}
 	}
 
 	mutex_unlock(&nxs_mutex);
 	up_write(&nxi->nx_big_sem);
-
-	return err;
+	return 0;
 }
 
 /**
