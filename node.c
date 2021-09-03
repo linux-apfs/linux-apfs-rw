@@ -1019,8 +1019,7 @@ int apfs_node_split(struct apfs_query *query)
 
 	/*
 	 * The first half of the records go in the original node. If there's
-	 * only one record, just defragment the node and don't split anything;
-	 * this approach will probably not work for huge inline xattrs (TODO).
+	 * only one record, just defragment the node and don't split anything.
 	 */
 	record_count = old_node->records;
 	new_rec_count = record_count / 2;
@@ -1514,4 +1513,66 @@ fail:
 	}
 	apfs_update_node(node);
 	return err;
+}
+
+/**
+ * apfs_create_single_rec_node - Creates a new node with a single record
+ * @query:	query run to search for the record
+ * @key:	on-disk record key
+ * @key_len:	length of @key
+ * @val:	on-disk record value
+ * @val_len:	length of @val
+ *
+ * The new node is placed right after the one found by @query, which must have
+ * a single record. On success, returns 0 and sets @query to the new record;
+ * returns a negative error code in case of failure.
+ */
+int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len, void *val, int val_len)
+{
+	struct apfs_node *prev_node = query->node;
+	struct super_block *sb = prev_node->object.sb;
+	struct apfs_node *new_node = NULL;
+	struct apfs_btree_node_phys *prev_raw = NULL;
+	struct apfs_btree_node_phys *new_raw = NULL;
+	int err;
+
+	ASSERT(query->parent);
+	ASSERT(prev_node->records == 1);
+	ASSERT(val && val_len);
+
+	/* This function should only be needed for huge catalog records */
+	if (prev_node->tree_type != APFS_OBJECT_TYPE_FSTREE) {
+		apfs_warn(sb, "huge node records in the wrong tree");
+		return -EFSCORRUPTED;
+	}
+
+	apfs_btree_change_node_count(query->parent, 1 /* change */);
+
+	new_node = apfs_create_node(sb, apfs_query_storage(query));
+	if (IS_ERR(new_node))
+		return PTR_ERR(new_node);
+	new_node->tree_type = prev_node->tree_type;
+	new_node->flags = prev_node->flags;
+	new_node->records = 0;
+	new_node->key_free_list_len = 0;
+	new_node->val_free_list_len = 0;
+	new_node->key = new_node->free = sizeof(*new_raw);
+	new_node->data = sb->s_blocksize; /* Nonroot */
+
+	prev_raw = (void *)prev_node->object.bh->b_data;
+	new_raw = (void *)new_node->object.bh->b_data;
+	apfs_assert_in_transaction(sb, &new_raw->btn_o);
+	new_raw->btn_level = prev_raw->btn_level;
+	apfs_update_node(new_node);
+
+	prev_node = NULL;
+	prev_raw = NULL;
+	apfs_node_put(query->node);
+
+	query->node = new_node;
+	query->index = -1;
+	err = apfs_node_insert(query, key, key_len, val, val_len);
+	if (err)
+		return err;
+	return apfs_attach_child(query->parent, new_node);
 }

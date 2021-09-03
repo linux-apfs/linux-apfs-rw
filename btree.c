@@ -570,7 +570,6 @@ int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
 		      void *val, int val_len)
 {
 	struct apfs_node *node = query->node;
-	struct super_block *sb = node->object.sb;
 	struct apfs_btree_node_phys *node_raw;
 	int err;
 
@@ -591,13 +590,13 @@ again:
 	err = apfs_node_insert(query, key, key_len, val, val_len);
 	if (err == -ENOSPC) {
 		if (!query->parent && !apfs_node_is_root(node)) {
-			if (node->records == 1) {
-				apfs_warn(sb, "huge inline xattr fills a node");
-				return -EOPNOTSUPP;
-			}
 			err = apfs_query_refresh(query);
 			if (err)
 				return err;
+			if (node->records == 1) {
+				/* The new record just won't fit in the node */
+				return apfs_create_single_rec_node(query, key, key_len, val, val_len);
+			}
 		}
 		err = apfs_node_split(query);
 		if (err)
@@ -754,8 +753,9 @@ again:
 	if (err == -ENOSPC) {
 		if (!query->parent && !apfs_node_is_root(node)) {
 			if (node->records == 1) {
-				apfs_warn(sb, "huge inline xattr fills a node");
-				return -EOPNOTSUPP;
+				/* Node is defragmented, ENOSPC is absurd */
+				WARN_ON(1);
+				return -EFSCORRUPTED;
 			}
 			err = apfs_query_refresh(query);
 			if (err)
