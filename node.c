@@ -1060,8 +1060,6 @@ int apfs_node_split(struct apfs_query *query)
 		apfs_update_node(new_node);
 
 		err = apfs_attach_child(query->parent, new_node);
-		apfs_free_query(sb, query->parent);
-		query->parent = NULL; /* The caller only gets the leaf */
 		if (err) {
 			apfs_node_put(new_node);
 			goto out;
@@ -1078,6 +1076,8 @@ int apfs_node_split(struct apfs_query *query)
 
 		apfs_node_put(new_node);
 	}
+	apfs_free_query(sb, query->parent);
+	query->parent = NULL; /* The caller only gets the leaf */
 
 	/* Updating these fields isn't really necessary, but it's cleaner */
 	query->len = apfs_node_locate_data(query->node, query->index,
