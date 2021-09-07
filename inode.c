@@ -1293,8 +1293,7 @@ void apfs_evict_inode(struct inode *inode)
 out_abort:
 	apfs_transaction_abort(sb);
 out_report:
-	apfs_warn(sb,
-		  "failed to delete orphan inode 0x%llx\n", apfs_ino(inode));
+	apfs_warn(sb, "failed to delete orphan inode 0x%llx", apfs_ino(inode));
 out_clear:
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);
