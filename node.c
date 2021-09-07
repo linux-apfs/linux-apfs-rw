@@ -1428,8 +1428,9 @@ fail:
  * @val_len:	length of @val (0 for ghost records)
  *
  * The new record is placed right after the one found by @query. On success,
- * returns 0 and sets @query to the new record; returns a negative error code
- * in case of failure, which may be -ENOSPC if the node seems full.
+ * returns 0 and sets @query to the new record. In case of failure, returns a
+ * negative error code and leaves @query pointing to the same record. The error
+ * may be -ENOSPC if the node seems full.
  */
 int apfs_node_insert(struct apfs_query *query, void *key, int key_len, void *val, int val_len)
 {
@@ -1464,6 +1465,7 @@ int apfs_node_insert(struct apfs_query *query, void *key, int key_len, void *val
 
 		node->key = new_key_base;
 		node->free = new_free_base;
+		query->key_off += inc;
 	}
 
 	old_free = node->free;
