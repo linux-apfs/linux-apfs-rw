@@ -297,28 +297,36 @@ static int apfs_xattr_osx_get(const struct xattr_handler *handler,
  */
 static int apfs_delete_xattr(struct apfs_query *query)
 {
+	struct super_block *sb = query->node->object.sb;
 	struct apfs_xattr xattr;
+	struct apfs_dstream_info *dstream;
 	int err;
 
 	err = apfs_xattr_from_query(query, &xattr);
 	if (err)
 		return err;
 
-	if (xattr.has_dstream) {
-		struct super_block *sb = query->node->object.sb;
-		struct apfs_dstream_info *dstream;
+	if (!xattr.has_dstream)
+		return apfs_btree_remove(query);
 
-		dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
-		if (!dstream)
-			return -ENOMEM;
-		apfs_dstream_from_xattr(sb, &xattr, dstream);
-		err = apfs_truncate(dstream, 0);
-		kfree(dstream);
-		if (err)
-			return err;
-	}
+	dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
+	if (!dstream)
+		return -ENOMEM;
+	apfs_dstream_from_xattr(sb, &xattr, dstream);
 
-	return apfs_btree_remove(query);
+	/*
+	 * Remove the xattr record before truncation, because truncation creates
+	 * new queries and makes ours invalid. This stuff is all too subtle, I
+	 * really need to add some assertions (TODO).
+	 */
+	err = apfs_btree_remove(query);
+	if (err)
+		goto fail;
+	err = apfs_truncate(dstream, 0);
+
+fail:
+	kfree(dstream);
+	return err;
 }
 
 /**
