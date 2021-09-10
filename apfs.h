@@ -788,6 +788,11 @@ extern int apfs_getattr(struct user_namespace *mnt_userns,
 extern int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta);
 extern int APFS_CRYPTO_ADJ_REFCNT_MAXOPS(void);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
+extern int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa);
+extern int apfs_fileattr_set(struct user_namespace *mnt_userns, struct dentry *dentry, struct fileattr *fa);
+#endif
+
 /* key.c */
 extern int apfs_filename_cmp(struct super_block *sb,
 			     const char *name1, const char *name2);

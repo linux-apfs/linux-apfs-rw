@@ -56,6 +56,10 @@ const struct inode_operations apfs_dir_inode_operations = {
 	.listxattr      = apfs_listxattr,
 	.setattr	= apfs_setattr,
 	.update_time	= apfs_update_time,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
+	.fileattr_get	= apfs_fileattr_get,
+	.fileattr_set	= apfs_fileattr_set,
+#endif
 };
 
 const struct inode_operations apfs_special_inode_operations = {

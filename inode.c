@@ -10,6 +10,10 @@
 #include <linux/blk_types.h>
 #include "apfs.h"
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
+#include <linux/fileattr.h>
+#endif
+
 #define MAX_PFK_LEN	512
 
 static int apfs_readpage(struct file *file, struct page *page)
@@ -1757,20 +1761,6 @@ static unsigned int apfs_getflags(struct inode *inode)
 }
 
 /**
- * apfs_ioc_getflags - Ioctl handler for FS_IOC_GETFLAGS
- * @file:	affected file
- * @arg:	ioctl argument
- *
- * Returns 0 on success, or a negative error code in case of failure.
- */
-static int apfs_ioc_getflags(struct file *file, int __user *arg)
-{
-	unsigned int flags = apfs_getflags(file_inode(file));
-
-	return put_user(flags, arg);
-}
-
-/**
  * apfs_setflags - Set an inode's bsd flags
  * @inode: the vfs inode
  * @flags: flags to set, in FS_IOC_SETFLAGS format
@@ -1800,6 +1790,22 @@ static void apfs_setflags(struct inode *inode, unsigned int flags)
 		ai->i_bsd_flags &= ~APFS_INOBSD_NODUMP;
 
 	inode_set_flags(inode, i_flags, S_IMMUTABLE | S_APPEND);
+}
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0)
+
+/**
+ * apfs_ioc_getflags - Ioctl handler for FS_IOC_GETFLAGS
+ * @file:	affected file
+ * @arg:	ioctl argument
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_ioc_getflags(struct file *file, int __user *arg)
+{
+	unsigned int flags = apfs_getflags(file_inode(file));
+
+	return put_user(flags, arg);
 }
 
 /**
@@ -1856,7 +1862,11 @@ static int apfs_ioc_setflags(struct file *file, int __user *arg)
 	if (sb->s_flags & SB_RDONLY)
 		return -EROFS;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	if (!inode_owner_or_capable(inode))
+#else
+	if (!inode_owner_or_capable(&init_user_ns, inode))
+#endif
 		return -EPERM;
 
 	if (get_user(newflags, arg))
@@ -1877,15 +1887,62 @@ static int apfs_ioc_setflags(struct file *file, int __user *arg)
 	return err;
 }
 
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0) */
+
+int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
+{
+	unsigned int flags = apfs_getflags(d_inode(dentry));
+
+	fileattr_fill_flags(fa, flags);
+	return 0;
+}
+
+int apfs_fileattr_set(struct user_namespace *mnt_userns, struct dentry *dentry, struct fileattr *fa)
+{
+	struct inode *inode = d_inode(dentry);
+	struct super_block *sb = inode->i_sb;
+	struct apfs_max_ops maxops;
+	int err;
+
+	if (sb->s_flags & SB_RDONLY)
+		return -EROFS;
+
+	if (fa->flags & ~(FS_APPEND_FL | FS_IMMUTABLE_FL | FS_NODUMP_FL))
+		return -EOPNOTSUPP;
+	if (fileattr_has_fsx(fa))
+		return -EOPNOTSUPP;
+
+	lockdep_assert_held_write(&inode->i_rwsem);
+
+	maxops.cat = APFS_UPDATE_INODE_MAXOPS();
+	maxops.blks = 0;
+	err = apfs_transaction_start(sb, maxops);
+	if (err)
+		return err;
+
+	apfs_inode_join_transaction(sb, inode);
+	apfs_setflags(inode, fa->flags);
+	inode->i_ctime = current_time(inode);
+
+	err = apfs_transaction_commit(sb);
+	if (err)
+		apfs_transaction_abort(sb);
+	return err;
+}
+
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0) */
+
 long apfs_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	void __user *argp = (void __user *)arg;
 
 	switch (cmd) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0)
 	case FS_IOC_GETFLAGS:
 		return apfs_ioc_getflags(file, argp);
 	case FS_IOC_SETFLAGS:
 		return apfs_ioc_setflags(file, argp);
+#endif
 	case APFS_IOC_SET_DFLT_PFK:
 		return apfs_ioc_set_dflt_pfk(file, argp);
 	case APFS_IOC_SET_DIR_CLASS:
@@ -1902,10 +1959,12 @@ long apfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	void __user *argp = (void __user *)arg;
 
 	switch (cmd) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0)
 	case FS_IOC_GETFLAGS:
 		return apfs_ioc_getflags(file, argp);
 	case FS_IOC_SETFLAGS:
 		return apfs_ioc_setflags(file, argp);
+#endif
 	case APFS_IOC_SET_PFK:
 		return apfs_ioc_set_pfk(file, argp);
 	case APFS_IOC_GET_CLASS:
