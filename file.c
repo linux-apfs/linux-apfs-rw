@@ -9,9 +9,14 @@
 typedef int vm_fault_t;
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
+static vm_fault_t apfs_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+#else
 static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
+#endif
 	struct page *page = vmf->page;
 	struct inode *inode = file_inode(vmf->vma->vm_file);
 	struct super_block *sb = inode->i_sb;
