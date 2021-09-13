@@ -1742,6 +1742,14 @@ fail:
 	return err;
 }
 
+/*
+ * Older kernels have no vfs_ioc_setflags_prepare(), so don't implement the
+ * SETFLAGS/GETFLAGS ioctls there. It should be easy to fix, but it's not
+ * really needed at all. Be careful with this macro check, because it nests
+ * over a few others.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)
+
 /**
  * apfs_getflags - Read an inode's bsd flags in FS_IOC_GETFLAGS format
  * @inode: the vfs inode
@@ -1932,12 +1940,14 @@ int apfs_fileattr_set(struct user_namespace *mnt_userns, struct dentry *dentry, 
 
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0) */
 
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0) */
+
 long apfs_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	void __user *argp = (void __user *)arg;
 
 	switch (cmd) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)
 	case FS_IOC_GETFLAGS:
 		return apfs_ioc_getflags(file, argp);
 	case FS_IOC_SETFLAGS:
@@ -1959,7 +1969,7 @@ long apfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	void __user *argp = (void __user *)arg;
 
 	switch (cmd) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)
 	case FS_IOC_GETFLAGS:
 		return apfs_ioc_getflags(file, argp);
 	case FS_IOC_SETFLAGS:
