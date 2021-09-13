@@ -5,6 +5,10 @@
 
 #include "apfs.h"
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 17, 0)
+typedef int vm_fault_t;
+#endif
+
 static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
