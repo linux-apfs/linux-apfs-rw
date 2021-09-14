@@ -498,6 +498,10 @@ out_abort:
 	return err;
 }
 
+static void apfs_noop_invalidatepage(struct page *page, unsigned int offset, unsigned int length)
+{
+}
+
 /* bmap is not implemented to avoid issues with CoW on swapfiles */
 static const struct address_space_operations apfs_aops = {
 	.readpage	= apfs_readpage,
@@ -510,7 +514,7 @@ static const struct address_space_operations apfs_aops = {
 	.write_end	= apfs_write_end,
 
 	/* The intention is to keep bhs around until the transaction is over */
-	.invalidatepage	= noop_invalidatepage,
+	.invalidatepage	= apfs_noop_invalidatepage,
 };
 
 /**
