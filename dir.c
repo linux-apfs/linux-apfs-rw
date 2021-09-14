@@ -649,7 +649,13 @@ int apfs_mkany(struct inode *dir, struct dentry *dentry, umode_t mode,
 	if (err)
 		goto out_undo_create;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 17, 0)
+	/* Apparently there is a lockdep bug here, but it doesn't matter */
+	unlock_new_inode(inode);
+	d_instantiate(dentry, inode);
+#else
 	d_instantiate_new(dentry, inode);
+#endif
 	return 0;
 
 out_undo_create:
