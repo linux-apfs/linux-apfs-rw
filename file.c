@@ -18,7 +18,7 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 #endif
 	struct page *page = vmf->page;
-	struct inode *inode = file_inode(vmf->vma->vm_file);
+	struct inode *inode = file_inode(vma->vm_file);
 	struct super_block *sb = inode->i_sb;
 	struct buffer_head *bh, *head;
 	vm_fault_t ret = VM_FAULT_LOCKED;
@@ -29,7 +29,7 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 	int err = 0;
 
 	sb_start_pagefault(inode->i_sb);
-	file_update_time(vmf->vma->vm_file);
+	file_update_time(vma->vm_file);
 
 	/* Placeholder values, I need to get back to this in the future */
 	maxops.cat = APFS_UPDATE_INODE_MAXOPS() +
