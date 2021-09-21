@@ -862,8 +862,6 @@ extern int ____apfs_xattr_get(struct inode *inode, const char *name, void *buffe
 			      size_t size, bool only_whole);
 extern int __apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 			    size_t size);
-extern int apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
-			  size_t size);
 extern int apfs_delete_all_xattrs(struct inode *inode);
 extern int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 			  size_t size, int flags);

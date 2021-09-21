@@ -104,11 +104,11 @@ static int apfs_xattr_extents_read(struct inode *parent,
 		return -ENOMEM;
 	apfs_dstream_from_xattr(sb, xattr, dstream);
 
-	if (dstream->ds_size > XATTR_SIZE_MAX) {
-		ret = -E2BIG;
-		goto out;
-	}
 	length = dstream->ds_size;
+	if (length < 0 || length < dstream->ds_size) {
+		/* TODO: avoid overflow here for huge compressed files */
+		return -E2BIG;
+	}
 
 	if (!buffer) {
 		/* All we want is the length */
@@ -269,8 +269,7 @@ done:
  * Returns the number of bytes used/required, or a negative error code in case
  * of failure.
  */
-int apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
-		   size_t size)
+static int apfs_xattr_get(struct inode *inode, const char *name, void *buffer, size_t size)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(inode->i_sb);
 	int ret;
@@ -278,6 +277,8 @@ int apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 	down_read(&nxi->nx_big_sem);
 	ret = __apfs_xattr_get(inode, name, buffer, size);
 	up_read(&nxi->nx_big_sem);
+	if (ret > XATTR_SIZE_MAX)
+		return -E2BIG;
 	return ret;
 }
 
