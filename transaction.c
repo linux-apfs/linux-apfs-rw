@@ -494,6 +494,30 @@ fail:
 }
 
 /**
+ * apfs_end_buffer_write_sync - Clean up a buffer head just synced to disk
+ * @bh:		the buffer head to clean
+ * @uptodate:	has the write succeeded?
+ */
+static void apfs_end_buffer_write_sync(struct buffer_head *bh, int uptodate)
+{
+	struct page *page = NULL;
+	bool must_unlock;
+
+	page = bh->b_page;
+	get_page(page);
+
+	end_buffer_write_sync(bh, uptodate);
+	bh = NULL;
+
+	/* Future writes to mmapped areas should fault for CoW */
+	must_unlock = trylock_page(page);
+	page_mkclean(page);
+	if (must_unlock)
+		unlock_page(page);
+	put_page(page);
+}
+
+/**
  * apfs_transaction_commit_nx - Definitely commit the current transaction
  * @sb: superblock structure
  */
@@ -552,27 +576,22 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 
 		if (buffer_csum(bh))
 			apfs_obj_set_csum(sb, (void *)bh->b_data);
-		mark_buffer_dirty(bh);
-		curr_err = sync_dirty_buffer(bh);
-		if (curr_err)
-			err = curr_err;
+		clear_buffer_csum(bh);
 
-		/* Future writes to mmapped areas should fault for CoW */
-		trylock_page(bh->b_page);
-		page_mkclean(bh->b_page);
-		unlock_page(bh->b_page);
+		list_del(&bhi->list);
+		clear_buffer_trans(bh);
+		nx_trans->t_buffers_count--;
 
 		bh->b_private = NULL;
-		clear_buffer_trans(bh);
-		clear_buffer_csum(bh);
-		brelse(bh);
 		bhi->bh = NULL;
-		list_del(&bhi->list);
-		nx_trans->t_buffers_count --;
 		kfree(bhi);
+		bhi = NULL;
+
+		clear_buffer_dirty(bh);
+		lock_buffer(bh);
+		bh->b_end_io = apfs_end_buffer_write_sync;
+		submit_bh(REQ_OP_WRITE, REQ_SYNC, bh);
 	}
-	if (err)
-		return err;
 	err = apfs_checkpoint_end(sb);
 	if (err)
 		return err;
