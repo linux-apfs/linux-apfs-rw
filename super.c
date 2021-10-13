@@ -1061,6 +1061,16 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 	ASSERT(sbi);
 	lockdep_assert_held(&nxs_mutex);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+	/* This is needed for readahead, so old kernels will be slower */
+	err = super_setup_bdi(sb);
+	if (err)
+		return err;
+	/* This is redundant for kernels 5.10 and above */
+	sb->s_bdi->ra_pages = VM_READAHEAD_PAGES;
+	sb->s_bdi->io_pages = VM_READAHEAD_PAGES;
+#endif
+
 	sbi->s_uid = INVALID_UID;
 	sbi->s_gid = INVALID_GID;
 	err = parse_options(sb, data);
