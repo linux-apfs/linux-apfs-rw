@@ -536,7 +536,7 @@ static void apfs_put_super(struct super_block *sb)
 		set_buffer_csum(vsb_bh);
 
 		/* Guarantee commit */
-		sbi->s_nxi->nx_transaction.t_state = APFS_NX_TRANS_FORCE_COMMIT;
+		sbi->s_nxi->nx_transaction.t_state |= APFS_NX_TRANS_FORCE_COMMIT;
 		if (apfs_transaction_commit(sb)) {
 			apfs_transaction_abort(sb);
 			goto fail;
@@ -623,6 +623,7 @@ static int __init init_inodecache(void)
 static int apfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 {
 	struct super_block *sb = inode->i_sb;
+	struct apfs_nxsb_info *nxi = APFS_SB(sb)->s_nxi;
 	struct apfs_max_ops maxops;
 	int err;
 
@@ -635,6 +636,8 @@ static int apfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 	err = apfs_update_inode(inode, NULL /* new_name */);
 	if (err)
 		goto fail;
+	/* Don't commit yet, or the inode will get flushed again and lock up */
+	nxi->nx_transaction.t_state |= APFS_NX_TRANS_DEFER_COMMIT;
 	err = apfs_transaction_commit(sb);
 	if (err)
 		goto fail;
@@ -801,7 +804,7 @@ int apfs_sync_fs(struct super_block *sb, int wait)
 	err = apfs_transaction_start(sb, maxops);
 	if (err)
 		return err;
-	APFS_SB(sb)->s_nxi->nx_transaction.t_state = APFS_NX_TRANS_FORCE_COMMIT;
+	APFS_SB(sb)->s_nxi->nx_transaction.t_state |= APFS_NX_TRANS_FORCE_COMMIT;
 	err = apfs_transaction_commit(sb);
 	if (err)
 		apfs_transaction_abort(sb);

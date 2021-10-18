@@ -455,7 +455,7 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 	/* Don't start transactions unless we are sure they fit in disk */
 	if (!apfs_transaction_has_room(sb, maxops)) {
 		/* Commit what we have so far to flush the queues */
-		nx_trans->t_state = APFS_NX_TRANS_FORCE_COMMIT;
+		nx_trans->t_state |= APFS_NX_TRANS_FORCE_COMMIT;
 		err = apfs_transaction_commit(sb);
 		if (err)
 			goto fail;
@@ -551,7 +551,7 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		 */
 		list_del_init(&ai->i_list);
 
-		nx_trans->t_state = APFS_NX_TRANS_COMMITTING;
+		nx_trans->t_state |= APFS_NX_TRANS_COMMITTING;
 		mutex_unlock(&nxs_mutex);
 		up_write(&nxi->nx_big_sem);
 
@@ -560,7 +560,7 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 
 		down_write(&nxi->nx_big_sem);
 		mutex_lock(&nxs_mutex);
-		nx_trans->t_state = APFS_NX_TRANS_NORMAL;
+		nx_trans->t_state = 0;
 
 		/* Transaction aborted by ->evict_inode(), error code is lost */
 		if (sb->s_flags & SB_RDONLY)
@@ -632,17 +632,17 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 
-	if (nx_trans->t_state == APFS_NX_TRANS_DEFER_COMMIT) {
-		nx_trans->t_state = APFS_NX_TRANS_NORMAL;
+	if (nx_trans->t_state & APFS_NX_TRANS_DEFER_COMMIT) {
+		nx_trans->t_state &= ~APFS_NX_TRANS_DEFER_COMMIT;
 		return false;
 	}
 
 	/* Avoid nested commits on ->evict_inode() */
-	if (nx_trans->t_state == APFS_NX_TRANS_COMMITTING)
+	if (nx_trans->t_state & APFS_NX_TRANS_COMMITTING)
 		return false;
 
-	if (nx_trans->t_state == APFS_NX_TRANS_FORCE_COMMIT) {
-		nx_trans->t_state = APFS_NX_TRANS_NORMAL;
+	if (nx_trans->t_state & APFS_NX_TRANS_FORCE_COMMIT) {
+		nx_trans->t_state = 0;
 		return true;
 	}
 
@@ -795,7 +795,7 @@ void apfs_transaction_abort(struct super_block *sb)
 	}
 
 	ASSERT(nx_trans->t_old_msb);
-	nx_trans->t_state = APFS_NX_TRANS_NORMAL;
+	nx_trans->t_state = 0;
 	apfs_warn(sb, "aborting transaction");
 
 	--nxi->nx_xid;

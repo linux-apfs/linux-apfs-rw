@@ -122,10 +122,9 @@ struct apfs_spaceman {
 };
 
 /* Possible states for the container transaction structure */
-#define APFS_NX_TRANS_NORMAL		0	/* Default state */
 #define APFS_NX_TRANS_FORCE_COMMIT	1	/* Commit guaranteed */
 #define APFS_NX_TRANS_DEFER_COMMIT	2	/* Commit banned right now */
-#define APFS_NX_TRANS_COMMITTING	3	/* Commit ongoing */
+#define APFS_NX_TRANS_COMMITTING	4	/* Commit ongoing */
 
 /*
  * Structure that keeps track of a container transaction.
