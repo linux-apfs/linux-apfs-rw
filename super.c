@@ -1066,12 +1066,7 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
 	/* This is needed for readahead, so old kernels will be slower */
-	err = super_setup_bdi(sb);
-	if (err)
-		return err;
-	/* This is redundant for kernels 5.10 and above */
-	sb->s_bdi->ra_pages = VM_READAHEAD_PAGES;
-	sb->s_bdi->io_pages = VM_READAHEAD_PAGES;
+	sb->s_bdi = bdi_get(APFS_NXI(sb)->nx_bdev->bd_bdi);
 #endif
 
 	sbi->s_uid = INVALID_UID;
