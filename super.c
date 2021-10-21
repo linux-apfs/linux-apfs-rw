@@ -1055,6 +1055,50 @@ static int apfs_check_features(struct super_block *sb)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+
+/**
+ * apfs_setup_bdi - Set up the bdi for the superblock
+ * @sb: superblock structure
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_setup_bdi(struct super_block *sb)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct backing_dev_info *bdi_dev = NULL, *bdi_sb = NULL;
+	int err;
+
+	bdi_dev = nxi->nx_bdev->bd_bdi;
+
+	err = super_setup_bdi(sb);
+	if (err)
+		return err;
+	bdi_sb = sb->s_bdi;
+
+	bdi_sb->ra_pages = bdi_dev->ra_pages;
+	bdi_sb->io_pages = bdi_dev->io_pages;
+
+	bdi_sb->capabilities = bdi_dev->capabilities;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+	bdi_sb->capabilities &= ~BDI_CAP_WRITEBACK;
+#else
+	bdi_sb->capabilities |= BDI_CAP_NO_WRITEBACK | BDI_CAP_NO_ACCT_DIRTY;
+#endif
+
+	return 0;
+}
+
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0) */
+
+/* This is needed for readahead, so old kernels will be slower */
+static int apfs_setup_bdi(struct super_block *sb)
+{
+	return 0;
+}
+
+#endif
+
 static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
@@ -1064,10 +1108,9 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 	ASSERT(sbi);
 	lockdep_assert_held(&nxs_mutex);
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
-	/* This is needed for readahead, so old kernels will be slower */
-	sb->s_bdi = bdi_get(APFS_NXI(sb)->nx_bdev->bd_bdi);
-#endif
+	err = apfs_setup_bdi(sb);
+	if (err)
+		return err;
 
 	sbi->s_uid = INVALID_UID;
 	sbi->s_gid = INVALID_GID;
