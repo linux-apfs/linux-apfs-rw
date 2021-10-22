@@ -483,10 +483,11 @@ static int apfs_write_end(struct file *file, struct address_space *mapping,
 
 	ret = generic_write_end(file, mapping, pos, len, copied, page, fsdata);
 	dstream->ds_size = i_size_read(inode);
-	if (ret < len) {
-		/* XXX: handle short writes */
-		err = -EIO;
-		goto out_abort;
+	if (ret < len && pos + len > inode->i_size) {
+		truncate_pagecache(inode, inode->i_size);
+		err = apfs_truncate(dstream, inode->i_size);
+		if (err)
+			goto out_abort;
 	}
 
 	err = apfs_transaction_commit(sb);

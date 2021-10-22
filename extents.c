@@ -1367,7 +1367,8 @@ int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size)
 	/* TODO: keep the cache valid on truncation */
 	cache->len = 0;
 
-	if (new_size < dstream->ds_size)
+	/* "<=", because a partial write may have left extents beyond the end */
+	if (new_size <= dstream->ds_size)
 		return apfs_shrink_dstream(dstream, new_size);
 
 	err = apfs_zero_dstream_tail(dstream);
