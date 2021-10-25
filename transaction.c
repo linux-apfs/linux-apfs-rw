@@ -512,6 +512,10 @@ static void apfs_end_buffer_write_sync(struct buffer_head *bh, int uptodate)
 	/* Future writes to mmapped areas should fault for CoW */
 	must_unlock = trylock_page(page);
 	page_mkclean(page);
+
+	/* XXX: otherwise, the page cache fills up and crashes the machine */
+	try_to_free_buffers(page);
+
 	if (must_unlock)
 		unlock_page(page);
 	put_page(page);
