@@ -548,6 +548,7 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		curr_err = apfs_update_inode(inode, NULL /* new_name */);
 		if (curr_err)
 			err = curr_err;
+		inode->i_state &= ~I_DIRTY_ALL;
 
 		/*
 		 * The same inode may get dirtied again as soon as we release
