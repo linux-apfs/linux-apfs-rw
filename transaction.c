@@ -501,11 +501,13 @@ fail:
 static void apfs_end_buffer_write_sync(struct buffer_head *bh, int uptodate)
 {
 	struct page *page = NULL;
-	bool must_unlock;
+	bool must_unlock, is_metadata;
 
 	page = bh->b_page;
 	get_page(page);
 
+	is_metadata = buffer_csum(bh);
+	clear_buffer_csum(bh);
 	end_buffer_write_sync(bh, uptodate);
 	bh = NULL;
 
@@ -514,7 +516,8 @@ static void apfs_end_buffer_write_sync(struct buffer_head *bh, int uptodate)
 	page_mkclean(page);
 
 	/* XXX: otherwise, the page cache fills up and crashes the machine */
-	try_to_free_buffers(page);
+	if (!is_metadata)
+		try_to_free_buffers(page);
 
 	if (must_unlock)
 		unlock_page(page);
@@ -581,7 +584,6 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 
 		if (buffer_csum(bh))
 			apfs_obj_set_csum(sb, (void *)bh->b_data);
-		clear_buffer_csum(bh);
 
 		list_del(&bhi->list);
 		clear_buffer_trans(bh);
