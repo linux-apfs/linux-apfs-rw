@@ -206,6 +206,26 @@ struct apfs_nxsb_info {
 extern struct mutex nxs_mutex;
 
 /*
+ * Omap record data in memory
+ */
+struct apfs_omap_rec {
+	u64 oid;
+	u64 bno;
+};
+
+#define APFS_OMAP_CACHE_SLOTS		128
+#define APFS_OMAP_CACHE_SLOT_MASK	(APFS_OMAP_CACHE_SLOTS - 1)
+
+/**
+ * Cache of omap records
+ */
+struct apfs_omap_cache {
+	struct apfs_omap_rec recs[APFS_OMAP_CACHE_SLOTS];
+	int oldest;
+	spinlock_t lock;
+};
+
+/*
  * Volume superblock data in memory
  */
 struct apfs_sb_info {
@@ -215,6 +235,7 @@ struct apfs_sb_info {
 
 	struct apfs_node *s_cat_root;	/* Root of the catalog tree */
 	struct apfs_node *s_omap_root;	/* Root of the object map tree */
+	struct apfs_omap_cache s_omap_cache;
 
 	struct apfs_object s_vobject;	/* Volume superblock object */
 
