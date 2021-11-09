@@ -78,7 +78,7 @@ static int apfs_dentry_hash(const struct dentry *dir, struct qstr *child)
 	if (!apfs_is_normalization_insensitive(dir->d_sb))
 		return 0;
 
-	apfs_init_unicursor(&cursor, child->name);
+	apfs_init_unicursor(&cursor, child->name, child->len);
 	hash = init_name_hash(dir);
 
 	while (1) {
@@ -104,7 +104,7 @@ static int apfs_dentry_hash(const struct dentry *dir, struct qstr *child)
 static int apfs_dentry_compare(const struct dentry *dentry, unsigned int len,
 			       const char *str, const struct qstr *name)
 {
-	return apfs_filename_cmp(dentry->d_sb, name->name, str);
+	return apfs_filename_cmp(dentry->d_sb, name->name, name->len, str, len);
 }
 
 static int apfs_dentry_revalidate(struct dentry *dentry, unsigned int flags)

@@ -14,6 +14,8 @@
 #include <linux/ctype.h>
 #include "unicode.h"
 
+#define MIN(X, Y)	((X) <= (Y) ? (X) : (Y))
+
 /* The arrays of unicode data are defined at the bottom of the file */
 /* TODO: would a single trie with all the data be more efficient? */
 static u16 apfs_nfd_trie[];
@@ -76,10 +78,12 @@ static int apfs_trie_find(void *trie, unicode_t key, void *result, bool is_ccc)
  * apfs_init_unicursor - Initialize an apfs_unicursor structure
  * @cursor:	cursor to initialize
  * @utf8str:	string to normalize
+ * @total_len:	length of the string
  */
-void apfs_init_unicursor(struct apfs_unicursor *cursor, const char *utf8str)
+void apfs_init_unicursor(struct apfs_unicursor *cursor, const char *utf8str, unsigned int total_len)
 {
 	cursor->utf8curr = utf8str;
+	cursor->total_len = total_len;
 	cursor->length = -1;
 	cursor->last_pos = -1;
 	cursor->last_ccc = 0;
@@ -214,22 +218,23 @@ static unicode_t apfs_normalize_char(unicode_t utf32char, int off,
 /**
  * apfs_get_normalization_length - Count the characters until the next starter
  * @utf8str:	string to normalize, may begin with several starters
+ * @total_len:	length of the string to normalize
  * @case_fold:	true if the count should consider case folding
  *
  * Returns the number of unicode characters in the normalization of the
  * substring that begins at @utf8str and ends at the first nonconsecutive
  * starter. Or 0 if the substring has invalid UTF-8.
  */
-static int apfs_get_normalization_length(const char *utf8str, bool case_fold)
+static int apfs_get_normalization_length(const char *utf8str, unsigned int total_len, bool case_fold)
 {
 	int utf8len, pos, norm_len = 0;
 	bool starters_over = false;
 	unicode_t utf32char;
 
 	while (1) {
-		if (!*utf8str)
+		if (!total_len || !*utf8str)
 			return norm_len;
-		utf8len = utf8_to_utf32(utf8str, 4, &utf32char);
+		utf8len = utf8_to_utf32(utf8str, MIN(total_len, 4), &utf32char);
 		if (utf8len < 0) /* Invalid unicode; don't normalize anything */
 			return 0;
 
@@ -251,6 +256,7 @@ static int apfs_get_normalization_length(const char *utf8str, bool case_fold)
 				return norm_len;
 		}
 		utf8str += utf8len;
+		total_len -= utf8len;
 	}
 }
 
@@ -271,21 +277,24 @@ static int apfs_get_normalization_length(const char *utf8str, bool case_fold)
 unicode_t apfs_normalize_next(struct apfs_unicursor *cursor, bool case_fold)
 {
 	const char *utf8str = cursor->utf8curr;
+	unsigned int total_len = cursor->total_len;
 	int str_pos, min_pos = -1;
 	unicode_t utf32min = 0;
 	u8 min_ccc;
 
 new_starter:
 	if (likely(isascii(*utf8str))) {
+		if (!total_len)
+			return 0;
 		cursor->utf8curr = utf8str + 1;
+		cursor->total_len = total_len - 1;
 		if (case_fold)
 			return tolower(*utf8str);
 		return *utf8str;
 	}
 
 	if (cursor->length < 0) {
-		cursor->length = apfs_get_normalization_length(utf8str,
-							       case_fold);
+		cursor->length = apfs_get_normalization_length(utf8str, total_len, case_fold);
 		if (cursor->length == 0)
 			return 0;
 	}
@@ -297,7 +306,7 @@ new_starter:
 		unicode_t utf32char;
 		int utf8len, pos;
 
-		utf8len = utf8_to_utf32(utf8str, 4, &utf32char);
+		utf8len = utf8_to_utf32(utf8str, MIN(total_len, 4), &utf32char);
 		for (pos = 0;; pos++, str_pos++) {
 			unicode_t utf32norm;
 			u8 ccc;
@@ -321,6 +330,7 @@ new_starter:
 		}
 
 		utf8str += utf8len;
+		total_len -= utf8len;
 		if (str_pos == cursor->length) {
 			/* Reached the following starter */
 			if (min_ccc != 0xFF) {
@@ -330,7 +340,7 @@ new_starter:
 				return utf32min;
 			}
 			/* Continue from the next starter */
-			apfs_init_unicursor(cursor, utf8str);
+			apfs_init_unicursor(cursor, utf8str, total_len);
 			goto new_starter;
 		}
 	}

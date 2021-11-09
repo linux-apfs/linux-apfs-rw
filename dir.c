@@ -95,7 +95,7 @@ static struct apfs_query *apfs_dentry_lookup(struct inode *dir,
 	bool hashed = apfs_is_normalization_insensitive(sb);
 	int err;
 
-	apfs_init_drec_key(sb, cnid, child->name, &key, hashed);
+	apfs_init_drec_key(sb, cnid, child->name, child->len, &key, hashed);
 
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
@@ -116,7 +116,7 @@ static struct apfs_query *apfs_dentry_lookup(struct inode *dir,
 		err = apfs_drec_from_query(query, drec, hashed);
 		if (err)
 			goto fail;
-	} while (unlikely(apfs_filename_cmp(sb, child->name, drec->name)));
+	} while (unlikely(apfs_filename_cmp(sb, child->name, child->len, drec->name, drec->name_len)));
 
 	return query;
 
@@ -181,7 +181,7 @@ static int apfs_readdir(struct file *file, struct dir_context *ctx)
 	}
 
 	/* We want all the children for the cnid, regardless of the name */
-	apfs_init_drec_key(sb, cnid, NULL /* name */, &key, hashed);
+	apfs_init_drec_key(sb, cnid, NULL /* name */, 0 /* name_len */, &key, hashed);
 	query->key = &key;
 	query->flags = APFS_QUERY_CAT | APFS_QUERY_MULTIPLE | APFS_QUERY_EXACT;
 
@@ -357,7 +357,7 @@ static int apfs_create_dentry_rec(struct inode *inode, struct qstr *qname,
 	bool hashed = apfs_is_normalization_insensitive(sb);
 	int ret;
 
-	apfs_init_drec_key(sb, parent_id, qname->name, &key, hashed);
+	apfs_init_drec_key(sb, parent_id, qname->name, qname->len, &key, hashed);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;

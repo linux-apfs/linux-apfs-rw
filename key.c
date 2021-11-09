@@ -11,22 +11,25 @@
  * apfs_filename_cmp - Normalize and compare two APFS filenames
  * @sb:			filesystem superblock
  * @name1, @name2:	names to compare
+ * @len1, @len2:	length of the names
  *
- * returns   0 if @name1 and @name2 are equal
- *	   < 0 if @name1 comes before @name2
- *	   > 0 if @name1 comes after @name2
+ * Returns 0 if @name1 and @name2 are equal, or non-zero otherwise.
  */
 int apfs_filename_cmp(struct super_block *sb,
-		      const char *name1, const char *name2)
+		      const char *name1, unsigned int len1,
+		      const char *name2, unsigned int len2)
 {
 	struct apfs_unicursor cursor1, cursor2;
 	bool case_fold = apfs_is_case_insensitive(sb);
 
-	if (!apfs_is_normalization_insensitive(sb))
-		return strcmp(name1, name2);
+	if (!apfs_is_normalization_insensitive(sb)) {
+		if (len1 != len2)
+			return -1;
+		return memcmp(name1, name2, len1);
+	}
 
-	apfs_init_unicursor(&cursor1, name1);
-	apfs_init_unicursor(&cursor2, name2);
+	apfs_init_unicursor(&cursor1, name1, len1);
+	apfs_init_unicursor(&cursor2, name2, len2);
 
 	while (1) {
 		unicode_t uni1, uni2;
@@ -207,11 +210,12 @@ int apfs_read_extentref_key(void *raw, int size, struct apfs_key *key)
  * @sb:		filesystem superblock
  * @ino:	inode number of the parent directory
  * @name:	filename (NULL for a multiple query)
+ * @name_len:	filename length (0 if NULL)
  * @key:	apfs_key structure to initialize
  * @hashed:	is this a hashed key?
  */
 void apfs_init_drec_key(struct super_block *sb, u64 ino, const char *name,
-			struct apfs_key *key, bool hashed)
+			unsigned int name_len, struct apfs_key *key, bool hashed)
 {
 	struct apfs_unicursor cursor;
 	bool case_fold = apfs_is_case_insensitive(sb);
@@ -233,7 +237,7 @@ void apfs_init_drec_key(struct super_block *sb, u64 ino, const char *name,
 		return;
 	}
 
-	apfs_init_unicursor(&cursor, name);
+	apfs_init_unicursor(&cursor, name, name_len);
 
 	while (1) {
 		unicode_t utf32;

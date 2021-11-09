@@ -448,7 +448,7 @@ static inline void apfs_init_sibling_map_key(u64 id, struct apfs_key *key)
 }
 
 extern void apfs_init_drec_key(struct super_block *sb, u64 ino, const char *name,
-			       struct apfs_key *key, bool hashed);
+			       unsigned int name_len, struct apfs_key *key, bool hashed);
 
 /**
  * apfs_init_xattr_key - Initialize an in-memory key for a xattr query
@@ -814,8 +814,7 @@ extern int apfs_fileattr_set(struct user_namespace *mnt_userns, struct dentry *d
 #endif
 
 /* key.c */
-extern int apfs_filename_cmp(struct super_block *sb,
-			     const char *name1, const char *name2);
+extern int apfs_filename_cmp(struct super_block *sb, const char *name1, unsigned int len1, const char *name2, unsigned int len2);
 extern int apfs_keycmp(struct super_block *sb,
 		       struct apfs_key *k1, struct apfs_key *k2);
 extern int apfs_read_cat_key(void *raw, int size, struct apfs_key *key, bool hashed);
