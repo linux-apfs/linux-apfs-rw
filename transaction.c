@@ -8,8 +8,8 @@
 #include "apfs.h"
 
 #define TRANSACTION_MAIN_QUEUE_MAX	4096
-#define TRANSACTION_BUFFERS_MAX		1024
-#define TRANSACTION_STARTS_MAX		1024
+#define TRANSACTION_BUFFERS_MAX		65536
+#define TRANSACTION_STARTS_MAX		65536
 
 /**
  * apfs_cpoint_init_area - Initialize the new blocks of a checkpoint area
