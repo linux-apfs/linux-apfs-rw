@@ -19,9 +19,10 @@ static u64 apfs_fletcher64(void *addr, size_t len)
 	u64 sum1 = 0;
 	u64 sum2 = 0;
 	u64 c1, c2;
-	int i;
+	int i, count_32;
 
-	for (i = 0; i < len/sizeof(u32); i++) {
+	count_32 = len >> 2;
+	for (i = 0; i < count_32; i++) {
 		sum1 += le32_to_cpu(buff[i]);
 		sum2 += sum1;
 	}
