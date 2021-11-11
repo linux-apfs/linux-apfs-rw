@@ -339,7 +339,7 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno,
 	err = apfs_spaceman_allocate_block(sb, &new_bno, true /* backwards */);
 	if (err)
 		goto fail;
-	new_bh = apfs_sb_bread(sb, new_bno);
+	new_bh = apfs_getblk(sb, new_bno);
 	if (!new_bh) {
 		err = -EIO;
 		goto fail;

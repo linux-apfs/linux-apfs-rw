@@ -236,7 +236,7 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 		return ERR_PTR(-EINVAL); /* Prevent compiler warnings */
 	}
 
-	bh = apfs_sb_bread(sb, bno);
+	bh = apfs_getblk(sb, bno);
 	if (!bh)
 		return ERR_PTR(-EIO);
 	raw = (void *)bh->b_data;

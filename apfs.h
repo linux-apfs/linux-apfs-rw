@@ -940,4 +940,16 @@ apfs_sb_bread(struct super_block *sb, sector_t block)
 	return __bread_gfp(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
 }
 
+/* Use instead of apfs_sb_bread() for blocks that will just be overwritten */
+static inline struct buffer_head *
+apfs_getblk(struct super_block *sb, sector_t block)
+{
+	struct buffer_head *bh;
+
+	bh = __getblk_gfp(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
+	if (bh)
+		set_buffer_uptodate(bh);
+	return bh;
+}
+
 #endif	/* _APFS_H */

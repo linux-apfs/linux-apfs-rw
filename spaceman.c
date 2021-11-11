@@ -210,7 +210,7 @@ static int apfs_rotate_ip_bitmaps(struct super_block *sb)
 	if (err)
 		goto out;
 
-	new_bh = apfs_sb_bread(sb, bmap_base + le64_to_cpup(curr_bmap_off));
+	new_bh = apfs_getblk(sb, bmap_base + le64_to_cpup(curr_bmap_off));
 	if (!new_bh) {
 		err = -EIO;
 		goto out;
@@ -732,7 +732,7 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 			goto fail;
 		}
 
-		new_bmap_bh = apfs_sb_bread(sb, new_bmap_bno);
+		new_bmap_bh = apfs_getblk(sb, new_bmap_bno);
 		if (!new_bmap_bh) {
 			err = -EIO;
 			goto fail;
@@ -758,7 +758,7 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 			goto fail;
 		}
 
-		new_cib_bh = apfs_sb_bread(sb, new_cib_bno);
+		new_cib_bh = apfs_getblk(sb, new_cib_bno);
 		if (!new_cib_bh) {
 			err = -EIO;
 			goto fail;

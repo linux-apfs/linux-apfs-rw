@@ -37,7 +37,7 @@ static int apfs_cpoint_init_area(struct super_block *sb, u64 base, u32 blks,
 		u32 type;
 		int err;
 
-		new_bh = apfs_sb_bread(sb, base + new_index);
+		new_bh = apfs_getblk(sb, base + new_index);
 		old_bh = apfs_sb_bread(sb, base + old_index);
 		if (!new_bh || !old_bh) {
 			apfs_err(sb, "unable to read the checkpoint areas");
@@ -286,7 +286,7 @@ int apfs_cpoint_data_free(struct super_block *sb, u64 bno)
 		struct buffer_head *old_bh, *new_bh;
 		int err;
 
-		new_bh = apfs_sb_bread(sb, data_base + (data_index + i) % data_blks);
+		new_bh = apfs_getblk(sb, data_base + (data_index + i) % data_blks);
 		old_bh = apfs_sb_bread(sb, data_base + (data_index + i + 1) % data_blks);
 		if (!new_bh || !old_bh) {
 			brelse(new_bh);
