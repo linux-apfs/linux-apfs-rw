@@ -386,7 +386,8 @@ void apfs_update_node(struct apfs_node *node)
 	if (!free_head->len)
 		free_head->off = cpu_to_le16(APFS_BTOFF_INVALID);
 
-	apfs_obj_set_csum(sb, &raw->btn_o);
+	ASSERT(buffer_trans(bh));
+	ASSERT(buffer_csum(bh));
 }
 
 /**

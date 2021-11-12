@@ -414,7 +414,7 @@ static int apfs_flush_free_queue(struct super_block *sb, unsigned qid)
 	}
 	fq->sfq_oldest_xid = cpu_to_le64(apfs_free_queue_oldest_xid(fq_root));
 
-	apfs_obj_set_csum(sb, &sm_raw->sm_o);
+	set_buffer_csum(sm->sm_bh);
 
 fail:
 	apfs_node_put(fq_root);
@@ -656,7 +656,7 @@ int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count)
 	if (!fq->sfq_oldest_xid)
 		fq->sfq_oldest_xid = cpu_to_le64(nxi->nx_xid);
 	le64_add_cpu(&fq->sfq_count, count);
-	apfs_obj_set_csum(sb, &sm_raw->sm_o);
+	set_buffer_csum(sm->sm_bh);
 
 fail:
 	apfs_free_query(sb, query);
@@ -770,6 +770,10 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 		if (err)
 			goto fail;
 
+		err = apfs_transaction_join(sb, *cib_bh);
+		if (err)
+			goto fail;
+
 		cib = (struct apfs_chunk_info_block *)(*cib_bh)->b_data;
 		ci = &cib->cib_chunk_info[index];
 		cib->cib_o.o_oid = cpu_to_le64(new_cib_bno);
@@ -783,7 +787,8 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 	ci->ci_xid = cpu_to_le64(nxi->nx_xid);
 	le32_add_cpu(&ci->ci_free_count, is_alloc ? -1 : 1);
 	ci->ci_bitmap_addr = cpu_to_le64(bmap_bh->b_blocknr);
-	apfs_obj_set_csum(sb, &cib->cib_o);
+	ASSERT(buffer_trans(*cib_bh));
+	set_buffer_csum(*cib_bh);
 	mark_buffer_dirty(*cib_bh);
 
 	/* Finally, allocate / free the actual block that was requested */
@@ -798,7 +803,7 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 	} else {
 		if(!apfs_chunk_mark_free(sb, bmap, *bno)) {
 			le32_add_cpu(&ci->ci_free_count, -1);
-			apfs_obj_set_csum(sb, &cib->cib_o);
+			set_buffer_csum(*cib_bh);
 			mark_buffer_dirty(*cib_bh);
 			err = -EFSCORRUPTED;
 		} else
@@ -887,7 +892,6 @@ static int apfs_cib_allocate_block(struct super_block *sb,
 int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backwards)
 {
 	struct apfs_spaceman *sm = APFS_SM(sb);
-	struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
 	int i;
 
 	for (i = 0; i < sm->sm_cib_count; ++i) {
@@ -910,7 +914,7 @@ int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backward
 			apfs_spaceman_write_cib_addr(sb, index, cib_bh->b_blocknr);
 			/* The free block count has changed */
 			apfs_write_spaceman(sm);
-			apfs_obj_set_csum(sb, &sm_raw->sm_o);
+			set_buffer_csum(sm->sm_bh);
 		}
 		brelse(cib_bh);
 		if (err == -ENOSPC) /* This cib is full */
@@ -965,7 +969,7 @@ static int apfs_main_free(struct super_block *sb, u64 bno)
 		apfs_spaceman_write_cib_addr(sb, cib_idx, cib_bh->b_blocknr);
 		/* The free block count has changed */
 		apfs_write_spaceman(sm);
-		apfs_obj_set_csum(sb, &sm_raw->sm_o);
+		set_buffer_csum(sm->sm_bh);
 	}
 	brelse(cib_bh);
 
