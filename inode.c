@@ -479,6 +479,7 @@ static int apfs_write_end(struct file *file, struct address_space *mapping,
 	struct inode *inode = mapping->host;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
 	struct super_block *sb = inode->i_sb;
+	struct apfs_nx_transaction *trans = &APFS_NXI(sb)->nx_transaction;
 	int ret, err;
 
 	ret = generic_write_end(file, mapping, pos, len, copied, page, fsdata);
@@ -489,6 +490,11 @@ static int apfs_write_end(struct file *file, struct address_space *mapping,
 		if (err)
 			goto out_abort;
 	}
+
+	if ((pos + ret) & (sb->s_blocksize - 1))
+		trans->t_state |= APFS_NX_TRANS_INCOMPLETE_BLOCK;
+	else
+		trans->t_state &= ~APFS_NX_TRANS_INCOMPLETE_BLOCK;
 
 	err = apfs_transaction_commit(sb);
 	if (!err)

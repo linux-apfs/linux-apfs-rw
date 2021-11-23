@@ -125,6 +125,7 @@ struct apfs_spaceman {
 #define APFS_NX_TRANS_FORCE_COMMIT	1	/* Commit guaranteed */
 #define APFS_NX_TRANS_DEFER_COMMIT	2	/* Commit banned right now */
 #define APFS_NX_TRANS_COMMITTING	4	/* Commit ongoing */
+#define APFS_NX_TRANS_INCOMPLETE_BLOCK	8	/* A data block is not written in full */
 
 /*
  * Structure that keeps track of a container transaction.

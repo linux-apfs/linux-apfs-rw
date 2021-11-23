@@ -657,10 +657,24 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 		struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
 		struct apfs_spaceman_free_queue *fq_ip = &sm_raw->sm_fq[APFS_SFQ_IP];
 		struct apfs_spaceman_free_queue *fq_main = &sm_raw->sm_fq[APFS_SFQ_MAIN];
+		int buffers_max = TRANSACTION_BUFFERS_MAX;
+		int starts_max = TRANSACTION_STARTS_MAX;
+		int mq_max = TRANSACTION_MAIN_QUEUE_MAX;
 
-		if(nx_trans->t_buffers_count > TRANSACTION_BUFFERS_MAX)
+		/*
+		 * Try to avoid committing halfway through a data block write,
+		 * otherwise the block will be put through copy-on-write again,
+		 * causing unnecessary fragmentation.
+		 */
+		if (nx_trans->t_state & APFS_NX_TRANS_INCOMPLETE_BLOCK) {
+			buffers_max += 50;
+			starts_max += 50;
+			mq_max += 20;
+		}
+
+		if(nx_trans->t_buffers_count > buffers_max)
 			return true;
-		if (nx_trans->t_starts_count > TRANSACTION_STARTS_MAX)
+		if (nx_trans->t_starts_count > starts_max)
 			return true;
 
 		/*
@@ -672,7 +686,7 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 			return true;
 
 		/* Don't let the main queue get too full either */
-		if(le64_to_cpu(fq_main->sfq_count) > TRANSACTION_MAIN_QUEUE_MAX)
+		if(le64_to_cpu(fq_main->sfq_count) > mq_max)
 			return true;
 	}
 
