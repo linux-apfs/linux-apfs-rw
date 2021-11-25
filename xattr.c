@@ -5,6 +5,7 @@
 
 #include <linux/buffer_head.h>
 #include <linux/xattr.h>
+#include <linux/blk_types.h>
 #include "apfs.h"
 
 /**
@@ -97,6 +98,7 @@ static int apfs_xattr_extents_read(struct inode *parent,
 	struct super_block *sb = parent->i_sb;
 	struct apfs_dstream_info *dstream;
 	int length, blkcnt, i;
+	struct buffer_head **bhs = NULL;
 	int ret;
 
 	dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
@@ -128,10 +130,10 @@ static int apfs_xattr_extents_read(struct inode *parent,
 	}
 
 	blkcnt = (length + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
+	bhs = kcalloc(blkcnt, sizeof(*bhs), GFP_KERNEL);
 	for (i = 0; i < blkcnt; i++) {
 		struct buffer_head tmp; /* XXX */
-		struct buffer_head *bh;
-		int off, tocopy;
+		struct buffer_head *bh = NULL;
 
 		tmp.b_blocknr = -1;
 		ret = __apfs_get_block(dstream, i, &tmp, false /* create */);
@@ -143,20 +145,41 @@ static int apfs_xattr_extents_read(struct inode *parent,
 			goto out;
 		}
 
-		bh = apfs_sb_bread(sb, tmp.b_blocknr);
-		if (!bh) {
+		bhs[i] = __getblk_gfp(APFS_NXI(sb)->nx_bdev, tmp.b_blocknr, sb->s_blocksize, __GFP_MOVABLE);
+		if (!bhs[i]) {
+			ret = -EIO;
+			goto out;
+		}
+
+		bh = bhs[i];
+		if (!buffer_uptodate(bh)) {
+			get_bh(bh);
+			lock_buffer(bh);
+			bh->b_end_io = end_buffer_read_sync;
+			submit_bh(REQ_OP_READ, 0, bh);
+		}
+	}
+	for (i = 0; i < blkcnt; i++) {
+		int off, tocopy;
+
+		wait_on_buffer(bhs[i]);
+		if (!buffer_uptodate(bhs[i])) {
 			ret = -EIO;
 			goto out;
 		}
 
 		off = i << sb->s_blocksize_bits;
 		tocopy = min(sb->s_blocksize, (unsigned long)(length - off));
-		memcpy(buffer + off, bh->b_data, tocopy);
-		brelse(bh);
+		memcpy(buffer + off, bhs[i]->b_data, tocopy);
 	}
 	ret = length;
 
 out:
+	if (bhs) {
+		for (i = 0; i < blkcnt; i++)
+			brelse(bhs[i]);
+		kfree(bhs);
+	}
 	kfree(dstream);
 	return ret;
 }
