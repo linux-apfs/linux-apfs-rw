@@ -322,7 +322,8 @@ void apfs_free_query(struct super_block *sb, struct apfs_query *query)
  */
 static int apfs_query_set_before_first(struct super_block *sb, struct apfs_query **query)
 {
-	struct apfs_node *node;
+	struct apfs_node *node = NULL;
+	struct apfs_query *parent = NULL;
 	u64 child_id;
 	u32 storage = apfs_query_storage(*query);
 	int err;
@@ -346,8 +347,14 @@ static int apfs_query_set_before_first(struct super_block *sb, struct apfs_query
 		if (IS_ERR(node))
 			return PTR_ERR(node);
 
-		*query = apfs_alloc_query(node, *query);
+		parent = *query;
+		*query = apfs_alloc_query(node, parent);
 		apfs_node_put(node);
+		node = NULL;
+		if (!*query) {
+			*query = parent;
+			return -ENOMEM;
+		}
 	}
 
 	apfs_alert(sb, "b-tree is corrupted");
@@ -432,8 +439,14 @@ next_node:
 	 * Remember the parent node and index in case the search needs
 	 * to be continued later.
 	 */
-	*query = apfs_alloc_query(node, *query);
+	parent = *query;
+	*query = apfs_alloc_query(node, parent);
 	apfs_node_put(node);
+	node = NULL;
+	if (!*query) {
+		*query = parent;
+		return -ENOMEM;
+	}
 	goto next_node;
 }
 
