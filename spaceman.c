@@ -520,7 +520,7 @@ static u64 apfs_ip_find_free(struct super_block *sb)
 {
 	struct apfs_spaceman *sm = APFS_SM(sb);
 	struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
-	int bitcount = le64_to_cpu(sm_raw->sm_ip_block_count);
+	u64 bitcount = le64_to_cpu(sm_raw->sm_ip_block_count);
 	char *bitmap = sm->sm_ip->b_data;
 	u64 offset;
 
