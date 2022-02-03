@@ -212,10 +212,9 @@ int apfs_read_extentref_key(void *raw, int size, struct apfs_key *key)
  * @name:	filename (NULL for a multiple query)
  * @name_len:	filename length (0 if NULL)
  * @key:	apfs_key structure to initialize
- * @hashed:	is this a hashed key?
  */
 void apfs_init_drec_key(struct super_block *sb, u64 ino, const char *name,
-			unsigned int name_len, struct apfs_key *key, bool hashed)
+			unsigned int name_len, struct apfs_key *key)
 {
 	struct apfs_unicursor cursor;
 	bool case_fold = apfs_is_case_insensitive(sb);
