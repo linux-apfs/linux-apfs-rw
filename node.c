@@ -20,7 +20,7 @@
 static bool apfs_node_is_valid(struct super_block *sb,
 			       struct apfs_node *node)
 {
-	int records = node->records;
+	u32 records = node->records;
 	int index_size = node->key - sizeof(struct apfs_btree_node_phys);
 	int entry_size;
 
@@ -29,6 +29,10 @@ static bool apfs_node_is_valid(struct super_block *sb,
 
 	entry_size = (apfs_node_has_fixed_kv_size(node)) ?
 		sizeof(struct apfs_kvoff) : sizeof(struct apfs_kvloc);
+
+	/* Coarse bound to prevent multiplication overflow in final check */
+	if (records > 1 << 16)
+		return false;
 
 	return records * entry_size <= index_size;
 }
