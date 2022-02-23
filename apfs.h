@@ -758,6 +758,7 @@ extern int APFS_DELETE_ORPHAN_LINK_MAXOPS(void);
 /* extents.c */
 extern int apfs_extent_from_query(struct apfs_query *query,
 				  struct apfs_file_extent *extent);
+extern int apfs_logic_to_phys_bno(struct apfs_dstream_info *dstream, sector_t dsblock, u64 *bno);
 extern int __apfs_get_block(struct apfs_dstream_info *dstream, sector_t iblock,
 			    struct buffer_head *bh_result, int create);
 extern int apfs_get_block(struct inode *inode, sector_t iblock,
