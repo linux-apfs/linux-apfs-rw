@@ -525,15 +525,14 @@ static struct apfs_dstream_info *apfs_create_xattr_dstream(struct super_block *s
 
 	blkcnt = (size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
 	for (i = 0; i < blkcnt; i++) {
-		struct buffer_head tmp; /* XXX */
 		struct buffer_head *bh;
 		int off, tocopy;
+		u64 bno;
 
-		set_buffer_trans(&tmp); /* Prevent the fake bh from joining */
-		err = apfs_dstream_get_new_block(dstream, i, &tmp);
+		err = apfs_dstream_get_new_bno(dstream, i, &bno);
 		if (err)
 			goto fail;
-		bh = apfs_sb_bread(sb, tmp.b_blocknr);
+		bh = apfs_sb_bread(sb, bno);
 		if (!bh) {
 			err = -EIO;
 			goto fail;
