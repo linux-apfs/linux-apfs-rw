@@ -988,6 +988,38 @@ static int apfs_attach_child(struct apfs_query *query, struct apfs_node *child)
 }
 
 /**
+ * apfs_node_temp_dup - Make an in-memory duplicate of a node
+ * @original:	node to duplicate
+ * @duplicate:	on success, the duplicate node
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_node_temp_dup(const struct apfs_node *original, struct apfs_node **duplicate)
+{
+	struct super_block *sb = original->object.sb;
+	struct apfs_node *dup = NULL;
+	char *buffer = NULL;
+
+	dup = kmalloc(sizeof(*dup), GFP_KERNEL);
+	if (!dup)
+		return -ENOMEM;
+	*dup = *original;
+	dup->object.o_bh = NULL;
+	dup->object.data = NULL;
+
+	buffer = kmalloc(sb->s_blocksize, GFP_KERNEL);
+	if (!buffer) {
+		kfree(dup);
+		return -ENOMEM;
+	}
+	memcpy(buffer, original->object.data, sb->s_blocksize);
+	dup->object.data = buffer;
+
+	*duplicate = dup;
+	return 0;
+}
+
+/**
  * apfs_node_split - Split a b-tree node in two
  * @query: query pointing to the node
  *
@@ -1000,9 +1032,7 @@ int apfs_node_split(struct apfs_query *query)
 	struct super_block *sb = query->node->object.sb;
 	struct apfs_node *old_node;
 	struct apfs_btree_node_phys *old_raw;
-	char *buffer = NULL;
-	struct apfs_node buf_node;
-	struct buffer_head buf_bh;
+	struct apfs_node *tmp_node = NULL;
 	u32 storage = apfs_query_storage(query);
 	int record_count, new_rec_count, old_rec_count;
 	int err;
@@ -1020,19 +1050,12 @@ int apfs_node_split(struct apfs_query *query)
 	apfs_assert_in_transaction(sb, &old_raw->btn_o);
 
 	/*
-	 * XXX: to defragment the original node, we put all records in a
-	 * temporary buffer fake node before dealing them out.  This is absurd,
-	 * and completely unacceptable because of the stack allocations.
+	 * To defragment the original node, we put all records in a temporary
+	 * in-memory node before dealing them out.
 	 */
-	buffer = kmalloc(sb->s_blocksize, GFP_KERNEL);
-	if (!buffer)
-		return -ENOMEM;
-	memcpy(buffer, old_raw, sb->s_blocksize);
-	buf_bh = *old_node->object.o_bh;
-	buf_bh.b_data = buffer;
-	buf_node = *old_node;
-	buf_node.object.o_bh = &buf_bh;
-	buf_node.object.data = buf_bh.b_data;
+	err = apfs_node_temp_dup(old_node, &tmp_node);
+	if (err)
+		return err;
 
 	/*
 	 * The first half of the records go in the original node. If there's
@@ -1044,7 +1067,7 @@ int apfs_node_split(struct apfs_query *query)
 	old_node->records = 0;
 	old_node->key_free_list_len = 0;
 	old_node->val_free_list_len = 0;
-	err = apfs_copy_record_range(old_node, &buf_node, 0, old_rec_count);
+	err = apfs_copy_record_range(old_node, tmp_node, 0, old_rec_count);
 	if (err)
 		goto out;
 	apfs_update_node(old_node);
@@ -1066,7 +1089,7 @@ int apfs_node_split(struct apfs_query *query)
 		new_node->records = 0;
 		new_node->key_free_list_len = 0;
 		new_node->val_free_list_len = 0;
-		err = apfs_copy_record_range(new_node, &buf_node, old_rec_count, record_count);
+		err = apfs_copy_record_range(new_node, tmp_node, old_rec_count, record_count);
 		if (err) {
 			apfs_node_put(new_node);
 			goto out;
@@ -1103,7 +1126,7 @@ int apfs_node_split(struct apfs_query *query)
 					      &query->key_off);
 
 out:
-	kfree(buffer);
+	apfs_node_put(tmp_node);
 	return err;
 }
 
