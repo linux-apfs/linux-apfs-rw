@@ -22,7 +22,7 @@
  */
 static int apfs_drec_from_query(struct apfs_query *query, struct apfs_drec *drec, bool hashed)
 {
-	char *raw = query->node->object.bh->b_data;
+	char *raw = query->node->object.data;
 	struct apfs_drec_hashed_key *de_hkey = NULL;
 	struct apfs_drec_key *de_ukey = NULL;
 	struct apfs_drec_val *de;
@@ -989,7 +989,7 @@ static inline void apfs_undo_delete_dentry(struct dentry *dentry)
 static int apfs_sibling_link_from_query(struct apfs_query *query,
 					char **name, u64 *parent)
 {
-	char *raw = query->node->object.bh->b_data;
+	char *raw = query->node->object.data;
 	struct apfs_sibling_val *siblink;
 	int namelen = query->len - sizeof(*siblink);
 

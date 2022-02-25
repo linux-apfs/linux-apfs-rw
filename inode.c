@@ -136,7 +136,7 @@ static int apfs_put_dstream_rec(struct apfs_dstream_info *dstream)
 		ret = -EFSCORRUPTED;
 		goto out;
 	}
-	raw = query->node->object.bh->b_data;
+	raw = query->node->object.data;
 	raw_val = *(struct apfs_dstream_id_val *)(raw + query->off);
 	refcnt = le32_to_cpu(raw_val.refcnt);
 
@@ -258,7 +258,7 @@ int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta)
 	ret = apfs_query_join_transaction(query);
 	if (ret)
 		return ret;
-	raw = query->node->object.bh->b_data;
+	raw = query->node->object.data;
 	raw_val = (void *)raw + query->off;
 
 	le32_add_cpu(&raw_val->refcnt, delta);
@@ -306,7 +306,7 @@ static int apfs_crypto_set_key(struct super_block *sb, u64 crypto_id, struct apf
 	ret = apfs_btree_query(sb, &query);
 	if (ret)
 		goto out;
-	raw = query->node->object.bh->b_data;
+	raw = query->node->object.data;
 	raw_val = (void *)raw + query->off;
 
 	new_val->refcnt = raw_val->refcnt;
@@ -351,7 +351,7 @@ static int apfs_crypto_get_key(struct super_block *sb, u64 crypto_id, struct apf
 	ret = apfs_btree_query(sb, &query);
 	if (ret)
 		goto out;
-	raw = query->node->object.bh->b_data;
+	raw = query->node->object.data;
 	raw_val = (void *)raw + query->off;
 
 	pfk_len = le16_to_cpu(raw_val->state.key_len);
@@ -572,7 +572,7 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_dstream_info *dstream = &ai->i_dstream;
 	struct apfs_inode_val *inode_val;
-	char *raw = query->node->object.bh->b_data;
+	char *raw = query->node->object.data;
 	char *xval = NULL;
 	int xlen;
 	u32 rdev = 0, bsd_flags;
@@ -911,7 +911,7 @@ static int apfs_build_inode_val(struct inode *inode, struct qstr *qname,
 static int apfs_inode_rename(struct inode *inode, char *new_name,
 			     struct apfs_query *query)
 {
-	char *raw = query->node->object.bh->b_data;
+	char *raw = query->node->object.data;
 	struct apfs_inode_val *new_val = NULL;
 	int buflen, namelen;
 	struct apfs_x_field xkey;
@@ -963,7 +963,7 @@ fail:
 static int apfs_create_dstream_xfield(struct inode *inode,
 				      struct apfs_query *query)
 {
-	char *raw = query->node->object.bh->b_data;
+	char *raw = query->node->object.data;
 	struct apfs_inode_val *new_val;
 	struct apfs_dstream dstream_raw = {0};
 	struct apfs_x_field xkey;
@@ -1031,7 +1031,7 @@ static int apfs_inode_resize(struct inode *inode, struct apfs_query *query)
 	err = apfs_query_join_transaction(query);
 	if (err)
 		return err;
-	raw = query->node->object.bh->b_data;
+	raw = query->node->object.data;
 	inode_raw = (void *)raw + query->off;
 
 	xlen = apfs_find_xfield(inode_raw->xfields,
@@ -1065,7 +1065,7 @@ static int apfs_inode_resize(struct inode *inode, struct apfs_query *query)
 static int apfs_create_sparse_xfield(struct inode *inode, struct apfs_query *query)
 {
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
-	char *raw = query->node->object.bh->b_data;
+	char *raw = query->node->object.data;
 	struct apfs_inode_val *new_val;
 	__le64 sparse_bytes;
 	struct apfs_x_field xkey;
@@ -1124,7 +1124,7 @@ static int apfs_inode_resize_sparse(struct inode *inode, struct apfs_query *quer
 	err = apfs_query_join_transaction(query);
 	if (err)
 		return err;
-	raw = query->node->object.bh->b_data;
+	raw = query->node->object.data;
 	inode_raw = (void *)raw + query->off;
 
 	xlen = apfs_find_xfield(inode_raw->xfields,
@@ -1160,7 +1160,6 @@ int apfs_update_inode(struct inode *inode, char *new_name)
 	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_dstream_info *dstream = &ai->i_dstream;
 	struct apfs_query *query;
-	struct buffer_head *bh;
 	struct apfs_btree_node_phys *node_raw;
 	struct apfs_inode_val *inode_raw;
 	int err;
@@ -1192,8 +1191,7 @@ int apfs_update_inode(struct inode *inode, char *new_name)
 	err = apfs_query_join_transaction(query);
 	if (err)
 		goto fail;
-	bh = query->node->object.bh;
-	node_raw = (void *)bh->b_data;
+	node_raw = (void *)query->node->object.data;
 	apfs_assert_in_transaction(sb, &node_raw->btn_o);
 	inode_raw = (void *)node_raw + query->off;
 

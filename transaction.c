@@ -111,8 +111,9 @@ static int apfs_cpoint_init_desc(struct super_block *sb)
 		return -EINVAL;
 	}
 
-	brelse(nxi->nx_object.bh);
-	nxi->nx_object.bh = new_sb_bh;
+	brelse(nxi->nx_object.o_bh);
+	nxi->nx_object.o_bh = new_sb_bh;
+	nxi->nx_object.data = new_sb_bh->b_data;
 	raw_sb = (struct apfs_nx_superblock *)new_sb_bh->b_data;
 	nxi->nx_raw = raw_sb;
 	nxi->nx_object.block_nr = new_sb_bh->b_blocknr;
@@ -349,7 +350,7 @@ static int apfs_checkpoint_end(struct super_block *sb)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_obj_phys *obj = &nxi->nx_raw->nx_o;
-	struct buffer_head *bh = nxi->nx_object.bh;
+	struct buffer_head *bh = nxi->nx_object.o_bh;
 	struct inode *bdev_inode = nxi->nx_bdev->bd_inode;
 	struct address_space *bdev_map = bdev_inode->i_mapping;
 	int err;
@@ -434,7 +435,7 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 	/* TODO: rethink this now that transactions shouldn't fail */
 	if (!nx_trans->t_old_msb) {
 		/* Backup the old superblock buffers in case the transaction fails */
-		nx_trans->t_old_msb = nxi->nx_object.bh;
+		nx_trans->t_old_msb = nxi->nx_object.o_bh;
 		get_bh(nx_trans->t_old_msb);
 
 		++nxi->nx_xid;
@@ -463,14 +464,14 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 	}
 
 	if (!vol_trans->t_old_vsb) {
-		vol_trans->t_old_vsb = sbi->s_vobject.bh;
+		vol_trans->t_old_vsb = sbi->s_vobject.o_bh;
 		get_bh(vol_trans->t_old_vsb);
 
 		/* Backup the old tree roots; the node struct issues make this ugly */
 		vol_trans->t_old_cat_root = *sbi->s_cat_root;
-		get_bh(vol_trans->t_old_cat_root.object.bh);
+		get_bh(vol_trans->t_old_cat_root.object.o_bh);
 		vol_trans->t_old_omap_root = *sbi->s_omap_root;
-		get_bh(vol_trans->t_old_omap_root.object.bh);
+		get_bh(vol_trans->t_old_omap_root.object.o_bh);
 
 		err = apfs_map_volume_super(sb, true /* write */);
 		if (err)
@@ -616,10 +617,12 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		vol_trans->t_old_vsb = NULL;
 
 		/* XXX: forget the buffers for the b-tree roots */
-		brelse(vol_trans->t_old_omap_root.object.bh);
-		vol_trans->t_old_omap_root.object.bh = NULL;
-		brelse(vol_trans->t_old_cat_root.object.bh);
-		vol_trans->t_old_cat_root.object.bh = NULL;
+		vol_trans->t_old_omap_root.object.data = NULL;
+		brelse(vol_trans->t_old_omap_root.object.o_bh);
+		vol_trans->t_old_omap_root.object.o_bh = NULL;
+		vol_trans->t_old_cat_root.object.data = NULL;
+		brelse(vol_trans->t_old_cat_root.object.o_bh);
+		vol_trans->t_old_cat_root.object.o_bh = NULL;
 	}
 
 	brelse(APFS_SM(sb)->sm_ip);
@@ -835,8 +838,9 @@ void apfs_transaction_abort(struct super_block *sb)
 	}
 
 	/* Restore the old container superblock */
-	brelse(nxi->nx_object.bh);
-	nxi->nx_object.bh = nx_trans->t_old_msb;
+	brelse(nxi->nx_object.o_bh);
+	nxi->nx_object.o_bh = nx_trans->t_old_msb;
+	nxi->nx_object.data = nxi->nx_object.o_bh->b_data;
 	nxi->nx_object.block_nr = nx_trans->t_old_msb->b_blocknr;
 	nxi->nx_raw = (void *)nx_trans->t_old_msb->b_data;
 	nx_trans->t_old_msb = NULL;
@@ -847,19 +851,22 @@ void apfs_transaction_abort(struct super_block *sb)
 			continue;
 
 		/* Restore volume state for all volumes */
-		brelse(sbi->s_vobject.bh);
-		sbi->s_vobject.bh = vol_trans->t_old_vsb;
+		brelse(sbi->s_vobject.o_bh);
+		sbi->s_vobject.o_bh = vol_trans->t_old_vsb;
+		sbi->s_vobject.data = sbi->s_vobject.o_bh->b_data;
 		sbi->s_vobject.block_nr = vol_trans->t_old_vsb->b_blocknr;
 		sbi->s_vsb_raw = (void *)vol_trans->t_old_vsb->b_data;
 		vol_trans->t_old_vsb = NULL;
 
 		/* XXX: restore the old b-tree root nodes */
-		brelse(sbi->s_omap_root->object.bh);
+		brelse(sbi->s_omap_root->object.o_bh);
 		*(sbi->s_omap_root) = vol_trans->t_old_omap_root;
-		vol_trans->t_old_omap_root.object.bh = NULL;
-		brelse(sbi->s_cat_root->object.bh);
+		vol_trans->t_old_omap_root.object.o_bh = NULL;
+		vol_trans->t_old_omap_root.object.data = NULL;
+		brelse(sbi->s_cat_root->object.o_bh);
 		*(sbi->s_cat_root) = vol_trans->t_old_cat_root;
-		vol_trans->t_old_cat_root.object.bh = NULL;
+		vol_trans->t_old_cat_root.object.o_bh = NULL;
+		vol_trans->t_old_cat_root.object.data = NULL;
 	}
 
 	brelse(APFS_SM(sb)->sm_ip);

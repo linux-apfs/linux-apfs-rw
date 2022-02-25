@@ -248,7 +248,7 @@ struct apfs_fq_rec {
  */
 static int apfs_fq_rec_from_query(struct apfs_query *query, struct apfs_fq_rec *fqrec)
 {
-	char *raw = query->node->object.bh->b_data;
+	char *raw = query->node->object.data;
 	struct apfs_spaceman_free_queue_key *key;
 
 	if (query->key_len != sizeof(*key))
@@ -362,7 +362,7 @@ fail:
 static u64 apfs_free_queue_oldest_xid(struct apfs_node *root)
 {
 	struct apfs_spaceman_free_queue_key *key;
-	char *raw = root->object.bh->b_data;
+	char *raw = root->object.data;
 	int len, off;
 
 	len = apfs_node_locate_key(root, 0, &off);

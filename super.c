@@ -233,7 +233,8 @@ static int apfs_map_main_super(struct super_block *sb)
 	nxi->nx_object.sb = sb; /* XXX: these "objects" never made any sense */
 	nxi->nx_object.block_nr = bno;
 	nxi->nx_object.oid = le64_to_cpu(msb_raw->nx_o.o_oid);
-	nxi->nx_object.bh = bh;
+	nxi->nx_object.o_bh = bh;
+	nxi->nx_object.data = bh->b_data;
 
 	/* For now we only support blocksize < PAGE_SIZE */
 	nxi->nx_blocksize = sb->s_blocksize;
@@ -286,6 +287,7 @@ static inline void apfs_unmap_main_super(struct apfs_sb_info *sbi)
 {
 	struct apfs_nxsb_info *nxi = sbi->s_nxi;
 	fmode_t mode = FMODE_READ | FMODE_EXCL;
+	struct apfs_object *obj = NULL;
 
 	if (nxi->nx_flags & APFS_READWRITE)
 		mode |= FMODE_WRITE;
@@ -296,7 +298,12 @@ static inline void apfs_unmap_main_super(struct apfs_sb_info *sbi)
 	if (--nxi->nx_refcnt)
 		goto out;
 
-	brelse(nxi->nx_object.bh);
+	obj = &nxi->nx_object;
+	obj->data = NULL;
+	brelse(obj->o_bh);
+	obj->o_bh = NULL;
+	obj = NULL;
+
 	blkdev_put(nxi->nx_bdev, mode);
 	list_del(&nxi->nx_list);
 	kfree(nxi);
@@ -327,7 +334,7 @@ int apfs_map_volume_super(struct super_block *sb, bool write)
 	int err;
 
 	ASSERT(msb_raw);
-	ASSERT(trans->t_old_vsb == sbi->s_vobject.bh);
+	ASSERT(trans->t_old_vsb == sbi->s_vobject.o_bh);
 	(void)trans;
 
 	/* Get the id for the requested volume number */
@@ -403,8 +410,9 @@ int apfs_map_volume_super(struct super_block *sb, bool write)
 	sbi->s_vobject.sb = sb;
 	sbi->s_vobject.block_nr = vsb;
 	sbi->s_vobject.oid = le64_to_cpu(vsb_raw->apfs_o.o_oid);
-	brelse(sbi->s_vobject.bh);
-	sbi->s_vobject.bh = bh;
+	brelse(sbi->s_vobject.o_bh);
+	sbi->s_vobject.o_bh = bh;
+	sbi->s_vobject.data = bh->b_data;
 
 	if (write)
 		apfs_update_software_info(sb);
@@ -422,8 +430,11 @@ fail:
 static inline void apfs_unmap_volume_super(struct super_block *sb)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_object *obj = &sbi->s_vobject;
 
-	brelse(sbi->s_vobject.bh);
+	obj->data = NULL;
+	brelse(obj->o_bh);
+	obj->o_bh = NULL;
 }
 
 /**
@@ -527,7 +538,7 @@ static void apfs_put_super(struct super_block *sb)
 		if (apfs_transaction_start(sb, maxops))
 			goto fail;
 		vsb_raw = sbi->s_vsb_raw;
-		vsb_bh = sbi->s_vobject.bh;
+		vsb_bh = sbi->s_vobject.o_bh;
 
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		ASSERT(buffer_trans(vsb_bh));

@@ -43,13 +43,15 @@ static inline bool sb_rdonly(const struct super_block *sb) { return sb->s_flags 
 struct apfs_object {
 	struct super_block *sb;
 	u64 block_nr;
-	u64 oid;		/* Often the same as the block number */
+	u64 oid;
 
 	/*
-	 * Buffer head containing the one block of the object.  TODO: support
-	 * objects with more than one block.
+	 * Buffer head containing the one block of the object, may be NULL if
+	 * the object is only in memory. TODO: support objects with more than
+	 * one block.
 	 */
-	struct buffer_head *bh;
+	struct buffer_head *o_bh;
+	char *data; /* The raw object */
 };
 
 /* Constants used in managing the size of a node's table of contents */
