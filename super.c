@@ -377,7 +377,7 @@ int apfs_map_volume_super(struct super_block *sb, bool write)
 	brelse(bh);
 
 	err = apfs_omap_lookup_block(sb, vnode, vol_id, &vsb, write);
-	apfs_node_put(vnode);
+	apfs_node_free(vnode);
 	if (err) {
 		apfs_err(sb, "volume not found, likely corruption");
 		return err;
@@ -487,7 +487,7 @@ int apfs_read_omap(struct super_block *sb, bool write)
 	brelse(bh);
 
 	if (sbi->s_omap_root)
-		apfs_node_put(sbi->s_omap_root);
+		apfs_node_free(sbi->s_omap_root);
 	sbi->s_omap_root = omap_root;
 	return 0;
 
@@ -520,7 +520,7 @@ int apfs_read_catalog(struct super_block *sb, bool write)
 	}
 
 	if (sbi->s_cat_root)
-		apfs_node_put(sbi->s_cat_root);
+		apfs_node_free(sbi->s_cat_root);
 	sbi->s_cat_root = root_node;
 	return 0;
 }
@@ -559,8 +559,8 @@ fail:
 	iput(sbi->s_private_dir);
 	sbi->s_private_dir = NULL;
 
-	apfs_node_put(sbi->s_cat_root);
-	apfs_node_put(sbi->s_omap_root);
+	apfs_node_free(sbi->s_cat_root);
+	apfs_node_free(sbi->s_omap_root);
 	apfs_unmap_volume_super(sb);
 
 	mutex_lock(&nxs_mutex);
@@ -733,7 +733,7 @@ static int apfs_count_used_blocks(struct super_block *sb, u64 *count)
 		brelse(bh);
 	}
 
-	apfs_node_put(vnode);
+	apfs_node_free(vnode);
 	return err;
 }
 
@@ -1181,9 +1181,9 @@ failed_mount:
 	iput(sbi->s_private_dir);
 failed_private_dir:
 	sbi->s_private_dir = NULL;
-	apfs_node_put(sbi->s_cat_root);
+	apfs_node_free(sbi->s_cat_root);
 failed_cat:
-	apfs_node_put(sbi->s_omap_root);
+	apfs_node_free(sbi->s_omap_root);
 failed_omap:
 	apfs_unmap_volume_super(sb);
 	return err;

@@ -37,9 +37,8 @@ static bool apfs_node_is_valid(struct super_block *sb,
 	return records * entry_size <= index_size;
 }
 
-static void apfs_node_release(struct kref *kref)
+void apfs_node_free(struct apfs_node *node)
 {
-	struct apfs_node *node = container_of(kref, struct apfs_node, refcount);
 	struct apfs_object *obj = &node->object;
 
 	if (obj->o_bh) {
@@ -52,16 +51,6 @@ static void apfs_node_release(struct kref *kref)
 	}
 
 	kfree(node);
-}
-
-void apfs_node_get(struct apfs_node *node)
-{
-	kref_get(&node->refcount);
-}
-
-void apfs_node_put(struct apfs_node *node)
-{
-	kref_put(&node->refcount, apfs_node_release);
 }
 
 /**
@@ -139,18 +128,16 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 	node->object.o_bh = bh;
 	node->object.data = bh->b_data;
 
-	kref_init(&node->refcount);
-
 	if (nxi->nx_flags & APFS_CHECK_NODES &&
 	    !apfs_obj_verify_csum(sb, &raw->btn_o)) {
 		/* TODO: don't check this twice for virtual/physical objects */
 		apfs_alert(sb, "bad checksum for node in block 0x%llx", bh->b_blocknr);
-		apfs_node_put(node);
+		apfs_node_free(node);
 		return ERR_PTR(-EFSBADCRC);
 	}
 	if (!apfs_node_is_valid(sb, node)) {
 		apfs_alert(sb, "bad node in block 0x%llx", bh->b_blocknr);
-		apfs_node_put(node);
+		apfs_node_free(node);
 		return ERR_PTR(-EFSCORRUPTED);
 	}
 
@@ -288,7 +275,6 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 	node->object.oid = oid;
 	node->object.o_bh = bh;
 	node->object.data = bh->b_data;
-	kref_init(&node->refcount);
 	return node;
 
 fail:
@@ -840,13 +826,13 @@ static int apfs_btree_inc_height(struct apfs_query *query)
 	/* Add a new level to the query chain */
 	root_query = query->parent = apfs_alloc_query(root, NULL /* parent */);
 	if (!query->parent) {
-		apfs_node_put(new_node);
+		apfs_node_free(new_node);
 		return -ENOMEM;
 	}
 	root_query->key = query->key;
 	root_query->flags = query->flags;
-	apfs_node_put(query->node);
 	query->node = new_node;
+	query->depth = 1;
 
 	/* Now assemble the new root with only the first key */
 	root_query->key_len = apfs_node_locate_key(root, 0 /* index */,
@@ -1091,7 +1077,7 @@ int apfs_node_split(struct apfs_query *query)
 		new_node->val_free_list_len = 0;
 		err = apfs_copy_record_range(new_node, tmp_node, old_rec_count, record_count);
 		if (err) {
-			apfs_node_put(new_node);
+			apfs_node_free(new_node);
 			goto out;
 		}
 		new_raw = (void *)new_node->object.data;
@@ -1101,20 +1087,19 @@ int apfs_node_split(struct apfs_query *query)
 
 		err = apfs_attach_child(query->parent, new_node);
 		if (err) {
-			apfs_node_put(new_node);
+			apfs_node_free(new_node);
 			goto out;
 		}
 
 		/* Point the query back to the original record */
 		if (query->index >= old_rec_count) {
 			/* The record got moved to the new node */
-			apfs_node_put(query->node);
-			apfs_node_get(new_node);
+			apfs_node_free(query->node);
 			query->node = new_node;
 			query->index -= old_rec_count;
+		} else {
+			apfs_node_free(new_node);
 		}
-
-		apfs_node_put(new_node);
 	}
 	apfs_free_query(sb, query->parent);
 	query->parent = NULL; /* The caller only gets the leaf */
@@ -1126,7 +1111,7 @@ int apfs_node_split(struct apfs_query *query)
 					      &query->key_off);
 
 out:
-	apfs_node_put(tmp_node);
+	apfs_node_free(tmp_node);
 	return err;
 }
 
@@ -1606,7 +1591,7 @@ int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len
 
 	prev_node = NULL;
 	prev_raw = NULL;
-	apfs_node_put(query->node);
+	apfs_node_free(query->node);
 
 	query->node = new_node;
 	query->index = -1;

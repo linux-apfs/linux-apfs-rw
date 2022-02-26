@@ -278,7 +278,6 @@ struct apfs_query *apfs_alloc_query(struct apfs_node *node,
 		return NULL;
 
 	/* To be released by free_query. */
-	apfs_node_get(node);
 	query->node = node;
 	query->key = parent ? parent->key : NULL;
 	query->flags = parent ?
@@ -303,7 +302,9 @@ void apfs_free_query(struct super_block *sb, struct apfs_query *query)
 	while (query) {
 		struct apfs_query *parent = query->parent;
 
-		apfs_node_put(query->node);
+		/* The caller decides whether to free the root node */
+		if (query->depth != 0)
+			apfs_node_free(query->node);
 		kfree(query);
 		query = parent;
 	}
@@ -349,12 +350,12 @@ static int apfs_query_set_before_first(struct super_block *sb, struct apfs_query
 
 		parent = *query;
 		*query = apfs_alloc_query(node, parent);
-		apfs_node_put(node);
-		node = NULL;
 		if (!*query) {
+			apfs_node_free(node);
 			*query = parent;
 			return -ENOMEM;
 		}
+		node = NULL;
 	}
 
 	apfs_alert(sb, "b-tree is corrupted");
@@ -441,12 +442,12 @@ next_node:
 	 */
 	parent = *query;
 	*query = apfs_alloc_query(node, parent);
-	apfs_node_put(node);
-	node = NULL;
 	if (!*query) {
+		apfs_node_free(node);
 		*query = parent;
 		return -ENOMEM;
 	}
+	node = NULL;
 	goto next_node;
 }
 
@@ -486,11 +487,13 @@ int apfs_query_join_transaction(struct apfs_query *query)
 		return 0;
 	/* Ephemeral objects are always checkpoint data */
 	ASSERT(storage != APFS_OBJ_EPHEMERAL);
+	/* Root nodes should join the transaction before the query is created */
+	ASSERT(!apfs_node_is_root(node));
 
 	node = apfs_read_node(sb, oid, storage, true /* write */);
 	if (IS_ERR(node))
 		return PTR_ERR(node);
-	apfs_node_put(query->node);
+	apfs_node_free(query->node);
 	query->node = node;
 
 	if (storage == APFS_OBJ_PHYSICAL && query->parent) {

@@ -417,7 +417,7 @@ static int apfs_flush_free_queue(struct super_block *sb, unsigned qid)
 	set_buffer_csum(sm->sm_bh);
 
 fail:
-	apfs_node_put(fq_root);
+	apfs_node_free(fq_root);
 	return err;
 }
 
@@ -660,7 +660,7 @@ int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count)
 
 fail:
 	apfs_free_query(sb, query);
-	apfs_node_put(fq_root);
+	apfs_node_free(fq_root);
 	return err;
 }
 

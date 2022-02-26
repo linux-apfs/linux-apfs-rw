@@ -8,7 +8,6 @@
 
 #include <linux/buffer_head.h>
 #include <linux/fs.h>
-#include <linux/kref.h>
 #include <linux/list.h>
 #include <linux/types.h>
 #include <linux/version.h>
@@ -74,8 +73,6 @@ struct apfs_node {
 	int val_free_list_len;	/* Length of the fragmented free value space */
 
 	struct apfs_object object; /* Object holding the node */
-
-	struct kref refcount;
 };
 
 /**
@@ -840,8 +837,7 @@ extern void apfs_node_query_first(struct apfs_query *query);
 extern int apfs_bno_from_query(struct apfs_query *query, u64 *bno);
 extern int apfs_node_split(struct apfs_query *query);
 extern int apfs_node_locate_key(struct apfs_node *node, int index, int *off);
-extern void apfs_node_get(struct apfs_node *node);
-extern void apfs_node_put(struct apfs_node *node);
+extern void apfs_node_free(struct apfs_node *node);
 extern void apfs_node_free_range(struct apfs_node *node, u16 off, u16 len);
 extern int apfs_node_replace(struct apfs_query *query, void *key, int key_len, void *val, int val_len);
 extern int apfs_node_insert(struct apfs_query *query, void *key, int key_len, void *val, int val_len);

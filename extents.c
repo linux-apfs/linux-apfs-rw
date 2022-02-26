@@ -699,7 +699,7 @@ static int apfs_insert_phys_extent(struct apfs_dstream_info *dstream, const stru
 
 fail:
 	apfs_free_query(sb, query);
-	apfs_node_put(extref_root);
+	apfs_node_free(extref_root);
 	return ret;
 }
 
@@ -1014,7 +1014,7 @@ search_and_insert:
 
 fail:
 	apfs_free_query(sb, query);
-	apfs_node_put(extref_root);
+	apfs_node_free(extref_root);
 	return ret;
 }
 
