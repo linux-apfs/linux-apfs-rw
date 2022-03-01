@@ -45,7 +45,7 @@ static int apfs_readpages(struct file *file, struct address_space *mapping,
  * Does nothing if the record already exists.  TODO: support cloned files.
  * Returns 0 on success or a negative error code in case of failure.
  */
-int apfs_create_dstream_rec(struct apfs_dstream_info *dstream)
+static int apfs_create_dstream_rec(struct apfs_dstream_info *dstream)
 {
 	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
