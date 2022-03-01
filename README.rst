@@ -84,8 +84,8 @@ To unmount it, run::
 Credits
 =======
 
-Originally written by Ernesto A. Fernández <ernesto.mnd.fernandez@gmail.com>,
-with several contributions from Gabriel Krisman Bertazi <krisman@collabora.com>,
+Originally written by Ernesto A. Fernández <ernesto@corellium.com>, with
+several contributions from Gabriel Krisman Bertazi <krisman@collabora.com>,
 Arnaud Ferraris <arnaud.ferraris@collabora.com> and Stan Skowronek
 <skylark@disorder.metrascale.com>. For attribution details see the historical
 git tree at https://github.com/eafer/linux-apfs.git.
