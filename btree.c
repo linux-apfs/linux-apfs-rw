@@ -453,7 +453,8 @@ next_node:
 
 /**
  * apfs_omap_read_node - Find and read a node from a b-tree
- * @id:		id for the seeked node
+ * @sb: filesystem superblock
+ * @id: id for the seeked node
  *
  * Returns NULL is case of failure, otherwise a pointer to the resulting
  * apfs_node structure.

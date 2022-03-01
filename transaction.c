@@ -315,8 +315,7 @@ int apfs_cpoint_data_free(struct super_block *sb, u64 bno)
 
 /**
  * apfs_checkpoint_start - Start the checkpoint for a new transaction
- * @sb:		superblock structure
- * @trans:	the transaction
+ * @sb:	superblock structure
  *
  * Sets the descriptor and data areas for a new checkpoint.  Returns 0 on
  * success, or a negative error code in case of failure.
