@@ -111,7 +111,7 @@ static int apfs_extent_read(struct apfs_dstream_info *dstream, sector_t dsblock,
 	}
 
 done:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 
@@ -427,7 +427,7 @@ static int apfs_update_tail_extent(struct apfs_dstream_info *dstream, const stru
 	ret = apfs_crypto_adj_refcnt(sb, new_crypto, 1);
 
 out:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 
@@ -581,7 +581,7 @@ search_and_insert:
 		if (ret)
 			goto out;
 		/* The query should point to the previous record, start again */
-		apfs_free_query(sb, query);
+		apfs_free_query(query);
 		second_run = true;
 		goto search_and_insert;
 	} else if (prev_end == extent->logical_addr + extent->len) {
@@ -604,7 +604,7 @@ search_and_insert:
 		if (ret)
 			goto out;
 		/* The split may make the query invalid */
-		apfs_free_query(sb, query);
+		apfs_free_query(query);
 		second_run = true;
 		goto search_and_insert;
 	} else {
@@ -617,7 +617,7 @@ search_and_insert:
 	ret = apfs_crypto_adj_refcnt(sb, new_crypto, 1);
 
 out:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 
@@ -698,7 +698,7 @@ static int apfs_insert_phys_extent(struct apfs_dstream_info *dstream, const stru
 					 &raw_val, sizeof(raw_val));
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	apfs_node_free(extref_root);
 	return ret;
 }
@@ -1003,7 +1003,7 @@ search_and_insert:
 		if (ret)
 			goto fail;
 		/* The split may make the query invalid */
-		apfs_free_query(sb, query);
+		apfs_free_query(query);
 		second_run = true;
 		goto search_and_insert;
 	} else {
@@ -1013,7 +1013,7 @@ search_and_insert:
 	}
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	apfs_node_free(extref_root);
 	return ret;
 }
@@ -1112,7 +1112,7 @@ static int apfs_create_hole(struct apfs_dstream_info *dstream, u64 start, u64 en
 	dstream->ds_sparse_bytes += end - start;
 
 out:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 
@@ -1370,7 +1370,7 @@ static int apfs_shrink_dstream_last_extent(struct apfs_dstream_info *dstream, lo
 	}
 
 out:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 

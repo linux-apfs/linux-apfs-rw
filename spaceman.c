@@ -351,7 +351,7 @@ static int apfs_flush_fq_rec(struct apfs_node *root, u64 xid, u64 *len)
 	*len = fqrec.len;
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return err;
 }
 
@@ -659,7 +659,7 @@ int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count)
 	set_buffer_csum(sm->sm_bh);
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	apfs_node_free(fq_root);
 	return err;
 }

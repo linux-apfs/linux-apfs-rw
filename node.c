@@ -946,7 +946,7 @@ static int apfs_copy_record_range(struct apfs_node *dest_node,
 	err = 0;
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return err;
 }
 
@@ -1101,7 +1101,7 @@ int apfs_node_split(struct apfs_query *query)
 			apfs_node_free(new_node);
 		}
 	}
-	apfs_free_query(sb, query->parent);
+	apfs_free_query(query->parent);
 	query->parent = NULL; /* The caller only gets the leaf */
 
 	/* Updating these fields isn't really necessary, but it's cleaner */

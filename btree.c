@@ -170,7 +170,7 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 	apfs_omap_cache_save(sb, id, *block);
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 
@@ -218,7 +218,7 @@ int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno)
 	apfs_omap_cache_save(sb, oid, bno);
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 
@@ -253,7 +253,7 @@ int apfs_delete_omap_rec(struct super_block *sb, u64 oid)
 	if (!ret)
 		apfs_omap_cache_delete(sb, oid);
 
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 
@@ -292,12 +292,11 @@ struct apfs_query *apfs_alloc_query(struct apfs_node *node,
 
 /**
  * apfs_free_query - Free a query structure
- * @sb:		filesystem superblock
- * @query:	query to free
+ * @query: query to free
  *
  * Also frees the ancestor queries, if they are kept.
  */
-void apfs_free_query(struct super_block *sb, struct apfs_query *query)
+void apfs_free_query(struct apfs_query *query)
 {
 	while (query) {
 		struct apfs_query *parent = query->parent;
@@ -412,7 +411,7 @@ next_node:
 		/* Move back up one level and continue the query */
 		parent = (*query)->parent;
 		(*query)->parent = NULL; /* Don't free the parent */
-		apfs_free_query(sb, *query);
+		apfs_free_query(*query);
 		*query = parent;
 		goto next_node;
 	} else if (err) {
@@ -630,12 +629,12 @@ static int apfs_query_refresh(struct apfs_query *old_query)
 	}
 
 	/* Replace the parent of the original query with the new valid one */
-	apfs_free_query(sb, old_query->parent);
+	apfs_free_query(old_query->parent);
 	old_query->parent = new_query->parent;
 	new_query->parent = NULL;
 
 fail:
-	apfs_free_query(sb, new_query);
+	apfs_free_query(new_query);
 	return err;
 }
 

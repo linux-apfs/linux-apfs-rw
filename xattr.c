@@ -274,7 +274,7 @@ int ____apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 		ret = apfs_xattr_inline_read(inode, &xattr, buffer, size, only_whole);
 
 done:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 
@@ -388,7 +388,7 @@ static int apfs_delete_any_xattr(struct inode *inode)
 		ret = -EAGAIN;
 
 out:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 
@@ -686,7 +686,7 @@ done:
 	kfree(old_dstream);
 	kfree(raw_val);
 	kfree(raw_key);
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 int APFS_XATTR_SET_MAXOPS(void)
@@ -801,7 +801,7 @@ ssize_t apfs_listxattr(struct dentry *dentry, char *buffer, size_t size)
 	}
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	up_read(&nxi->nx_big_sem);
 	return ret;
 }

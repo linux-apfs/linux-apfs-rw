@@ -121,7 +121,7 @@ static struct apfs_query *apfs_dentry_lookup(struct inode *dir,
 	return query;
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ERR_PTR(err);
 }
 
@@ -149,7 +149,7 @@ int apfs_inode_by_name(struct inode *dir, const struct qstr *child, u64 *ino)
 		goto out;
 	}
 	*ino = drec.ino;
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 out:
 	up_read(&nxi->nx_big_sem);
 	return err;
@@ -219,7 +219,7 @@ static int apfs_readdir(struct file *file, struct dir_context *ctx)
 		}
 		pos--;
 	}
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 
 out:
 	up_read(&nxi->nx_big_sem);
@@ -390,7 +390,7 @@ static int apfs_create_dentry_rec(struct inode *inode, struct qstr *qname,
 fail:
 	kfree(raw_val);
 	kfree(raw_key);
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 #define APFS_CREATE_DENTRY_REC_MAXOPS	1
@@ -466,7 +466,7 @@ static int apfs_create_sibling_link_rec(struct dentry *dentry,
 	kfree(raw_val);
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 #define APFS_CREATE_SIBLING_LINK_REC_MAXOPS	1
@@ -508,7 +508,7 @@ static int apfs_create_sibling_map_rec(struct dentry *dentry,
 				&raw_val, sizeof(raw_val));
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 #define APFS_CREATE_SIBLING_MAP_REC_MAXOPS	1
@@ -724,7 +724,6 @@ int apfs_create(struct user_namespace *mnt_userns, struct inode *dir,
  */
 static int apfs_prepare_dentry_for_link(struct dentry *dentry)
 {
-	struct super_block *sb = dentry->d_sb;
 	struct inode *parent = d_inode(dentry->d_parent);
 	struct apfs_query *query;
 	struct apfs_drec drec;
@@ -736,13 +735,13 @@ static int apfs_prepare_dentry_for_link(struct dentry *dentry)
 		return PTR_ERR(query);
 	if (drec.sibling_id) {
 		/* This dentry already has a sibling id xfield */
-		apfs_free_query(sb, query);
+		apfs_free_query(query);
 		return 0;
 	}
 
 	/* Don't modify the dentry record, just delete it to make a new one */
 	ret = apfs_btree_remove(query);
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	if (ret)
 		return ret;
 
@@ -876,7 +875,7 @@ static int apfs_delete_sibling_link_rec(struct dentry *dentry, u64 sibling_id)
 	ret = apfs_btree_remove(query);
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 #define APFS_DELETE_SIBLING_LINK_REC_MAXOPS	1
@@ -915,7 +914,7 @@ static int apfs_delete_sibling_map_rec(struct dentry *dentry, u64 sibling_id)
 	ret = apfs_btree_remove(query);
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 #define APFS_DELETE_SIBLING_MAP_REC_MAXOPS	1
@@ -940,7 +939,7 @@ static int apfs_delete_dentry(struct dentry *dentry)
 	if (IS_ERR(query))
 		return PTR_ERR(query);
 	err = apfs_btree_remove(query);
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	if (err)
 		return err;
 
@@ -1054,7 +1053,7 @@ static int apfs_find_primary_link(struct inode *inode, char **name, u64 *parent)
 	err = *name ? 0 : -EFSCORRUPTED; /* Sibling records must exist */
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return err;
 }
 
@@ -1163,7 +1162,7 @@ int apfs_delete_orphan_link(struct inode *inode)
 	apfs_inode_join_transaction(sb, priv_dir);
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	kfree(qname.name);
 	return err;
 }

@@ -72,7 +72,7 @@ static int apfs_create_dstream_rec(struct apfs_dstream_info *dstream)
 	if (ret)
 		goto out;
 out:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 #define APFS_CREATE_DSTREAM_REC_MAXOPS	1
@@ -148,7 +148,7 @@ static int apfs_put_dstream_rec(struct apfs_dstream_info *dstream)
 	raw_val.refcnt = cpu_to_le32(refcnt - 1);
 	ret = apfs_btree_replace(query, NULL /* key */, 0 /* key_len */, &raw_val, sizeof(raw_val));
 out:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 
@@ -203,7 +203,7 @@ static int apfs_create_crypto_rec(struct inode *inode)
 					&raw_val, sizeof(raw_val));
 	}
 out:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 #define APFS_CREATE_CRYPTO_REC_MAXOPS	1
@@ -264,7 +264,7 @@ int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta)
 	le32_add_cpu(&raw_val->refcnt, delta);
 
 out:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 int APFS_CRYPTO_ADJ_REFCNT_MAXOPS(void)
@@ -315,7 +315,7 @@ static int apfs_crypto_set_key(struct super_block *sb, u64 crypto_id, struct apf
 				 new_val, sizeof(*new_val) + pfk_len);
 
 out:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 #define APFS_CRYPTO_SET_KEY_MAXOPS	1
@@ -363,7 +363,7 @@ static int apfs_crypto_get_key(struct super_block *sb, u64 crypto_id, struct apf
 	memcpy(val, raw_val, sizeof(*val) + pfk_len);
 
 out:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 
@@ -693,7 +693,7 @@ static struct apfs_query *apfs_inode_lookup(const struct inode *inode)
 	if (!ret)
 		return query;
 
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ERR_PTR(ret);
 }
 
@@ -763,7 +763,7 @@ struct inode *apfs_iget(struct super_block *sb, u64 cnid)
 		goto fail;
 	}
 	err = apfs_inode_from_query(query, inode);
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	if (err)
 		goto fail;
 	up_read(&nxi->nx_big_sem);
@@ -1223,7 +1223,7 @@ int apfs_update_inode(struct inode *inode, char *new_name)
 	}
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return err;
 }
 int APFS_UPDATE_INODE_MAXOPS(void)
@@ -1261,7 +1261,7 @@ static int apfs_delete_inode(struct inode *inode)
 	if (IS_ERR(query))
 		return PTR_ERR(query);
 	ret = apfs_btree_remove(query);
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	switch (inode->i_mode & S_IFMT) {
@@ -1450,7 +1450,7 @@ int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 	kfree(raw_val);
 
 fail:
-	apfs_free_query(sb, query);
+	apfs_free_query(query);
 	return ret;
 }
 int APFS_CREATE_INODE_REC_MAXOPS(void)

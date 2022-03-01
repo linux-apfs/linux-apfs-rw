@@ -702,7 +702,7 @@ do {									\
 /* btree.c */
 extern struct apfs_query *apfs_alloc_query(struct apfs_node *node,
 					   struct apfs_query *parent);
-extern void apfs_free_query(struct super_block *sb, struct apfs_query *query);
+extern void apfs_free_query(struct apfs_query *query);
 extern int apfs_btree_query(struct super_block *sb, struct apfs_query **query);
 extern struct apfs_node *apfs_omap_read_node(struct super_block *sb, u64 id);
 extern int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
