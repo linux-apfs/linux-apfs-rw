@@ -768,14 +768,12 @@ static void __apfs_undo_link(struct dentry *dentry, struct inode *inode)
 /**
  * __apfs_link - Link a dentry
  * @old_dentry: dentry for the old link
- * @dir:	parent directory for new dentry
  * @dentry:	new dentry to link
  *
  * Does the same as apfs_link(), but without starting a transaction, taking a
  * new reference to @old_dentry->d_inode, or instantiating @dentry.
  */
-static int __apfs_link(struct dentry *old_dentry, struct inode *dir,
-		       struct dentry *dentry)
+static int __apfs_link(struct dentry *old_dentry, struct dentry *dentry)
 {
 	struct inode *inode = d_inode(old_dentry);
 	int err;
@@ -820,7 +818,7 @@ int apfs_link(struct dentry *old_dentry, struct inode *dir,
 	if (err)
 		return err;
 
-	err = __apfs_link(old_dentry, dir, dentry);
+	err = __apfs_link(old_dentry, dentry);
 	if (err)
 		goto out_abort;
 	ihold(inode);
@@ -1307,7 +1305,7 @@ int apfs_rename(struct user_namespace *mnt_userns, struct inode *old_dir,
 			goto out_abort;
 	}
 
-	err = __apfs_link(old_dentry, new_dir, new_dentry);
+	err = __apfs_link(old_dentry, new_dentry);
 	if (err)
 		goto out_undo_unlink_new;
 
