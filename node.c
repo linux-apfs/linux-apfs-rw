@@ -627,7 +627,7 @@ static int apfs_node_next(struct super_block *sb, struct apfs_query *query)
 	if (err)
 		return err;
 
-	cmp = apfs_keycmp(sb, &curr_key, query->key);
+	cmp = apfs_keycmp(&curr_key, query->key);
 
 	if (cmp > 0) /* Records are out of order */
 		return -EFSCORRUPTED;
@@ -707,7 +707,7 @@ int apfs_node_query(struct super_block *sb, struct apfs_query *query)
 		if (err)
 			return err;
 
-		cmp = apfs_keycmp(sb, &curr_key, query->key);
+		cmp = apfs_keycmp(&curr_key, query->key);
 		if (cmp == 0 && !(query->flags & APFS_QUERY_MULTIPLE))
 			break;
 	} while (left != right);

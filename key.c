@@ -48,7 +48,6 @@ int apfs_filename_cmp(struct super_block *sb,
 
 /**
  * apfs_keycmp - Compare two keys
- * @sb:	filesystem superblock
  * @k1:	first key to compare
  * @k2:	second key to compare
  *
@@ -56,8 +55,7 @@ int apfs_filename_cmp(struct super_block *sb,
  *	   < 0 if @k1 comes before @k2 in the btree
  *	   > 0 if @k1 comes after @k2 in the btree
  */
-int apfs_keycmp(struct super_block *sb,
-		struct apfs_key *k1, struct apfs_key *k2)
+int apfs_keycmp(struct apfs_key *k1, struct apfs_key *k2)
 {
 	if (k1->id != k2->id)
 		return k1->id < k2->id ? -1 : 1;

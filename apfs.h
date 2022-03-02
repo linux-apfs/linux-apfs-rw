@@ -816,8 +816,7 @@ extern int apfs_fileattr_set(struct user_namespace *mnt_userns, struct dentry *d
 
 /* key.c */
 extern int apfs_filename_cmp(struct super_block *sb, const char *name1, unsigned int len1, const char *name2, unsigned int len2);
-extern int apfs_keycmp(struct super_block *sb,
-		       struct apfs_key *k1, struct apfs_key *k2);
+extern int apfs_keycmp(struct apfs_key *k1, struct apfs_key *k2);
 extern int apfs_read_cat_key(void *raw, int size, struct apfs_key *key, bool hashed);
 extern int apfs_read_free_queue_key(void *raw, int size, struct apfs_key *key);
 extern int apfs_read_omap_key(void *raw, int size, struct apfs_key *key);
