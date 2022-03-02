@@ -185,7 +185,6 @@ out:
 
 /**
  * apfs_xattr_inline_read - Read the value of an inline xattr
- * @parent:	inode the attribute belongs to
  * @xattr:	the xattr structure
  * @buffer:	where to copy the attribute value
  * @size:	size of @buffer
@@ -197,9 +196,7 @@ out:
  * Returns the number of bytes used/required, or a negative error code in case
  * of failure.
  */
-static int apfs_xattr_inline_read(struct inode *parent,
-				  struct apfs_xattr *xattr,
-				  void *buffer, size_t size, bool only_whole)
+static int apfs_xattr_inline_read(struct apfs_xattr *xattr, void *buffer, size_t size, bool only_whole)
 {
 	int length = xattr->xdata_len;
 
@@ -271,7 +268,7 @@ int ____apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 	if (xattr.has_dstream)
 		ret = apfs_xattr_extents_read(inode, &xattr, buffer, size, only_whole);
 	else
-		ret = apfs_xattr_inline_read(inode, &xattr, buffer, size, only_whole);
+		ret = apfs_xattr_inline_read(&xattr, buffer, size, only_whole);
 
 done:
 	apfs_free_query(query);
