@@ -184,6 +184,63 @@ static int apfs_xattr_inline_read(struct apfs_xattr *xattr, void *buffer, size_t
 }
 
 /**
+ * apfs_xattr_get_dstream - Get the dstream for a named attribute
+ * @inode:	inode the attribute belongs to
+ * @name:	name of the attribute
+ * @dstream_p:	on return, the dstream info
+ *
+ * Returns 0 on success or a negative error code in case of failure, which may
+ * be -EFSCORRUPTED if the xattr is inline.
+ */
+int apfs_xattr_get_dstream(struct inode *inode, const char *name, struct apfs_dstream_info **dstream_p)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_key key;
+	struct apfs_query *query;
+	struct apfs_xattr xattr;
+	struct apfs_dstream_info *dstream = NULL;
+	u64 cnid = apfs_ino(inode);
+	int ret;
+
+	apfs_init_xattr_key(cnid, name, &key);
+
+	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+	query->key = &key;
+	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
+
+	ret = apfs_btree_query(sb, &query);
+	if (ret)
+		goto done;
+
+	ret = apfs_xattr_from_query(query, &xattr);
+	if (ret) {
+		apfs_alert(sb, "bad xattr record in inode 0x%llx", cnid);
+		goto done;
+	}
+
+	if (!xattr.has_dstream) {
+		ret = -EFSCORRUPTED;
+		goto done;
+	}
+
+	dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
+	if (!dstream) {
+		ret = -ENOMEM;
+		goto done;
+	}
+	apfs_dstream_from_xattr(sb, &xattr, dstream);
+	*dstream_p = dstream;
+	ret = 0;
+
+done:
+	apfs_free_query(query);
+	return ret;
+}
+
+/**
  * __apfs_xattr_get - Find and read a named attribute
  * @inode:	inode the attribute belongs to
  * @name:	name of the attribute

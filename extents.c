@@ -2154,6 +2154,12 @@ int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *buf, si
 		return -EFBIG;
 	}
 
+	if (offset + count > dstream->ds_size) {
+		apfs_err(sb, "reading past the end (0x%llx-0x%llx)", offset, (unsigned long long)count);
+		/* No caller is expected to legitimately read out-of-bounds */
+		return -EFSCORRUPTED;
+	}
+
 	logical_start_block = offset >> sb->s_blocksize_bits;
 	logical_end_block = (offset + count + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
 	blkcnt = logical_end_block - logical_start_block;

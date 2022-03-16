@@ -37,15 +37,18 @@ static inline void *kvmalloc(size_t size, gfp_t flags)
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0) */
 
 /*
- * Maximum size of compressed data currently supported. This is getting too
- * big already. TODO: avoid vmalloc().
+ * Allocation limit for inline compressed files. I expect all big files to use
+ * resource streams instead, so this should always be way more than enough.
  */
-#define MAX_FBUF_SIZE		(256 * 1024 * 1024)
+#define MAX_FBUF_SIZE		(128 * 1024 * 1024)
 
 struct apfs_compress_file_data {
 	struct apfs_compress_hdr hdr;
 	loff_t size;
-	void *data;
+	union {
+		struct apfs_dstream_info *dstream;
+		void *data;
+	};
 	u8 *buf;
 	ssize_t bufblk;
 	size_t bufsize;
@@ -113,27 +116,12 @@ static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 			goto fail_enomem;
 		fd->bufblk = -1;
 
-		res = ____apfs_xattr_get(inode, APFS_XATTR_NAME_RSRC_FORK, NULL, 0, 0);
-		if(res < 0) {
-			apfs_err(sb, "fork size read failed");
+		res = apfs_xattr_get_dstream(inode, APFS_XATTR_NAME_RSRC_FORK, &fd->dstream);
+		if (res) {
+			apfs_err(sb, "failed to get fork dstream");
 			goto fail;
 		}
-
-		if(res > MAX_FBUF_SIZE) {
-			apfs_err(sb, "fork too big");
-			goto fail_enomem;
-		}
-
-		fd->size = res;
-		fd->data = kvmalloc(res, GFP_KERNEL);
-		if(!fd->data)
-			goto fail_enomem;
-
-		res = ____apfs_xattr_get(inode, APFS_XATTR_NAME_RSRC_FORK, fd->data, fd->size, 1);
-		if(res != fd->size) {
-			apfs_err(sb, "fork read failed");
-			goto fail;
-		}
+		fd->size = fd->dstream->ds_size;
 	} else {
 		if(le64_to_cpu(fd->hdr.size) > MAX_FBUF_SIZE) {
 			apfs_err(sb, "decmpfs too big");
@@ -275,8 +263,13 @@ fail_einval:
 fail:
 	if(tmp)
 		kvfree(tmp);
-	if(fd->data)
-		kvfree(fd->data);
+	if(apfs_compress_is_rsrc(le32_to_cpu(fd->hdr.algo))) {
+		if(fd->dstream)
+			kfree(fd->dstream);
+	} else {
+		if(fd->data)
+			kvfree(fd->data);
+	}
 	if(fd->buf)
 		kvfree(fd->buf);
 	kfree(fd);
@@ -285,13 +278,164 @@ fail:
 	return res;
 }
 
-static ssize_t apfs_compress_file_read_block(struct apfs_compress_file_data *fd, char __user *buf, size_t size, loff_t off)
+static int apfs_compress_file_read_block(struct apfs_compress_file_data *fd, loff_t block)
 {
 	struct super_block *sb = fd->sb;
+	u8 *cdata = NULL;
+	u8 *tmp = fd->buf;
 	u32 doffs = 0, coffs;
-	loff_t block;
-	u8 *cdata, *tmp = fd->buf;
 	size_t csize, bsize;
+	int res = 0;
+
+	if(le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZBITMAP_RSRC &&
+	   le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZVN_RSRC &&
+	   le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZFSE_RSRC) {
+		struct apfs_compress_rsrc_hdr hdr = {0};
+		struct apfs_compress_rsrc_data cd = {0};
+		struct apfs_compress_rsrc_block blk = {0};
+		u32 blk_off;
+
+		res = apfs_nonsparse_dstream_read(fd->dstream, &hdr, sizeof(hdr), 0 /* offset */);
+		if(res) {
+			apfs_err(sb, "failed to read resource header");
+			return res;
+		}
+
+		doffs = be32_to_cpu(hdr.data_offs);
+		res = apfs_nonsparse_dstream_read(fd->dstream, &cd, sizeof(cd), doffs);
+		if(res) {
+			apfs_err(sb, "failed to read resource data header");
+			return res;
+		}
+		if(block >= le32_to_cpu(cd.num))
+			return 0;
+
+		blk_off = doffs + sizeof(cd) + sizeof(blk) * block;
+		res = apfs_nonsparse_dstream_read(fd->dstream, &blk, sizeof(blk), blk_off);
+		if(res) {
+			apfs_err(sb, "failed to read resource block metadata");
+			return res;
+		}
+
+		bsize = le64_to_cpu(fd->hdr.size) - block * APFS_COMPRESS_BLOCK;
+		if(bsize > APFS_COMPRESS_BLOCK)
+			bsize = APFS_COMPRESS_BLOCK;
+
+		csize = le32_to_cpu(blk.size);
+		coffs = le32_to_cpu(blk.offs) + 4;
+	} else {
+		__le32 blks[2];
+		u32 blk_off;
+
+		blk_off = doffs + sizeof(__le32) * block;
+		res = apfs_nonsparse_dstream_read(fd->dstream, blks, sizeof(blks), blk_off);
+		if(res) {
+			apfs_err(sb, "failed to read resource block metadata");
+			return res;
+		}
+
+		bsize = le64_to_cpu(fd->hdr.size) - block * APFS_COMPRESS_BLOCK;
+		if(bsize > APFS_COMPRESS_BLOCK)
+			bsize = APFS_COMPRESS_BLOCK;
+
+		coffs = le32_to_cpu(blks[0]);
+		csize = le32_to_cpu(blks[1]) - coffs;
+	}
+
+	cdata = kvmalloc(csize, GFP_KERNEL);
+	if(!cdata)
+		return -ENOMEM;
+	res = apfs_nonsparse_dstream_read(fd->dstream, cdata, csize, doffs + coffs);
+	if(res) {
+		apfs_err(sb, "failed to read compressed block");
+		goto fail;
+	}
+
+	switch(le32_to_cpu(fd->hdr.algo)) {
+	case APFS_COMPRESS_ZLIB_RSRC:
+		if(cdata[0] == 0x78 && csize >= 2) {
+			res = zlib_inflate_blob(tmp, bsize, cdata + 2, csize - 2);
+			if(res <= 0) {
+				apfs_err(sb, "zlib rsrc read failed");
+				goto fail;
+			}
+			bsize = res;
+		} else if((cdata[0] & 0x0F) == 0x0F) {
+			memcpy(tmp, &cdata[1], csize - 1);
+			bsize = csize - 1;
+		} else {
+			apfs_err(sb, "zlib rsrc read failed");
+			res = -EINVAL;
+			goto fail;
+		}
+		break;
+	case APFS_COMPRESS_LZVN_RSRC:
+		if(cdata[0] == 0x06) {
+			memcpy(tmp, &cdata[1], csize - 1);
+			bsize = csize - 1;
+		} else {
+			lzvn_decoder_state dstate = {0};
+
+			dstate.src = cdata;
+			dstate.src_end = dstate.src + csize;
+			dstate.dst = dstate.dst_begin = tmp;
+			dstate.dst_end = dstate.dst + bsize;
+			lzvn_decode(&dstate);
+			bsize = dstate.dst - tmp;
+		}
+		break;
+	case APFS_COMPRESS_LZBITMAP_RSRC:
+		if(cdata[0] == 0x5a) {
+			res = zbm_decompress(tmp, bsize, cdata, csize, &bsize);
+			if(res < 0) {
+				apfs_err(sb, "lzbitmap rsrc read failed");
+				goto fail;
+			}
+		} else if((cdata[0] & 0x0F) == 0x0F) {
+			memcpy(tmp, &cdata[1], csize - 1);
+			bsize = csize - 1;
+		} else {
+			apfs_err(sb, "lzbitmap rsrc read failed");
+			res = -EINVAL;
+			goto fail;
+		}
+		break;
+	case APFS_COMPRESS_LZFSE_RSRC:
+		if(cdata[0] == 0x62 && csize >= 2) {
+			res = lzfse_decode_buffer(tmp, bsize, cdata, csize, NULL);
+			if(res == 0) {
+				apfs_err(sb, "lzfse rsrc read failed");
+				/* Could be ENOMEM too... */
+				res = -EINVAL;
+				goto fail;
+			}
+			bsize = res;
+		} else {
+			/* cdata[0] == 0xff, apparently */
+			memcpy(tmp, &cdata[1], csize - 1);
+			bsize = csize - 1;
+		}
+		break;
+	case APFS_COMPRESS_PLAIN_RSRC:
+		memcpy(tmp, &cdata[1], csize - 1);
+		bsize = csize - 1;
+		break;
+	default:
+		res = -EINVAL;
+		goto fail;
+	}
+	fd->bufblk = block;
+	fd->bufsize = bsize;
+fail:
+	kvfree(cdata);
+	return res;
+}
+
+static ssize_t apfs_compress_file_read_from_block(struct apfs_compress_file_data *fd, char __user *buf, size_t size, loff_t off)
+{
+	struct super_block *sb = fd->sb;
+	loff_t block;
+	size_t bsize;
 	ssize_t res;
 
 	if(off >= le64_to_cpu(fd->hdr.size))
@@ -302,137 +446,20 @@ static ssize_t apfs_compress_file_read_block(struct apfs_compress_file_data *fd,
 	block = off / APFS_COMPRESS_BLOCK;
 	off -= block * APFS_COMPRESS_BLOCK;
 	if(block != fd->bufblk) {
-		if(le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZBITMAP_RSRC &&
-		   le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZVN_RSRC &&
-		   le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZFSE_RSRC) {
-			struct apfs_compress_rsrc_hdr *hdr = fd->data;
-			struct apfs_compress_rsrc_data *cd = NULL;
-
-			if(fd->size < sizeof(*hdr)) {
-				apfs_err(sb, "resource header doesn't fit");
-				return -EINVAL;
-			}
-			doffs = be32_to_cpu(hdr->data_offs);
-			if(doffs >= fd->size || fd->size - doffs < sizeof(*cd)) {
-				apfs_err(sb, "invalid data header offset in resource");
-				return -EINVAL;
-			}
-			cd = fd->data + doffs;
-			if(fd->size - doffs - sizeof(*cd) < sizeof(cd->block[0]) * (size_t)le32_to_cpu(cd->num)) {
-				apfs_err(sb, "resource data header won't fit");
-				return -EINVAL;
-			}
-
-			if(block >= le32_to_cpu(cd->num))
-				return 0;
-
-			bsize = le64_to_cpu(fd->hdr.size) - block * APFS_COMPRESS_BLOCK;
-			if(bsize > APFS_COMPRESS_BLOCK)
-				bsize = APFS_COMPRESS_BLOCK;
-
-			csize = le32_to_cpu(cd->block[block].size);
-			coffs = le32_to_cpu(cd->block[block].offs) + 4;
-		} else {
-			__le32 *block_offs = fd->data + doffs;
-
-			if((size_t)fd->size < sizeof(*block_offs) * ((size_t)block + 2)) {
-				apfs_err(sb, "resource data header won't fit");
-				return -EINVAL;
-			}
-
-			bsize = le64_to_cpu(fd->hdr.size) - block * APFS_COMPRESS_BLOCK;
-			if(bsize > APFS_COMPRESS_BLOCK)
-				bsize = APFS_COMPRESS_BLOCK;
-
-			coffs = le32_to_cpu(block_offs[block]);
-			csize = le32_to_cpu(block_offs[block + 1]) - coffs;
+		res = apfs_compress_file_read_block(fd, block);
+		if (res) {
+			apfs_err(sb, "failed to read block into buffer");
+			return res;
 		}
-		if(coffs >= fd->size - doffs || fd->size - doffs - coffs < csize || csize > APFS_COMPRESS_BLOCK + 1) {
-			apfs_err(sb, "invalid block size/offset in resource");
-			return -EINVAL;
-		}
-		cdata = fd->data + doffs + coffs;
-
-		switch(le32_to_cpu(fd->hdr.algo)) {
-		case APFS_COMPRESS_ZLIB_RSRC:
-			if(cdata[0] == 0x78 && csize >= 2) {
-				res = zlib_inflate_blob(tmp, bsize, cdata + 2, csize - 2);
-				if(res <= 0) {
-					apfs_err(sb, "zlib rsrc read failed");
-					return res;
-				}
-				bsize = res;
-			} else if((cdata[0] & 0x0F) == 0x0F) {
-				memcpy(tmp, &cdata[1], csize - 1);
-				bsize = csize - 1;
-			} else {
-				apfs_err(sb, "zlib rsrc read failed");
-				return -EINVAL;
-			}
-			break;
-		case APFS_COMPRESS_LZVN_RSRC:
-			if(cdata[0] == 0x06) {
-				memcpy(tmp, &cdata[1], csize - 1);
-				bsize = csize - 1;
-			} else {
-				lzvn_decoder_state dstate = {0};
-
-				dstate.src = cdata;
-				dstate.src_end = dstate.src + csize;
-				dstate.dst = dstate.dst_begin = tmp;
-				dstate.dst_end = dstate.dst + bsize;
-				lzvn_decode(&dstate);
-				bsize = dstate.dst - tmp;
-			}
-			break;
-		case APFS_COMPRESS_LZBITMAP_RSRC:
-			if(cdata[0] == 0x5a) {
-				res = zbm_decompress(tmp, bsize, cdata, csize, &bsize);
-				if(res < 0) {
-					apfs_err(sb, "lzbitmap rsrc read failed");
-					return res;
-				}
-			} else if((cdata[0] & 0x0F) == 0x0F) {
-				memcpy(tmp, &cdata[1], csize - 1);
-				bsize = csize - 1;
-			} else {
-				apfs_err(sb, "lzbitmap rsrc read failed");
-				return -EINVAL;
-			}
-			break;
-		case APFS_COMPRESS_LZFSE_RSRC:
-			if(cdata[0] == 0x62 && csize >= 2) {
-				res = lzfse_decode_buffer(tmp, bsize, cdata, csize, NULL);
-				if(res == 0) {
-					apfs_err(sb, "lzfse rsrc read failed");
-					/* Could be ENOMEM too... */
-					return -EINVAL;
-				}
-				bsize = res;
-			} else {
-				/* cdata[0] == 0xff, apparently */
-				memcpy(tmp, &cdata[1], csize - 1);
-				bsize = csize - 1;
-			}
-			break;
-		case APFS_COMPRESS_PLAIN_RSRC:
-			memcpy(tmp, &cdata[1], csize - 1);
-			bsize = csize - 1;
-			break;
-		default:
-			return -EINVAL;
-		}
-		fd->bufblk = block;
-		fd->bufsize = bsize;
-	} else
-		bsize = fd->bufsize;
+	}
+	bsize = fd->bufsize;
 
 	if(bsize < off)
 		return 0;
 	bsize -= off;
 	if(size > bsize)
 		size = bsize;
-	res = copy_to_user(buf, tmp + off, size);
+	res = copy_to_user(buf, fd->buf + off, size);
 	if(res == size)
 		return -EFAULT;
 	return size - res;
@@ -451,7 +478,7 @@ static ssize_t apfs_compress_file_read(struct file *filp, char __user *buf, size
 			if(block > size - step)
 				block = size - step;
 			mutex_lock(&fd->mtx);
-			res = apfs_compress_file_read_block(fd, buf + step, block, *off + step);
+			res = apfs_compress_file_read_from_block(fd, buf + step, block, *off + step);
 			mutex_unlock(&fd->mtx);
 			if(res < block) {
 				if(res < 0 && !step)
@@ -479,8 +506,15 @@ static ssize_t apfs_compress_file_read(struct file *filp, char __user *buf, size
 static int apfs_compress_file_release(struct inode *inode, struct file *filp)
 {
 	struct apfs_compress_file_data *fd = filp->private_data;
-	if(fd->data)
-		kvfree(fd->data);
+	if(apfs_compress_is_rsrc(le32_to_cpu(fd->hdr.algo))) {
+		if(fd->dstream)
+			kfree(fd->dstream);
+		fd->dstream = NULL;
+	} else {
+		if(fd->data)
+			kvfree(fd->data);
+		fd->data = NULL;
+	}
 	if(fd->buf)
 		kvfree(fd->buf);
 	kfree(fd);

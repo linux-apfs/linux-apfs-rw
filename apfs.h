@@ -1034,6 +1034,7 @@ extern int apfs_xattr_set(struct inode *inode, const char *name, const void *val
 			  size_t size, int flags);
 extern int APFS_XATTR_SET_MAXOPS(void);
 extern ssize_t apfs_listxattr(struct dentry *dentry, char *buffer, size_t size);
+extern int apfs_xattr_get_dstream(struct inode *inode, const char *name, struct apfs_dstream_info **dstream_p);
 
 /* xfield.c */
 extern int apfs_find_xfield(u8 *xfields, int len, u8 xtype, char **xval);
