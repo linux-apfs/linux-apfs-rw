@@ -505,6 +505,14 @@ out_abort:
 	return err;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
+static void apfs_noop_invalidatepage(struct page *page, unsigned int offset, unsigned int length)
+#else
+static void apfs_noop_invalidate_folio(struct folio *folio, size_t offset, size_t length)
+#endif
+{
+}
+
 /* bmap is not implemented to avoid issues with CoW on swapfiles */
 static const struct address_space_operations apfs_aops = {
 	.readpage	= apfs_readpage,
@@ -515,6 +523,13 @@ static const struct address_space_operations apfs_aops = {
 #endif
 	.write_begin	= apfs_write_begin,
 	.write_end	= apfs_write_end,
+
+	/* The intention is to keep bhs around until the transaction is over */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
+	.invalidatepage	= apfs_noop_invalidatepage,
+#else
+	.invalidate_folio = apfs_noop_invalidate_folio,
+#endif
 };
 
 /**
