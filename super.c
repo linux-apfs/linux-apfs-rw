@@ -1080,10 +1080,10 @@ static int apfs_setup_bdi(struct super_block *sb)
 	struct backing_dev_info *bdi_dev = NULL, *bdi_sb = NULL;
 	int err;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
-	bdi_dev = nxi->nx_bdev->bd_bdi;
-#else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) || (defined(RHEL_RELEASE) && LINUX_VERSION_CODE == KERNEL_VERSION(5, 14, 0))
 	bdi_dev = nxi->nx_bdev->bd_disk->bdi;
+#else
+	bdi_dev = nxi->nx_bdev->bd_bdi;
 #endif
 
 	err = super_setup_bdi(sb);
