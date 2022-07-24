@@ -581,7 +581,11 @@ static struct inode *apfs_alloc_inode(struct super_block *sb)
 	struct apfs_inode_info *ai;
 	struct apfs_dstream_info *dstream;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
+	ai = alloc_inode_sb(sb, apfs_inode_cachep, GFP_KERNEL);
+#else
 	ai = kmem_cache_alloc(apfs_inode_cachep, GFP_KERNEL);
+#endif
 	if (!ai)
 		return NULL;
 	dstream = &ai->i_dstream;
