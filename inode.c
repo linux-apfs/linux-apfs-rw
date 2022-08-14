@@ -8,8 +8,11 @@
 #include <linux/mount.h>
 #include <linux/mpage.h>
 #include <linux/blk_types.h>
-#include <linux/sched/mm.h>
 #include "apfs.h"
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#include <linux/sched/mm.h>
+#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
 #include <linux/fileattr.h>
