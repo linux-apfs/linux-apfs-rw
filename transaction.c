@@ -516,8 +516,13 @@ static void apfs_end_buffer_write_sync(struct buffer_head *bh, int uptodate)
 	page_mkclean(page);
 
 	/* XXX: otherwise, the page cache fills up and crashes the machine */
-	if (!is_metadata)
+	if (!is_metadata) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+		try_to_free_buffers(page_folio(page));
+#else
 		try_to_free_buffers(page);
+#endif
+	}
 
 	if (must_unlock)
 		unlock_page(page);

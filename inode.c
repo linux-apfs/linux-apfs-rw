@@ -8,6 +8,7 @@
 #include <linux/mount.h>
 #include <linux/mpage.h>
 #include <linux/blk_types.h>
+#include <linux/sched/mm.h>
 #include "apfs.h"
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
@@ -16,10 +17,21 @@
 
 #define MAX_PFK_LEN	512
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+
+static int apfs_read_folio(struct file *file, struct folio *folio)
+{
+	return mpage_read_folio(folio, apfs_get_block);
+}
+
+#else
+
 static int apfs_readpage(struct file *file, struct page *page)
 {
 	return mpage_readpage(page, apfs_get_block);
 }
+
+#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0) /* Misses mpage_readpages() */
 
@@ -367,9 +379,15 @@ out:
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+static int apfs_write_begin(struct file *file, struct address_space *mapping,
+			    loff_t pos, unsigned int len,
+			    struct page **pagep, void **fsdata)
+#else
 static int apfs_write_begin(struct file *file, struct address_space *mapping,
 			    loff_t pos, unsigned int len, unsigned int flags,
 			    struct page **pagep, void **fsdata)
+#endif
 {
 	struct inode *inode = mapping->host;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
@@ -383,6 +401,9 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 	loff_t i_blks_end;
 	struct apfs_max_ops maxops;
 	int err;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+	unsigned int flags = 0;
+#endif
 
 	if (unlikely(pos >= APFS_MAX_FILE_SIZE))
 		return -EFBIG;
@@ -408,8 +429,13 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 			goto out_abort;
 	}
 
-	page = grab_cache_page_write_begin(mapping, index,
-					   flags | AOP_FLAG_NOFS);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+	flags = memalloc_nofs_save();
+	page = grab_cache_page_write_begin(mapping, index);
+	memalloc_nofs_restore(flags);
+#else
+	page = grab_cache_page_write_begin(mapping, index, flags | AOP_FLAG_NOFS);
+#endif
 	if (!page) {
 		err = -ENOMEM;
 		goto out_abort;
@@ -515,12 +541,18 @@ static void apfs_noop_invalidate_folio(struct folio *folio, size_t offset, size_
 
 /* bmap is not implemented to avoid issues with CoW on swapfiles */
 static const struct address_space_operations apfs_aops = {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+	.read_folio	= apfs_read_folio,
+#else
 	.readpage	= apfs_readpage,
+#endif
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
 	.readahead      = apfs_readahead,
 #else
 	.readpages      = apfs_readpages,
 #endif
+
 	.write_begin	= apfs_write_begin,
 	.write_end	= apfs_write_end,
 
