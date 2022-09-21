@@ -1068,12 +1068,12 @@ static int apfs_orphan_name(struct inode *inode, struct qstr *qname)
 	int max_len;
 	char *name;
 
-	/* The name is the inode number in hex, with 'linux' prefix */
-	max_len = 5 + 16 + 1;
+	/* The name is the inode number in hex, with '-dead' suffix */
+	max_len = 2 + 16 + 5 + 1;
 	name = kmalloc(max_len, GFP_KERNEL);
 	if (!name)
 		return -ENOMEM;
-	qname->len = snprintf(name, max_len, "linux%llx", apfs_ino(inode));
+	qname->len = snprintf(name, max_len, "0x%llx-dead", apfs_ino(inode));
 	qname->name = name;
 	return 0;
 }
