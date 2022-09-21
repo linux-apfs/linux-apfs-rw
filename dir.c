@@ -1081,24 +1081,16 @@ static int apfs_orphan_name(struct inode *inode, struct qstr *qname)
 /**
  * apfs_create_orphan_link - Create a link for an orphan inode under private-dir
  * @inode:	the vfs inode
- * @name:	on return, the name of the new link
- * @parent:	on return, the inode number for the new parent (private-dir)
  *
- * The official reference does not speak of orphan inodes; we are allowed to
- * use private-dir, so this function makes a new dentry there.  TODO: it might
- * be better to use a subdirectory.
- *
- * On success, returns 0 and sets @parent and @name; the second must be freed
- * by the caller after use.  Returns a negative error code in case of failure.
+ * On success, returns 0. Returns a negative error code in case of failure.
  */
-static int apfs_create_orphan_link(struct inode *inode, char **name,
-				   u64 *parent)
+static int apfs_create_orphan_link(struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct inode *priv_dir = sbi->s_private_dir;
 	struct qstr qname;
-	int err;
+	int err = 0;
 
 	err = apfs_orphan_name(inode, &qname);
 	if (err)
@@ -1112,10 +1104,6 @@ static int apfs_create_orphan_link(struct inode *inode, char **name,
 	priv_dir->i_mtime = priv_dir->i_ctime = current_time(priv_dir);
 	++APFS_I(priv_dir)->i_nchildren;
 	apfs_inode_join_transaction(sb, priv_dir);
-
-	*name = (char *)qname.name;
-	*parent = apfs_ino(priv_dir);
-	return 0;
 
 fail:
 	kfree(qname.name);
@@ -1185,6 +1173,33 @@ static void __apfs_undo_unlink(struct dentry *dentry)
 }
 
 /**
+ * apfs_vol_filecnt_dec - Update the volume file count after a new orphaning
+ * @orphan: the new orphan
+ */
+static void apfs_vol_filecnt_dec(struct inode *orphan)
+{
+	struct super_block *sb = orphan->i_sb;
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+
+	switch (orphan->i_mode & S_IFMT) {
+	case S_IFREG:
+		le64_add_cpu(&vsb_raw->apfs_num_files, -1);
+		break;
+	case S_IFDIR:
+		le64_add_cpu(&vsb_raw->apfs_num_directories, -1);
+		break;
+	case S_IFLNK:
+		le64_add_cpu(&vsb_raw->apfs_num_symlinks, -1);
+		break;
+	default:
+		le64_add_cpu(&vsb_raw->apfs_num_other_fsobjects, -1);
+		break;
+	}
+}
+
+/**
  * __apfs_unlink - Unlink a dentry
  * @dir:    parent directory
  * @dentry: dentry to unlink
@@ -1204,9 +1219,10 @@ static int __apfs_unlink(struct inode *dir, struct dentry *dentry)
 
 	drop_nlink(inode);
 	if (!inode->i_nlink) {
-		/* Don't let the inode become orphaned */
-		err = apfs_create_orphan_link(inode, &primary_name,
-					      &ai->i_parent_id);
+		/* Orphaned inodes continue to report their old location */
+		err = apfs_create_orphan_link(inode);
+		/* Orphans are not included in the volume file counts */
+		apfs_vol_filecnt_dec(inode);
 	} else {
 		/* We may have deleted the primary link, so get the new one */
 		err = apfs_find_primary_link(inode, &primary_name,

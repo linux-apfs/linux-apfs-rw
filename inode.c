@@ -1261,8 +1261,8 @@ int apfs_update_inode(struct inode *inode, char *new_name)
 	if (S_ISDIR(inode->i_mode)) {
 		inode_raw->nchildren = cpu_to_le32(ai->i_nchildren);
 	} else {
-		/* Orphaned inodes are still linked under private-dir */
-		inode_raw->nlink = cpu_to_le32(inode->i_nlink ? : 1);
+		/* The remaining link for orphan inodes is not counted */
+		inode_raw->nlink = cpu_to_le32(inode->i_nlink);
 	}
 
 fail:
@@ -1275,16 +1275,14 @@ int APFS_UPDATE_INODE_MAXOPS(void)
 }
 
 /**
- * apfs_delete_inode - Delete an inode record and update the volume file count
+ * apfs_delete_inode - Delete an inode record
  * @inode: the vfs inode to delete
  *
  * Returns 0 on success or a negative error code in case of failure.
  */
 static int apfs_delete_inode(struct inode *inode)
 {
-	struct super_block *sb = inode->i_sb;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
-	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
 	struct apfs_query *query;
 	int ret;
 
@@ -1305,22 +1303,6 @@ static int apfs_delete_inode(struct inode *inode)
 		return PTR_ERR(query);
 	ret = apfs_btree_remove(query);
 	apfs_free_query(query);
-
-	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
-	switch (inode->i_mode & S_IFMT) {
-	case S_IFREG:
-		le64_add_cpu(&vsb_raw->apfs_num_files, -1);
-		break;
-	case S_IFDIR:
-		le64_add_cpu(&vsb_raw->apfs_num_directories, -1);
-		break;
-	case S_IFLNK:
-		le64_add_cpu(&vsb_raw->apfs_num_symlinks, -1);
-		break;
-	default:
-		le64_add_cpu(&vsb_raw->apfs_num_other_fsobjects, -1);
-		break;
-	}
 	return ret;
 }
 #define APFS_DELETE_INODE_MAXOPS	1
