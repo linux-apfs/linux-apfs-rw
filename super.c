@@ -755,7 +755,7 @@ static int apfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	msb_raw = nxi->nx_raw;
 	vol = sbi->s_vsb_raw;
 
-	buf->f_type = APFS_SUPER_MAGIC;
+	buf->f_type = APFS_NX_MAGIC;
 	/* Nodes are assumed to fit in a page, for now */
 	buf->f_bsize = sb->s_blocksize;
 
