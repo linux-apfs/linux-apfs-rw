@@ -1993,6 +1993,8 @@ long apfs_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return apfs_ioc_set_dir_class(file, argp);
 	case APFS_IOC_GET_CLASS:
 		return apfs_ioc_get_class(file, argp);
+	case APFS_IOC_TAKE_SNAPSHOT:
+		return apfs_ioc_take_snapshot(file, argp);
 	default:
 		return -ENOTTY;
 	}

@@ -651,6 +651,9 @@ struct apfs_snap_metadata_key {
 	struct apfs_key_header hdr;
 } __packed;
 
+/* The snapshot name headers always have this placeholder object id */
+#define APFS_SNAP_NAME_OBJ_ID	(~0ULL & APFS_OBJ_ID_MASK)
+
 /*
  * Structure of the key for a snapshot name record
  */
@@ -1315,6 +1318,12 @@ struct apfs_compress_rsrc_data {
 		__le32 size;
 	} __packed block[0];
 } __packed;
+
+/*
+ * TODO: this is a placeholder, create some snapshots with the official
+ * implementation to find the actual limit.
+ */
+#define APFS_SNAP_MAX_NAMELEN		255
 
 /*
  * Structure of the value of a snapshot metadata record

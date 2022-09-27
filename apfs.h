@@ -37,11 +37,19 @@ static inline bool sb_rdonly(const struct super_block *sb) { return sb->s_flags 
 #define apfs_submit_bh(op, op_flags, bh) submit_bh(op | op_flags, bh)
 #endif
 
+/*
+ * Parameter for the snapshot creation ioctl
+ */
+struct apfs_ioctl_snap_name {
+	char name[APFS_SNAP_MAX_NAMELEN + 1];
+};
+
 #define APFS_IOC_SET_DFLT_PFK	_IOW('@', 0x80, struct apfs_wrapped_crypto_state)
 #define APFS_IOC_SET_DIR_CLASS	_IOW('@', 0x81, u32)
 #define APFS_IOC_SET_PFK	_IOW('@', 0x82, struct apfs_wrapped_crypto_state)
 #define APFS_IOC_GET_CLASS	_IOR('@', 0x83, u32)
 #define APFS_IOC_GET_PFK	_IOR('@', 0x84, struct apfs_wrapped_crypto_state)
+#define APFS_IOC_TAKE_SNAPSHOT	_IOW('@', 0x85, struct apfs_ioctl_snap_name)
 
 /*
  * In-memory representation of an APFS object
@@ -476,6 +484,30 @@ static inline void apfs_init_xattr_key(u64 ino, const char *name,
 	key->name = name;
 }
 
+static inline void apfs_init_snap_metadata_key(u64 xid, struct apfs_key *key)
+{
+	key->id = xid;
+	key->type = APFS_TYPE_SNAP_METADATA;
+	key->number = 0;
+	key->name = NULL;
+}
+
+static inline void apfs_init_snap_name_key(const char *name, struct apfs_key *key)
+{
+	key->id = APFS_SNAP_NAME_OBJ_ID;
+	key->type = APFS_TYPE_SNAP_NAME;
+	key->number = 0;
+	key->name = name;
+}
+
+static inline void apfs_init_omap_snap_key(u64 xid, struct apfs_key *key)
+{
+	key->id = xid;
+	key->type = 0;
+	key->number = 0;
+	key->name = NULL;
+}
+
 /**
  * apfs_key_set_hdr - Set the header for a raw catalog key
  * @type:	record type
@@ -510,16 +542,18 @@ static inline u64 apfs_cat_cnid(struct apfs_key_header *key)
 }
 
 /* Flags for the query structure */
-#define APFS_QUERY_TREE_MASK	0017	/* Which b-tree we query */
-#define APFS_QUERY_OMAP		0001	/* This is a b-tree object map query */
-#define APFS_QUERY_CAT		0002	/* This is a catalog tree query */
-#define APFS_QUERY_FREE_QUEUE	0004	/* This is a free queue query */
-#define APFS_QUERY_EXTENTREF	0010	/* This is an extent reference query */
-#define APFS_QUERY_NEXT		0020	/* Find next of multiple matches */
-#define APFS_QUERY_EXACT	0040	/* Search for an exact match */
-#define APFS_QUERY_DONE		0100	/* The search at this level is over */
-#define APFS_QUERY_ANY_NAME	0200	/* Multiple search for any name */
-#define APFS_QUERY_ANY_NUMBER	0400	/* Multiple search for any number */
+#define APFS_QUERY_TREE_MASK	00077	/* Which b-tree we query */
+#define APFS_QUERY_OMAP		00001	/* This is a b-tree object map query */
+#define APFS_QUERY_CAT		00002	/* This is a catalog tree query */
+#define APFS_QUERY_FREE_QUEUE	00004	/* This is a free queue query */
+#define APFS_QUERY_EXTENTREF	00010	/* This is an extent reference query */
+#define APFS_QUERY_SNAP_META	00020	/* This is a snapshot meta query */
+#define APFS_QUERY_OMAP_SNAP	00040	/* This is an omap snapshots query */
+#define APFS_QUERY_NEXT		00100	/* Find next of multiple matches */
+#define APFS_QUERY_EXACT	00200	/* Search for an exact match */
+#define APFS_QUERY_DONE		00400	/* The search at this level is over */
+#define APFS_QUERY_ANY_NAME	01000	/* Multiple search for any name */
+#define APFS_QUERY_ANY_NUMBER	02000	/* Multiple search for any number */
 #define APFS_QUERY_MULTIPLE	(APFS_QUERY_ANY_NAME | APFS_QUERY_ANY_NUMBER)
 
 /*
@@ -556,6 +590,10 @@ static inline u32 apfs_query_storage(struct apfs_query *query)
 	if (query->flags & APFS_QUERY_FREE_QUEUE)
 		return APFS_OBJ_EPHEMERAL;
 	if (query->flags & APFS_QUERY_EXTENTREF)
+		return APFS_OBJ_PHYSICAL;
+	if (query->flags & APFS_QUERY_SNAP_META)
+		return APFS_OBJ_PHYSICAL;
+	if (query->flags & APFS_QUERY_OMAP_SNAP)
 		return APFS_OBJ_PHYSICAL;
 	BUG();
 }
@@ -832,6 +870,8 @@ extern int apfs_read_cat_key(void *raw, int size, struct apfs_key *key, bool has
 extern int apfs_read_free_queue_key(void *raw, int size, struct apfs_key *key);
 extern int apfs_read_omap_key(void *raw, int size, struct apfs_key *key);
 extern int apfs_read_extentref_key(void *raw, int size, struct apfs_key *key);
+extern int apfs_read_snap_meta_key(void *raw, int size, struct apfs_key *key);
+extern int apfs_read_omap_snap_key(void *raw, int size, struct apfs_key *key);
 
 /* message.c */
 extern __printf(3, 4)
@@ -852,6 +892,7 @@ extern void apfs_node_free_range(struct apfs_node *node, u16 off, u16 len);
 extern int apfs_node_replace(struct apfs_query *query, void *key, int key_len, void *val, int val_len);
 extern int apfs_node_insert(struct apfs_query *query, void *key, int key_len, void *val, int val_len);
 extern int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len, void *val, int val_len);
+extern int apfs_make_empty_btree_root(struct super_block *sb, u32 subtype, u64 *oid);
 
 /* object.c */
 extern int apfs_obj_verify_csum(struct super_block *sb,
@@ -864,6 +905,9 @@ extern struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb,
 						      u64 oid);
 extern struct buffer_head *apfs_read_object_block(struct super_block *sb,
 						  u64 bno, bool write);
+
+/* snapshot.c */
+extern int apfs_ioc_take_snapshot(struct file *file, void __user *user_arg);
 
 /* spaceman.c */
 extern int apfs_read_spaceman(struct super_block *sb);
@@ -885,6 +929,7 @@ extern void apfs_inode_join_transaction(struct super_block *sb, struct inode *in
 extern int apfs_transaction_join(struct super_block *sb,
 				 struct buffer_head *bh);
 void apfs_transaction_abort(struct super_block *sb);
+extern int apfs_transaction_flush_all_inodes(struct super_block *sb);
 
 /* xattr.c */
 extern int ____apfs_xattr_get(struct inode *inode, const char *name, void *buffer,

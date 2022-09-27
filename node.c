@@ -145,7 +145,7 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 }
 
 /**
- * apfs_min_table_size - Return the minimum size for a node's table of contents
+ * apfs_node_min_table_size - Return the minimum size for a node's toc
  * @sb:		superblock structure
  * @type:	tree type for the node
  * @flags:	flags for the node
@@ -178,6 +178,116 @@ static int apfs_node_min_table_size(struct super_block *sb, u32 type, u16 flags)
 	space = sb->s_blocksize - sizeof(struct apfs_btree_node_phys);
 	count = space / (key_size + val_size + toc_size);
 	return count * toc_size;
+}
+
+/**
+ * apfs_set_empty_btree_info - Set the info footer for an empty b-tree node
+ * @sb:		filesystem superblock
+ * @info:	pointer to the on-disk info footer
+ * @subtype:	subtype of the root node, i.e., tree type
+ *
+ * For now only supports the extent reference tree.
+ */
+static void apfs_set_empty_btree_info(struct super_block *sb, struct apfs_btree_info *info, u32 subtype)
+{
+	u32 flags;
+
+	ASSERT(subtype == APFS_OBJECT_TYPE_BLOCKREFTREE || subtype == APFS_OBJECT_TYPE_OMAP_SNAPSHOT);
+
+	memset(info, 0, sizeof(*info));
+
+	flags = APFS_BTREE_PHYSICAL;
+	if (subtype == APFS_OBJECT_TYPE_BLOCKREFTREE)
+		flags |= APFS_BTREE_KV_NONALIGNED;
+
+	info->bt_fixed.bt_flags = cpu_to_le32(flags);
+	info->bt_fixed.bt_node_size = cpu_to_le32(sb->s_blocksize);
+	info->bt_key_count = 0;
+	info->bt_node_count = cpu_to_le64(1); /* Only one node: the root */
+	if (subtype == APFS_OBJECT_TYPE_BLOCKREFTREE)
+		return;
+
+	info->bt_fixed.bt_key_size = cpu_to_le32(8);
+	info->bt_longest_key = info->bt_fixed.bt_key_size;
+	info->bt_fixed.bt_val_size = cpu_to_le32(sizeof(struct apfs_omap_snapshot));
+	info->bt_longest_val = info->bt_fixed.bt_val_size;
+}
+
+/**
+ * apfs_make_empty_btree_root - Make an empty root for a b-tree
+ * @sb:		filesystem superblock
+ * @subtype:	subtype of the root node, i.e., tree type
+ * @oid:	on return, the root's object id
+ *
+ * For now only supports the extent reference tree and an omap's snapshot tree.
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+int apfs_make_empty_btree_root(struct super_block *sb, u32 subtype, u64 *oid)
+{
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	struct apfs_btree_node_phys *root = NULL;
+	struct buffer_head *bh = NULL;
+	u64 bno;
+	u16 flags;
+	int toc_len, free_len, head_len, info_len;
+	int err;
+
+	ASSERT(subtype == APFS_OBJECT_TYPE_BLOCKREFTREE || subtype == APFS_OBJECT_TYPE_OMAP_SNAPSHOT);
+
+	err = apfs_spaceman_allocate_block(sb, &bno, true /* backwards */);
+	if (err)
+		return err;
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+
+	bh = apfs_getblk(sb, bno);
+	if (!bh)
+		return -EIO;
+	root = (void *)bh->b_data;
+	err = apfs_transaction_join(sb, bh);
+	if (err)
+		goto fail;
+	set_buffer_csum(bh);
+
+	flags = APFS_BTNODE_ROOT | APFS_BTNODE_LEAF;
+	if (subtype == APFS_OBJECT_TYPE_OMAP_SNAPSHOT)
+		flags |= APFS_BTNODE_FIXED_KV_SIZE;
+	root->btn_flags = cpu_to_le16(flags);
+
+	toc_len = apfs_node_min_table_size(sb, subtype, flags);
+	head_len = sizeof(*root);
+	info_len = sizeof(struct apfs_btree_info);
+	free_len = sb->s_blocksize - head_len - toc_len - info_len;
+
+	root->btn_level = 0; /* Root */
+
+	/* No keys and no values, so this is straightforward */
+	root->btn_nkeys = 0;
+	root->btn_table_space.off = 0;
+	root->btn_table_space.len = cpu_to_le16(toc_len);
+	root->btn_free_space.off = 0;
+	root->btn_free_space.len = cpu_to_le16(free_len);
+
+	/* No fragmentation */
+	root->btn_key_free_list.off = cpu_to_le16(APFS_BTOFF_INVALID);
+	root->btn_key_free_list.len = 0;
+	root->btn_val_free_list.off = cpu_to_le16(APFS_BTOFF_INVALID);
+	root->btn_val_free_list.len = 0;
+
+	apfs_set_empty_btree_info(sb, (void *)root + sb->s_blocksize - info_len, subtype);
+
+	root->btn_o.o_oid = cpu_to_le64(bno);
+	root->btn_o.o_xid = cpu_to_le64(APFS_NXI(sb)->nx_xid);
+	root->btn_o.o_type = cpu_to_le32(APFS_OBJECT_TYPE_BTREE | APFS_OBJ_PHYSICAL);
+	root->btn_o.o_subtype = cpu_to_le32(subtype);
+
+	*oid = bno;
+	err = 0;
+fail:
+	root = NULL;
+	brelse(bh);
+	bh = NULL;
+	return err;
 }
 
 /**
@@ -322,6 +432,7 @@ int apfs_delete_node(struct apfs_query *query)
 		return 0;
 	case APFS_QUERY_OMAP:
 	case APFS_QUERY_EXTENTREF:
+	case APFS_QUERY_SNAP_META:
 		err = apfs_free_queue_insert(sb, bno, 1);
 		if (err)
 			return err;
@@ -578,6 +689,12 @@ static int apfs_key_from_query(struct apfs_query *query, struct apfs_key *key)
 		break;
 	case APFS_QUERY_EXTENTREF:
 		err = apfs_read_extentref_key(raw_key, query->key_len, key);
+		break;
+	case APFS_QUERY_SNAP_META:
+		err = apfs_read_snap_meta_key(raw_key, query->key_len, key);
+		break;
+	case APFS_QUERY_OMAP_SNAP:
+		err = apfs_read_omap_snap_key(raw_key, query->key_len, key);
 		break;
 	default:
 		/* Not implemented yet */

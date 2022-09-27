@@ -526,24 +526,25 @@ static void apfs_end_buffer_write_sync(struct buffer_head *bh, int uptodate)
 }
 
 /**
- * apfs_transaction_commit_nx - Definitely commit the current transaction
+ * apfs_transaction_flush_all_inodes - Flush inode metadata to the buffer heads
  * @sb: superblock structure
+ *
+ * This messes a lot with the disk layout, so it must be called ahead of time
+ * if we need it to be stable for the rest or the transaction (for example, if
+ * we are setting up a snapshot).
  */
-static int apfs_transaction_commit_nx(struct super_block *sb)
+int apfs_transaction_flush_all_inodes(struct super_block *sb)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct apfs_sb_info *sbi;
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
-	struct apfs_bh_info *bhi, *tmp;
 	int err = 0, curr_err;
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 	ASSERT(nx_trans->t_old_msb);
 
-	/* Before committing the bhs, write all inode metadata to them */
 	while (!list_empty(&nx_trans->t_inodes)) {
-		struct apfs_inode_info *ai;
-		struct inode *inode;
+		struct apfs_inode_info *ai = NULL;
+		struct inode *inode = NULL;
 
 		ai = list_first_entry(&nx_trans->t_inodes, struct apfs_inode_info, i_list);
 		inode = &ai->vfs_inode;
@@ -575,6 +576,27 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		if (sb->s_flags & SB_RDONLY)
 			return -EROFS;
 	}
+
+	return err;
+}
+
+/**
+ * apfs_transaction_commit_nx - Definitely commit the current transaction
+ * @sb: superblock structure
+ */
+static int apfs_transaction_commit_nx(struct super_block *sb)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_sb_info *sbi;
+	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
+	struct apfs_bh_info *bhi, *tmp;
+	int err = 0;
+
+	ASSERT(!(sb->s_flags & SB_RDONLY));
+	ASSERT(nx_trans->t_old_msb);
+
+	/* Before committing the bhs, write all inode metadata to them */
+	err = apfs_transaction_flush_all_inodes(sb);
 	if (err)
 		return err;
 

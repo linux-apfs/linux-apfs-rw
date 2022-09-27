@@ -206,6 +206,47 @@ int apfs_read_extentref_key(void *raw, int size, struct apfs_key *key)
 	return 0;
 }
 
+int apfs_read_snap_meta_key(void *raw, int size, struct apfs_key *key)
+{
+	if (size < sizeof(struct apfs_key_header))
+		return -EFSCORRUPTED;
+	key->id = apfs_cat_cnid((struct apfs_key_header *)raw);
+	key->type = apfs_cat_type((struct apfs_key_header *)raw);
+	key->number = 0;
+
+	switch (key->type) {
+	case APFS_TYPE_SNAP_METADATA:
+		if (size != sizeof(struct apfs_snap_metadata_key))
+			return -EFSCORRUPTED;
+		key->name = NULL;
+		return 0;
+	case APFS_TYPE_SNAP_NAME:
+		if (size < sizeof(struct apfs_snap_name_key) + 1 || *((char *)raw + size - 1) != 0) {
+			/* snapshot name must have NULL-termination */
+			return -EFSCORRUPTED;
+		}
+		key->name = ((struct apfs_snap_name_key *)raw)->name;
+		return 0;
+	default:
+		return -EFSCORRUPTED;
+	}
+}
+
+int apfs_read_omap_snap_key(void *raw, int size, struct apfs_key *key)
+{
+	__le64 *xid = NULL;
+
+	if (size != sizeof(*xid))
+		return -EFSCORRUPTED;
+	xid = raw;
+
+	key->id = le64_to_cpup(xid);
+	key->number = 0;
+	key->name = NULL;
+	key->type = 0;
+	return 0;
+}
+
 /**
  * apfs_init_drec_key - Initialize an in-memory key for a dentry query
  * @sb:		filesystem superblock
