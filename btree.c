@@ -118,6 +118,7 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_query *query;
 	struct apfs_key key;
+	struct apfs_omap_map map = {0};
 	int ret = 0;
 
 	if (!write) {
@@ -137,14 +138,16 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 	if (ret)
 		goto fail;
 
-	ret = apfs_bno_from_query(query, block);
+	ret = apfs_omap_map_from_query(query, &map);
 	if (ret) {
 		apfs_alert(sb, "bad object map leaf block: 0x%llx",
 			   query->node->object.block_nr);
 		goto fail;
 	}
+	*block = map.bno;
 
 	if (write) {
+		struct apfs_sb_info *sbi = APFS_SB(sb);
 		struct apfs_omap_key key;
 		struct apfs_omap_val val;
 		struct buffer_head *new_bh;
@@ -156,12 +159,20 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 		}
 
 		key.ok_oid = cpu_to_le64(id);
-		key.ok_xid = cpu_to_le64(nxi->nx_xid); /* TODO: snapshots? */
-		val.ov_flags = 0; /* TODO: preserve the flags */
+		key.ok_xid = cpu_to_le64(nxi->nx_xid);
+		val.ov_flags = cpu_to_le32(map.flags);
 		val.ov_size = cpu_to_le32(sb->s_blocksize);
 		val.ov_paddr = cpu_to_le64(new_bh->b_blocknr);
-		ret = apfs_btree_replace(query, &key, sizeof(key),
-					 &val, sizeof(val));
+
+		/*
+		 * Preserve mappings that are part of the volume's snapshot.
+		 * This check a bit awkward for the container's omap. TODO: use
+		 * an in-memory omap struct instead of passing around root nodes
+		 */
+		if (sbi->s_vsb_raw && map.xid <= sbi->s_latest_snap)
+			ret = apfs_btree_insert(query, &key, sizeof(key), &val, sizeof(val));
+		else
+			ret = apfs_btree_replace(query, &key, sizeof(key), &val, sizeof(val));
 
 		*block = new_bh->b_blocknr;
 		brelse(new_bh);

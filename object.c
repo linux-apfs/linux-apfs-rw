@@ -309,6 +309,7 @@ struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb, u64 oid)
 struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno,
 					   bool write)
 {
+	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct buffer_head *bh, *new_bh;
 	struct apfs_obj_phys *obj;
@@ -346,7 +347,9 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno,
 	}
 	memcpy(new_bh->b_data, bh->b_data, sb->s_blocksize);
 
-	err = apfs_free_queue_insert(sb, bh->b_blocknr, 1);
+	/* Don't free the old copy if it's part of a snapshot */
+	if (type & APFS_OBJ_PHYSICAL || !sbi->s_vsb_raw || le64_to_cpu(obj->o_xid) > sbi->s_latest_snap)
+		err = apfs_free_queue_insert(sb, bh->b_blocknr, 1);
 	brelse(bh);
 	bh = new_bh;
 	new_bh = NULL;

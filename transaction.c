@@ -468,6 +468,8 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 		vol_trans->t_old_omap_root = *sbi->s_omap_root;
 		get_bh(vol_trans->t_old_omap_root.object.o_bh);
 
+		sbi->s_vobject.o_bh = NULL;
+		sbi->s_vsb_raw = NULL;
 		err = apfs_map_volume_super(sb, true /* write */);
 		if (err)
 			goto fail;

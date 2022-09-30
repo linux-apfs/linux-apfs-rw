@@ -368,6 +368,8 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name)
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	le64_add_cpu(&vsb_raw->apfs_num_snapshots, 1);
 
+	sbi->s_latest_snap = APFS_NXI(sb)->nx_xid;
+
 	sbi->s_nxi->nx_transaction.t_state |= APFS_NX_TRANS_FORCE_COMMIT;
 	err = apfs_transaction_commit(sb);
 	if (err)

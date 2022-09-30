@@ -225,6 +225,16 @@ struct apfs_nxsb_info {
 extern struct mutex nxs_mutex;
 
 /*
+ * Omap mapping in memory.
+ * TODO: could this and apfs_omap_rec be the same struct?
+ */
+struct apfs_omap_map {
+	u64 xid;
+	u64 bno;
+	u32 flags;
+};
+
+/*
  * Omap record data in memory
  */
 struct apfs_omap_rec {
@@ -251,6 +261,8 @@ struct apfs_sb_info {
 	struct apfs_nxsb_info *s_nxi; /* In-memory container sb for volume */
 	struct list_head list;		/* List of mounted volumes in container */
 	struct apfs_superblock *s_vsb_raw; /* On-disk volume sb */
+
+	u64 s_latest_snap; /* Transaction id for most recent snapshot */
 
 	struct apfs_node *s_cat_root;	/* Root of the catalog tree */
 	struct apfs_node *s_omap_root;	/* Root of the object map tree */
@@ -884,7 +896,7 @@ extern void apfs_update_node(struct apfs_node *node);
 extern int apfs_delete_node(struct apfs_query *query);
 extern int apfs_node_query(struct super_block *sb, struct apfs_query *query);
 extern void apfs_node_query_first(struct apfs_query *query);
-extern int apfs_bno_from_query(struct apfs_query *query, u64 *bno);
+extern int apfs_omap_map_from_query(struct apfs_query *query, struct apfs_omap_map *map);
 extern int apfs_node_split(struct apfs_query *query);
 extern int apfs_node_locate_key(struct apfs_node *node, int index, int *off);
 extern void apfs_node_free(struct apfs_node *node);

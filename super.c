@@ -483,6 +483,7 @@ int apfs_read_omap(struct super_block *sb, bool write)
 		ASSERT(buffer_trans(bh));
 		omap_raw->om_tree_oid = cpu_to_le64(omap_root->object.block_nr);
 	}
+	sbi->s_latest_snap = le64_to_cpu(omap_raw->om_most_recent_snap);
 	omap_raw = NULL;
 	brelse(bh);
 
