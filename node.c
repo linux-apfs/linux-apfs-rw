@@ -526,7 +526,13 @@ int apfs_node_locate_key(struct apfs_node *node, int index, int *off)
 		struct apfs_kvoff *entry;
 
 		entry = (struct apfs_kvoff *)raw->btn_data + index;
-		len = 16;
+
+		/* TODO: it would be cleaner to read this stuff from disk */
+		if (node->tree_type == APFS_OBJECT_TYPE_OMAP_SNAPSHOT)
+			len = 8;
+		else
+			len = 16;
+
 		/* Translate offset in key area to offset in block */
 		*off = node->key + le16_to_cpu(entry->k);
 	} else {
@@ -578,7 +584,7 @@ static int apfs_node_locate_data(struct apfs_node *node, int index, int *off)
 				return 0;
 			len = 8;
 		} else {
-			/* This is an object-map node */
+			/* This is an omap or omap snapshots node */
 			len = apfs_node_is_leaf(node) ? 16 : 8;
 		}
 		/*
