@@ -429,3 +429,127 @@ fail:
 	mnt_drop_write_file(file);
 	return err;
 }
+
+static int apfs_snap_xid_from_query(struct apfs_query *query, u64 *xid)
+{
+	char *raw = query->node->object.data;
+	__le64 *val = NULL;
+
+	if (query->len != sizeof(*val))
+		return -EFSCORRUPTED;
+	val = (__le64 *)(raw + query->off);
+
+	*xid = le64_to_cpup(val);
+	return 0;
+}
+
+static int apfs_snapshot_name_to_xid(struct apfs_node *snap_root, const char *name, u64 *xid)
+{
+	struct super_block *sb = snap_root->object.sb;
+	struct apfs_query *query = NULL;
+	struct apfs_key key = {0};
+	int err;
+
+	apfs_init_snap_name_key(name, &key);
+
+	query = apfs_alloc_query(snap_root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+	query->key = &key;
+	query->flags |= APFS_QUERY_SNAP_META | APFS_QUERY_EXACT;
+
+	err = apfs_btree_query(sb, &query);
+	if (err)
+		goto fail;
+
+	err = apfs_snap_xid_from_query(query, xid);
+fail:
+	apfs_free_query(query);
+	query = NULL;
+	return err;
+}
+
+static int apfs_snap_sblock_from_query(struct apfs_query *query, u64 *sblock_oid)
+{
+	char *raw = query->node->object.data;
+	struct apfs_snap_metadata_val *val = NULL;
+
+	if (query->len < sizeof(*val))
+		return -EFSCORRUPTED;
+	val = (struct apfs_snap_metadata_val *)(raw + query->off);
+
+	*sblock_oid = le64_to_cpu(val->sblock_oid);
+	return 0;
+}
+
+static int apfs_snapshot_xid_to_sblock(struct apfs_node *snap_root, u64 xid, u64 *sblock_oid)
+{
+	struct super_block *sb = snap_root->object.sb;
+	struct apfs_query *query = NULL;
+	struct apfs_key key = {0};
+	int err;
+
+	apfs_init_snap_metadata_key(xid, &key);
+
+	query = apfs_alloc_query(snap_root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+	query->key = &key;
+	query->flags |= APFS_QUERY_SNAP_META | APFS_QUERY_EXACT;
+
+	err = apfs_btree_query(sb, &query);
+	if (err)
+		goto fail;
+
+	err = apfs_snap_sblock_from_query(query, sblock_oid);
+fail:
+	apfs_free_query(query);
+	query = NULL;
+	return err;
+}
+
+/**
+ * apfs_switch_to_snapshot - Start working with the snapshot volume superblock
+ * @sb: superblock structure
+ *
+ * Maps the volume superblock from the snapshot specified in the mount options.
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+int apfs_switch_to_snapshot(struct super_block *sb)
+{
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
+	struct apfs_node *snap_root = NULL;
+	const char *name = NULL;
+	u64 sblock_oid = 0;
+	u64 xid = 0;
+	int err;
+
+	ASSERT(sb->s_flags & SB_RDONLY);
+
+	name = sbi->s_snap_name;
+	if (strlen(name) > APFS_SNAP_MAX_NAMELEN)
+		return -EINVAL;
+
+	snap_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_snap_meta_tree_oid), APFS_OBJ_PHYSICAL, false /* write */);
+	if (IS_ERR(snap_root))
+		return PTR_ERR(snap_root);
+	vsb_raw = NULL;
+
+	err = apfs_snapshot_name_to_xid(snap_root, name, &xid);
+	if (err)
+		goto fail;
+	sbi->s_snap_xid = xid;
+
+	err = apfs_snapshot_xid_to_sblock(snap_root, xid, &sblock_oid);
+	if (err)
+		goto fail;
+
+	apfs_unmap_volume_super(sb);
+	err = apfs_map_volume_super_bno(sb, sblock_oid, nxi->nx_flags & APFS_CHECK_NODES);
+
+fail:
+	apfs_node_free(snap_root);
+	return err;
+}

@@ -63,6 +63,8 @@ where ``device`` is the path to your device file or filesystem image, and
 ============   =================================================================
 vol=n	       Volume number to mount. The default is volume 0.
 
+snap=label     Volume snapshot to mount (in read-only mode).
+
 uid=n, gid=n   Override on-disk inode ownership data with given uid/gid.
 
 cknodes	       Verify the checksum on all metadata nodes. Right now this has a

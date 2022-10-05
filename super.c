@@ -312,6 +312,56 @@ out:
 }
 
 /**
+ * apfs_map_volume_super_bno - Map a block containing a volume superblock
+ * @sb:		superblock structure
+ * @bno:	block to map
+ * @check:	verify the checksum?
+ */
+int apfs_map_volume_super_bno(struct super_block *sb, u64 bno, bool check)
+{
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_superblock *vsb_raw = NULL;
+	struct buffer_head *bh = NULL;
+	int err;
+
+	bh = apfs_sb_bread(sb, bno);
+	if (!bh) {
+		apfs_err(sb, "unable to read volume superblock");
+		return -EINVAL;
+	}
+
+	vsb_raw = (struct apfs_superblock *)bh->b_data;
+	if (le32_to_cpu(vsb_raw->apfs_magic) != APFS_MAGIC) {
+		apfs_err(sb, "wrong magic in volume superblock");
+		err = -EINVAL;
+		goto fail;
+	}
+
+	/*
+	 * XXX: apfs_omap_lookup_block() only runs this check when write
+	 * is true, but it should always do it.
+	 */
+	if (check && !apfs_obj_verify_csum(sb, &vsb_raw->apfs_o)) {
+		apfs_err(sb, "inconsistent volume superblock");
+		err = -EFSBADCRC;
+		goto fail;
+	}
+
+	sbi->s_vsb_raw = vsb_raw;
+	sbi->s_vobject.sb = sb;
+	sbi->s_vobject.block_nr = bno;
+	sbi->s_vobject.oid = le64_to_cpu(vsb_raw->apfs_o.o_oid);
+	brelse(sbi->s_vobject.o_bh);
+	sbi->s_vobject.o_bh = bh;
+	sbi->s_vobject.data = bh->b_data;
+	return 0;
+
+fail:
+	brelse(bh);
+	return err;
+}
+
+/**
  * apfs_map_volume_super - Find the volume superblock and map it into memory
  * @sb:		superblock structure
  * @write:	request write access?
@@ -324,7 +374,6 @@ int apfs_map_volume_super(struct super_block *sb, bool write)
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_superblock *msb_raw = nxi->nx_raw;
-	struct apfs_superblock *vsb_raw;
 	struct apfs_omap_phys *msb_omap_raw;
 	struct apfs_node *vnode;
 	struct buffer_head *bh;
@@ -375,44 +424,23 @@ int apfs_map_volume_super(struct super_block *sb, bool write)
 	}
 	msb_omap_raw = NULL;
 	brelse(bh);
+	bh = NULL;
 
 	err = apfs_omap_lookup_block(sb, vnode, vol_id, &vsb, write);
 	apfs_node_free(vnode);
+	vnode = NULL;
 	if (err) {
 		apfs_err(sb, "volume not found, likely corruption");
 		return err;
 	}
 
-	bh = apfs_sb_bread(sb, vsb);
-	if (!bh) {
-		apfs_err(sb, "unable to read volume superblock");
-		return -EINVAL;
-	}
-
-	vsb_raw = (struct apfs_superblock *)bh->b_data;
-	if (le32_to_cpu(vsb_raw->apfs_magic) != APFS_MAGIC) {
-		apfs_err(sb, "wrong magic in volume superblock");
-		err = -EINVAL;
-		goto fail;
-	}
-
 	/*
-	 * XXX: apfs_omap_lookup_block() only runs this check when write
-	 * is true, but it should always do it.
+	 * Snapshots could get mounted during a transaction, so the fletcher
+	 * checksum doesn't have to be valid.
 	 */
-	if (!write && !apfs_obj_verify_csum(sb, &vsb_raw->apfs_o)) {
-		apfs_err(sb, "inconsistent volume superblock");
-		err = -EFSBADCRC;
-		goto fail;
-	}
-
-	sbi->s_vsb_raw = vsb_raw;
-	sbi->s_vobject.sb = sb;
-	sbi->s_vobject.block_nr = vsb;
-	sbi->s_vobject.oid = le64_to_cpu(vsb_raw->apfs_o.o_oid);
-	brelse(sbi->s_vobject.o_bh);
-	sbi->s_vobject.o_bh = bh;
-	sbi->s_vobject.data = bh->b_data;
+	err = apfs_map_volume_super_bno(sb, vsb, !write && !sbi->s_snap_name);
+	if (err)
+		return err;
 
 	if (write)
 		apfs_update_software_info(sb);
@@ -427,7 +455,7 @@ fail:
  * apfs_unmap_volume_super - Clean up apfs_map_volume_super()
  * @sb:	filesystem superblock
  */
-static inline void apfs_unmap_volume_super(struct super_block *sb)
+void apfs_unmap_volume_super(struct super_block *sb)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_object *obj = &sbi->s_vobject;
@@ -570,6 +598,8 @@ fail:
 
 	sb->s_fs_info = NULL;
 
+	kfree(sbi->s_snap_name);
+	sbi->s_snap_name = NULL;
 	if (sbi->s_dflt_pfk)
 		kfree(sbi->s_dflt_pfk);
 	kfree(sbi);
@@ -862,7 +892,7 @@ static const struct super_operations apfs_sops = {
 };
 
 enum {
-	Opt_readwrite, Opt_cknodes, Opt_uid, Opt_gid, Opt_vol, Opt_err,
+	Opt_readwrite, Opt_cknodes, Opt_uid, Opt_gid, Opt_vol, Opt_snap, Opt_err,
 };
 
 static const match_table_t tokens = {
@@ -871,6 +901,7 @@ static const match_table_t tokens = {
 	{Opt_uid, "uid=%u"},
 	{Opt_gid, "gid=%u"},
 	{Opt_vol, "vol=%u"},
+	{Opt_snap, "snap=%s"},
 	{Opt_err, NULL}
 };
 
@@ -917,6 +948,32 @@ static unsigned int apfs_get_vol_number(char *options)
 	if (kstrtol(volstr, 10, &vol) < 0)
 		return 0;
 	return vol;
+}
+
+/**
+ * apfs_get_snap_name - Duplicate the snapshot label from the mount options
+ * @options:	string of mount options
+ *
+ * On error, it will just return the default NULL snapshot name. TODO: this is
+ * actually a bit dangerous because a memory allocation failure might get the
+ * same snapshot mounted twice, without a shared superblock.
+ */
+static char *apfs_get_snap_name(char *options)
+{
+	char needle[] = "snap=";
+	char *name = NULL, *end = NULL;
+
+	if (!options)
+		return NULL;
+
+	name = strstr(options, needle);
+	if (!name)
+		return NULL;
+
+	name += sizeof(needle) - 1;
+	end = strchrnul(name, ',');
+
+	return kmemdup_nul(name, end - name, GFP_KERNEL);
 }
 
 /*
@@ -987,6 +1044,12 @@ static int parse_options(struct super_block *sb, char *options)
 			err = match_int(&args[0], &sbi->s_vol_nr);
 			if (err)
 				return err;
+			break;
+		case Opt_snap:
+			kfree(sbi->s_snap_name);
+			sbi->s_snap_name = match_strdup(&args[0]);
+			if (!sbi->s_snap_name)
+				return -ENOMEM;
 			break;
 		default:
 			return -EINVAL;
@@ -1146,10 +1209,20 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 	if (err)
 		goto failed_omap;
 
-	/* The omap needs to be set before the call to apfs_read_catalog() */
+	/*
+	 * The omap needs to be set before the call to apfs_read_catalog().
+	 * It's also shared with all the snapshots, so it needs to be read
+	 * before we switch to the old superblock.
+	 */
 	err = apfs_read_omap(sb, false /* write */);
 	if (err)
 		goto failed_omap;
+
+	if (sbi->s_snap_name) {
+		err = apfs_switch_to_snapshot(sb);
+		if (err)
+			goto failed_cat;
+	}
 
 	err = apfs_read_catalog(sb, false /* write */);
 	if (err)
@@ -1195,6 +1268,20 @@ failed_omap:
 }
 
 /**
+ * apfs_strings_are_equal - Compare two possible NULL strings
+ * @str1: the first string
+ * @str2: the second string
+ */
+static bool apfs_strings_are_equal(const char *str1, const char *str2)
+{
+	if (str1 == str2) /* Both are NULL */
+		return true;
+	if (!str1 || !str2) /* One is NULL */
+		return false;
+	return strcmp(str1, str2) == 0;
+}
+
+/**
  * apfs_test_super - Check if two volume superblocks are for the same volume
  * @sb:		superblock structure for a currently mounted volume
  * @data:	superblock info for the volume being mounted
@@ -1208,7 +1295,7 @@ static int apfs_test_super(struct super_block *sb, void *data)
 		return false;
 	if (sbi_1->s_vol_nr != sbi_2->s_vol_nr)
 		return false;
-	return true;
+	return apfs_strings_are_equal(sbi_1->s_snap_name, sbi_2->s_snap_name);
 }
 
 /**
@@ -1304,9 +1391,6 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	fmode_t mode = FMODE_READ | FMODE_EXCL;
 	int error = 0;
 
-	if (!(flags & SB_RDONLY))
-		mode |= FMODE_WRITE;
-
 	mutex_lock(&nxs_mutex);
 
 	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
@@ -1315,6 +1399,14 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 		goto out_unlock;
 	}
 	sbi->s_vol_nr = apfs_get_vol_number(data);
+	sbi->s_snap_name = apfs_get_snap_name(data);
+
+	/* Make sure that snapshots are mounted read-only */
+	if (sbi->s_snap_name)
+		flags |= SB_RDONLY;
+
+	if (!(flags & SB_RDONLY))
+		mode |= FMODE_WRITE;
 
 	error = apfs_attach_nxi(sbi, dev_name, mode);
 	if (error)
@@ -1354,6 +1446,7 @@ out_deactivate_super:
 out_unmap_super:
 	apfs_unmap_main_super(sbi);
 out_free_sbi:
+	kfree(sbi->s_snap_name);
 	kfree(sbi);
 out_unlock:
 	mutex_unlock(&nxs_mutex);

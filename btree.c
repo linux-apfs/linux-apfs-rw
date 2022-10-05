@@ -103,6 +103,22 @@ static void apfs_omap_cache_delete(struct super_block *sb, u64 oid)
 }
 
 /**
+ * apfs_mounted_xid - Returns the mounted xid for this superblock
+ * @sb:	superblock structure
+ *
+ * This function is needed instead of APFS_NXI(@sb)->nx_xid in situations where
+ * we might be working with a snapshot. Snapshots are read-only and should
+ * mostly ignore xids, so this only appears to matter for omap lookups.
+ */
+static inline u64 apfs_mounted_xid(struct super_block *sb)
+{
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+
+	return sbi->s_snap_xid ? sbi->s_snap_xid : nxi->nx_xid;
+}
+
+/**
  * apfs_omap_lookup_block - Find the block number of a b-tree node from its id
  * @sb:		filesystem superblock
  * @tbl:	Root of the object map to be searched
@@ -130,7 +146,7 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 	if (!query)
 		return -ENOMEM;
 
-	apfs_init_omap_key(id, nxi->nx_xid, &key);
+	apfs_init_omap_key(id, apfs_mounted_xid(sb), &key);
 	query->key = &key;
 	query->flags |= APFS_QUERY_OMAP;
 

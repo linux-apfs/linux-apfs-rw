@@ -262,6 +262,9 @@ struct apfs_sb_info {
 	struct list_head list;		/* List of mounted volumes in container */
 	struct apfs_superblock *s_vsb_raw; /* On-disk volume sb */
 
+	char *s_snap_name; /* Label for the mounted snapshot */
+	u64 s_snap_xid; /* Transaction id for mounted snapshot */
+
 	u64 s_latest_snap; /* Transaction id for most recent snapshot */
 
 	struct apfs_node *s_cat_root;	/* Root of the catalog tree */
@@ -920,6 +923,7 @@ extern struct buffer_head *apfs_read_object_block(struct super_block *sb,
 
 /* snapshot.c */
 extern int apfs_ioc_take_snapshot(struct file *file, void __user *user_arg);
+extern int apfs_switch_to_snapshot(struct super_block *sb);
 
 /* spaceman.c */
 extern int apfs_read_spaceman(struct super_block *sb);
@@ -927,7 +931,9 @@ extern int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count);
 extern int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backwards);
 
 /* super.c */
+extern int apfs_map_volume_super_bno(struct super_block *sb, u64 bno, bool check);
 extern int apfs_map_volume_super(struct super_block *sb, bool write);
+extern void apfs_unmap_volume_super(struct super_block *sb);
 extern int apfs_read_omap(struct super_block *sb, bool write);
 extern int apfs_read_catalog(struct super_block *sb, bool write);
 extern int apfs_sync_fs(struct super_block *sb, int wait);
