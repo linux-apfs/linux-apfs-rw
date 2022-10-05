@@ -602,7 +602,7 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		clear_buffer_dirty(bh);
 		lock_buffer(bh);
 		bh->b_end_io = apfs_end_buffer_write_sync;
-		submit_bh(REQ_OP_WRITE, REQ_SYNC, bh);
+		apfs_submit_bh(REQ_OP_WRITE, REQ_SYNC, bh);
 	}
 	err = apfs_checkpoint_end(sb);
 	if (err)

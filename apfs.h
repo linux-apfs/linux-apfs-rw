@@ -30,6 +30,13 @@ static inline bool sb_rdonly(const struct super_block *sb) { return sb->s_flags 
 #define lockdep_assert_held_write(l)	((void)(l))
 #endif
 
+/* Compatibility wrapper around submit_bh() */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
+#define apfs_submit_bh(op, op_flags, bh) submit_bh(op, op_flags, bh)
+#else
+#define apfs_submit_bh(op, op_flags, bh) submit_bh(op | op_flags, bh)
+#endif
+
 #define APFS_IOC_SET_DFLT_PFK	_IOW('@', 0x80, struct apfs_wrapped_crypto_state)
 #define APFS_IOC_SET_DIR_CLASS	_IOW('@', 0x81, u32)
 #define APFS_IOC_SET_PFK	_IOW('@', 0x82, struct apfs_wrapped_crypto_state)

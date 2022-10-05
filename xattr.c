@@ -155,7 +155,7 @@ static int apfs_xattr_extents_read(struct inode *parent,
 			get_bh(bh);
 			lock_buffer(bh);
 			bh->b_end_io = end_buffer_read_sync;
-			submit_bh(REQ_OP_READ, 0, bh);
+			apfs_submit_bh(REQ_OP_READ, 0, bh);
 		}
 	}
 	for (i = 0; i < blkcnt; i++) {

@@ -475,7 +475,7 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 				get_bh(bh);
 				lock_buffer(bh);
 				bh->b_end_io = end_buffer_read_sync;
-				submit_bh(REQ_OP_READ, 0, bh);
+				apfs_submit_bh(REQ_OP_READ, 0, bh);
 				wait_on_buffer(bh);
 				if (!buffer_uptodate(bh)) {
 					err = -EIO;
