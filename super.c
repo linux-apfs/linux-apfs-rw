@@ -132,7 +132,7 @@ static void apfs_make_super_copy(struct super_block *sb)
 	struct apfs_nxsb_info *nxi = sbi->s_nxi;
 	struct buffer_head *bh;
 
-	if (sb->s_flags & SB_RDONLY)
+	if (!(nxi->nx_flags & APFS_READWRITE))
 		return;
 
 	/* Only update the backup once all volumes are unmounted */
@@ -581,8 +581,13 @@ static void apfs_put_super(struct super_block *sb)
 			apfs_transaction_abort(sb);
 			goto fail;
 		}
-		apfs_make_super_copy(sb);
 	}
+
+	/*
+	 * Even if this particular volume/snapshot was read-only, the container
+	 * may have changed and need an update here.
+	 */
+	apfs_make_super_copy(sb);
 
 fail:
 	iput(sbi->s_private_dir);
