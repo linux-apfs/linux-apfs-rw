@@ -324,7 +324,7 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name)
 {
 	struct super_block *sb = mntpoint->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
+	struct apfs_superblock *vsb_raw = NULL;
 	struct apfs_omap *omap = sbi->s_omap;
 	/* TODO: remember to update the maxops in the future */
 	struct apfs_max_ops maxops = {0};
@@ -366,6 +366,7 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name)
 	 * same for now.
 	 */
 
+	vsb_raw = sbi->s_vsb_raw;
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	le64_add_cpu(&vsb_raw->apfs_num_snapshots, 1);
 
