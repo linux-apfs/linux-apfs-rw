@@ -28,19 +28,22 @@ static int apfs_child_from_query(struct apfs_query *query, u64 *child)
 }
 
 /**
- * apfs_omap_cache_lookup - Look for an oid in the volume's omap cache
- * @sb:		filesystem superblock for the volume
+ * apfs_omap_cache_lookup - Look for an oid in an omap's cache
+ * @omap:	the object map
  * @oid:	object id to look up
  * @bno:	on return, the block number for the oid
  *
- * Returns 0 on success, or -ENODATA if this mapping is not cached.
+ * Returns 0 on success, or -1 if this mapping is not cached.
  */
-static int apfs_omap_cache_lookup(struct super_block *sb, u64 oid, u64 *bno)
+static int apfs_omap_cache_lookup(struct apfs_omap *omap, u64 oid, u64 *bno)
 {
-	struct apfs_omap_cache *cache = &APFS_SB(sb)->s_omap_cache;
+	struct apfs_omap_cache *cache = &omap->omap_cache;
 	struct apfs_omap_rec *record = NULL;
 	int slot;
 	int ret = -1;
+
+	if (cache->disabled)
+		return -1;
 
 	/* Uninitialized cache records use OID 0, so check this just in case */
 	if (!oid)
@@ -60,16 +63,19 @@ static int apfs_omap_cache_lookup(struct super_block *sb, u64 oid, u64 *bno)
 }
 
 /**
- * apfs_omap_cache_save - Save a record in the volume's omap cache
- * @sb:		filesystem superblock for the volume
+ * apfs_omap_cache_save - Save a record in an omap's cache
+ * @omap:	the object map
  * @oid:	object id of the record
  * @bno:	block number for the oid
  */
-static void apfs_omap_cache_save(struct super_block *sb, u64 oid, u64 bno)
+static void apfs_omap_cache_save(struct apfs_omap *omap, u64 oid, u64 bno)
 {
-	struct apfs_omap_cache *cache = &APFS_SB(sb)->s_omap_cache;
+	struct apfs_omap_cache *cache = &omap->omap_cache;
 	struct apfs_omap_rec *record = NULL;
 	int slot;
+
+	if (cache->disabled)
+		return;
 
 	slot = oid & APFS_OMAP_CACHE_SLOT_MASK;
 	record = &cache->recs[slot];
@@ -81,15 +87,18 @@ static void apfs_omap_cache_save(struct super_block *sb, u64 oid, u64 bno)
 }
 
 /**
- * apfs_omap_cache_delete - Try to delete a record from the volume's omap cache
- * @sb:		filesystem superblock for the volume
+ * apfs_omap_cache_delete - Try to delete a record from an omap's cache
+ * @omap:	the object map
  * @oid:	object id of the record
  */
-static void apfs_omap_cache_delete(struct super_block *sb, u64 oid)
+static void apfs_omap_cache_delete(struct apfs_omap *omap, u64 oid)
 {
-	struct apfs_omap_cache *cache = &APFS_SB(sb)->s_omap_cache;
+	struct apfs_omap_cache *cache = &omap->omap_cache;
 	struct apfs_omap_rec *record = NULL;
 	int slot;
+
+	if (cache->disabled)
+		return;
 
 	slot = oid & APFS_OMAP_CACHE_SLOT_MASK;
 	record = &cache->recs[slot];
@@ -119,16 +128,26 @@ static inline u64 apfs_mounted_xid(struct super_block *sb)
 }
 
 /**
+ * apfs_xid_in_snapshot - Check if an xid is part of a snapshot
+ * @omap:	the object map
+ * @xid:	the xid to check
+ */
+static inline bool apfs_xid_in_snapshot(struct apfs_omap *omap, u64 xid)
+{
+	return xid <= omap->omap_latest_snap;
+}
+
+/**
  * apfs_omap_lookup_block - Find the block number of a b-tree node from its id
  * @sb:		filesystem superblock
- * @tbl:	Root of the object map to be searched
+ * @omap:	object map to be searched
  * @id:		id of the node
  * @block:	on return, the found block number
  * @write:	get write access to the object?
  *
  * Returns 0 on success or a negative error code in case of failure.
  */
-int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
+int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap,
 			   u64 id, u64 *block, bool write)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
@@ -138,11 +157,11 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 	int ret = 0;
 
 	if (!write) {
-		if (!apfs_omap_cache_lookup(sb, id, block))
+		if (!apfs_omap_cache_lookup(omap, id, block))
 			return 0;
 	}
 
-	query = apfs_alloc_query(tbl, NULL /* parent */);
+	query = apfs_alloc_query(omap->omap_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
 
@@ -163,12 +182,14 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 	*block = map.bno;
 
 	if (write) {
-		struct apfs_sb_info *sbi = APFS_SB(sb);
 		struct apfs_omap_key key;
 		struct apfs_omap_val val;
 		struct buffer_head *new_bh;
+		bool preserve;
 
-		new_bh = apfs_read_object_block(sb, *block, write);
+		preserve = apfs_xid_in_snapshot(omap, map.xid);
+
+		new_bh = apfs_read_object_block(sb, *block, write, preserve);
 		if (IS_ERR(new_bh)) {
 			ret = PTR_ERR(new_bh);
 			goto fail;
@@ -180,12 +201,7 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 		val.ov_size = cpu_to_le32(sb->s_blocksize);
 		val.ov_paddr = cpu_to_le64(new_bh->b_blocknr);
 
-		/*
-		 * Preserve mappings that are part of the volume's snapshot.
-		 * This check a bit awkward for the container's omap. TODO: use
-		 * an in-memory omap struct instead of passing around root nodes
-		 */
-		if (sbi->s_vsb_raw && map.xid <= sbi->s_latest_snap)
+		if (preserve)
 			ret = apfs_btree_insert(query, &key, sizeof(key), &val, sizeof(val));
 		else
 			ret = apfs_btree_replace(query, &key, sizeof(key), &val, sizeof(val));
@@ -194,7 +210,7 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
 		brelse(new_bh);
 	}
 
-	apfs_omap_cache_save(sb, id, *block);
+	apfs_omap_cache_save(omap, id, *block);
 
 fail:
 	apfs_free_query(query);
@@ -213,13 +229,14 @@ int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_omap *omap = sbi->s_omap;
 	struct apfs_query *query;
 	struct apfs_key key;
 	struct apfs_omap_key raw_key;
 	struct apfs_omap_val raw_val;
 	int ret;
 
-	query = apfs_alloc_query(sbi->s_omap_root, NULL /* parent */);
+	query = apfs_alloc_query(omap->omap_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
 
@@ -242,7 +259,7 @@ int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno)
 	if (ret)
 		goto fail;
 
-	apfs_omap_cache_save(sb, oid, bno);
+	apfs_omap_cache_save(omap, oid, bno);
 
 fail:
 	apfs_free_query(query);
@@ -260,11 +277,12 @@ int apfs_delete_omap_rec(struct super_block *sb, u64 oid)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_omap *omap = sbi->s_omap;
 	struct apfs_query *query;
 	struct apfs_key key;
 	int ret;
 
-	query = apfs_alloc_query(sbi->s_omap_root, NULL /* parent */);
+	query = apfs_alloc_query(omap->omap_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
 
@@ -278,7 +296,7 @@ int apfs_delete_omap_rec(struct super_block *sb, u64 oid)
 	if (!ret)
 		ret = apfs_btree_remove(query);
 	if (!ret)
-		apfs_omap_cache_delete(sb, oid);
+		apfs_omap_cache_delete(omap, oid);
 
 	apfs_free_query(query);
 	return ret;

@@ -297,7 +297,7 @@ static int apfs_update_omap_snapshots(struct super_block *sb)
 	xid = APFS_NXI(sb)->nx_xid;
 
 	omap_blk = le64_to_cpu(vsb_raw->apfs_omap_oid);
-	bh = apfs_read_object_block(sb, omap_blk, true /* write */);
+	bh = apfs_read_object_block(sb, omap_blk, true /* write */, false /* preserve */);
 	if (IS_ERR(bh))
 		return PTR_ERR(bh);
 	omap = (struct apfs_omap_phys *)bh->b_data;
@@ -325,6 +325,7 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name)
 	struct super_block *sb = mntpoint->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
+	struct apfs_omap *omap = sbi->s_omap;
 	/* TODO: remember to update the maxops in the future */
 	struct apfs_max_ops maxops = {0};
 	u64 sblock_oid;
@@ -368,7 +369,7 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name)
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	le64_add_cpu(&vsb_raw->apfs_num_snapshots, 1);
 
-	sbi->s_latest_snap = APFS_NXI(sb)->nx_xid;
+	omap->omap_latest_snap = APFS_NXI(sb)->nx_xid;
 
 	sbi->s_nxi->nx_transaction.t_state |= APFS_NX_TRANS_FORCE_COMMIT;
 	err = apfs_transaction_commit(sb);

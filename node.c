@@ -80,16 +80,16 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 	switch (storage) {
 	case APFS_OBJ_VIRTUAL:
 		/* All virtual nodes are inside a volume, at least for now */
-		err = apfs_omap_lookup_block(sb, sbi->s_omap_root, oid,
-					     &bno, write);
+		err = apfs_omap_lookup_block(sb, sbi->s_omap, oid, &bno, write);
 		if (err)
 			return ERR_PTR(err);
-		bh = apfs_read_object_block(sb, bno, write);
+		/* CoW has already been done, don't worry about snapshots */
+		bh = apfs_read_object_block(sb, bno, write, false /* preserve */);
 		if (IS_ERR(bh))
 			return (void *)bh;
 		break;
 	case APFS_OBJ_PHYSICAL:
-		bh = apfs_read_object_block(sb, oid, write);
+		bh = apfs_read_object_block(sb, oid, write, false /* preserve */);
 		if (IS_ERR(bh))
 			return (void *)bh;
 		oid = bh->b_blocknr;

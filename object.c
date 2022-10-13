@@ -301,21 +301,22 @@ struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb, u64 oid)
  * @sb:		superblock structure
  * @bno:	block number for the object
  * @write:	request write access?
+ * @preserve:	preserve the old block?
  *
  * On success returns the mapped buffer head for the object, which may now be
  * in a new location if write access was requested.  Returns an error pointer
  * in case of failure.
  */
-struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno,
-					   bool write)
+struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool write, bool preserve)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct buffer_head *bh, *new_bh;
 	struct apfs_obj_phys *obj;
 	u32 type;
 	u64 new_bno;
 	int err;
+
+	ASSERT(write || !preserve);
 
 	bh = apfs_sb_bread(sb, bno);
 	if (!bh)
@@ -348,7 +349,7 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno,
 	memcpy(new_bh->b_data, bh->b_data, sb->s_blocksize);
 
 	/* Don't free the old copy if it's part of a snapshot */
-	if (type & APFS_OBJ_PHYSICAL || !sbi->s_vsb_raw || le64_to_cpu(obj->o_xid) > sbi->s_latest_snap)
+	if (!preserve)
 		err = apfs_free_queue_insert(sb, bh->b_blocknr, 1);
 	brelse(bh);
 	bh = new_bh;

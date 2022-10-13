@@ -465,11 +465,9 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 		/* Backup the old tree roots; the node struct issues make this ugly */
 		vol_trans->t_old_cat_root = *sbi->s_cat_root;
 		get_bh(vol_trans->t_old_cat_root.object.o_bh);
-		vol_trans->t_old_omap_root = *sbi->s_omap_root;
+		vol_trans->t_old_omap_root = *sbi->s_omap->omap_root;
 		get_bh(vol_trans->t_old_omap_root.object.o_bh);
 
-		sbi->s_vobject.o_bh = NULL;
-		sbi->s_vsb_raw = NULL;
 		err = apfs_map_volume_super(sb, true /* write */);
 		if (err)
 			goto fail;
@@ -883,8 +881,8 @@ void apfs_transaction_abort(struct super_block *sb)
 		vol_trans->t_old_vsb = NULL;
 
 		/* XXX: restore the old b-tree root nodes */
-		brelse(sbi->s_omap_root->object.o_bh);
-		*(sbi->s_omap_root) = vol_trans->t_old_omap_root;
+		brelse(sbi->s_omap->omap_root->object.o_bh);
+		*(sbi->s_omap->omap_root) = vol_trans->t_old_omap_root;
 		vol_trans->t_old_omap_root.object.o_bh = NULL;
 		vol_trans->t_old_omap_root.object.data = NULL;
 		brelse(sbi->s_cat_root->object.o_bh);

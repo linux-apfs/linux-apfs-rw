@@ -250,8 +250,22 @@ struct apfs_omap_rec {
  */
 struct apfs_omap_cache {
 	struct apfs_omap_rec recs[APFS_OMAP_CACHE_SLOTS];
-	int oldest;
+	bool disabled;
 	spinlock_t lock;
+};
+
+/*
+ * Omap structure shared by all snapshots for the same volume.
+ */
+struct apfs_omap {
+	struct apfs_node *omap_root;
+	struct apfs_omap_cache omap_cache;
+
+	/* Transaction id for most recent snapshot */
+	u64 omap_latest_snap;
+
+	/* Number of snapshots sharing this omap */
+	unsigned int omap_refcnt;
 };
 
 /*
@@ -265,11 +279,8 @@ struct apfs_sb_info {
 	char *s_snap_name; /* Label for the mounted snapshot */
 	u64 s_snap_xid; /* Transaction id for mounted snapshot */
 
-	u64 s_latest_snap; /* Transaction id for most recent snapshot */
-
 	struct apfs_node *s_cat_root;	/* Root of the catalog tree */
-	struct apfs_node *s_omap_root;	/* Root of the object map tree */
-	struct apfs_omap_cache s_omap_cache;
+	struct apfs_omap *s_omap;	/* The object map */
 
 	struct apfs_object s_vobject;	/* Volume superblock object */
 
@@ -769,7 +780,7 @@ extern struct apfs_query *apfs_alloc_query(struct apfs_node *node,
 extern void apfs_free_query(struct apfs_query *query);
 extern int apfs_btree_query(struct super_block *sb, struct apfs_query **query);
 extern struct apfs_node *apfs_omap_read_node(struct super_block *sb, u64 id);
-extern int apfs_omap_lookup_block(struct super_block *sb, struct apfs_node *tbl,
+extern int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap,
 				  u64 id, u64 *block, bool write);
 extern int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno);
 extern int apfs_delete_omap_rec(struct super_block *sb, u64 oid);
@@ -918,8 +929,7 @@ extern int apfs_create_cpoint_map(struct super_block *sb, u64 oid, u64 bno);
 extern int apfs_remove_cpoint_map(struct super_block *sb, u64 bno);
 extern struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb,
 						      u64 oid);
-extern struct buffer_head *apfs_read_object_block(struct super_block *sb,
-						  u64 bno, bool write);
+extern struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool write, bool preserve);
 
 /* snapshot.c */
 extern int apfs_ioc_take_snapshot(struct file *file, void __user *user_arg);
