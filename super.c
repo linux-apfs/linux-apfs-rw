@@ -1543,7 +1543,10 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 		}
 		/* Only one superblock per volume */
 		apfs_unmap_main_super(sbi);
+		kfree(sbi->s_snap_name);
+		sbi->s_snap_name = NULL;
 		kfree(sbi);
+		sbi = NULL;
 	} else {
 		error = apfs_map_main_super(sb);
 		if (error)
