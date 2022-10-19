@@ -127,6 +127,10 @@ struct apfs_spaceman {
 	u32 sm_addr_offset;		/* Offset of cib addresses in @sm_raw */
 };
 
+#define TRANSACTION_MAIN_QUEUE_MAX	4096
+#define TRANSACTION_BUFFERS_MAX		65536
+#define TRANSACTION_STARTS_MAX		65536
+
 /* Possible states for the container transaction structure */
 #define APFS_NX_TRANS_FORCE_COMMIT	1	/* Commit guaranteed */
 #define APFS_NX_TRANS_DEFER_COMMIT	2	/* Commit banned right now */

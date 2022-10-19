@@ -389,30 +389,45 @@ static int apfs_flush_free_queue(struct super_block *sb, unsigned qid)
 	u64 oldest = le64_to_cpu(fq->sfq_oldest_xid);
 	int err;
 
-	/* Preserve a few transactions */
-	if (oldest + 4 >= nxi->nx_xid)
-		return 0;
-
 	fq_root = apfs_read_node(sb, le64_to_cpu(fq->sfq_tree_oid),
 				 APFS_OBJ_EPHEMERAL, true /* write */);
 	if (IS_ERR(fq_root))
 		return PTR_ERR(fq_root);
 
-	while (true) {
-		u64 count = 0;
+	/* Preserve a few transactions */
+	while (oldest + 4 < nxi->nx_xid) {
+		u64 sfq_count;
 
-		/* Probably not very efficient... */
-		err = apfs_flush_fq_rec(fq_root, oldest, &count);
-		if (err == -ENODATA) {
-			err = 0;
-			break;
-		} else if (err) {
-			goto fail;
-		} else {
-			le64_add_cpu(&fq->sfq_count, -count);
+		while (true) {
+			u64 count = 0;
+
+			/* Probably not very efficient... */
+			err = apfs_flush_fq_rec(fq_root, oldest, &count);
+			if (err == -ENODATA) {
+				err = 0;
+				break;
+			} else if (err) {
+				goto fail;
+			} else {
+				le64_add_cpu(&fq->sfq_count, -count);
+			}
 		}
+		oldest = apfs_free_queue_oldest_xid(fq_root);
+		fq->sfq_oldest_xid = cpu_to_le64(oldest);
+
+		/*
+		 * Flushing a single transaction may not be enough to avoid
+		 * running out of space in the ip, but it's probably best not
+		 * to flush all the old transactions at once either. We use a
+		 * harsher version of the apfs_transaction_need_commit() check,
+		 * to make sure we won't be forced to commit again right away.
+		 */
+		sfq_count = le64_to_cpu(fq->sfq_count);
+		if (qid == APFS_SFQ_IP && sfq_count * 6 <= le64_to_cpu(sm_raw->sm_ip_block_count))
+			break;
+		if (qid == APFS_SFQ_MAIN && sfq_count <= TRANSACTION_MAIN_QUEUE_MAX - 200)
+			break;
 	}
-	fq->sfq_oldest_xid = cpu_to_le64(apfs_free_queue_oldest_xid(fq_root));
 
 	set_buffer_csum(sm->sm_bh);
 
