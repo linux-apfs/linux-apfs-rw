@@ -660,6 +660,7 @@ struct apfs_phys_extent {
 	u64 blkcount;
 	u64 len;	/* In bytes */
 	u32 refcnt;
+	u8 kind;
 };
 
 /*
