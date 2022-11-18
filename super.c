@@ -1225,6 +1225,11 @@ static int apfs_check_features(struct super_block *sb)
 		return -EINVAL;
 	}
 
+	features = le64_to_cpu(vsb_raw->apfs_fs_flags);
+	/* Some encrypted volumes are readable anyway */
+	if (!(features & APFS_FS_UNENCRYPTED))
+		apfs_warn(sb, "volume is encrypted, may not be read correctly");
+
 	features = le64_to_cpu(msb_raw->nx_readonly_compatible_features);
 	if (features & ~APFS_NX_SUPPORTED_ROCOMPAT_MASK) {
 		apfs_warn(sb,
