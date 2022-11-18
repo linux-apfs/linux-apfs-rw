@@ -1018,6 +1018,7 @@ static int apfs_check_features(struct super_block *sb)
 	ASSERT(vsb_raw);
 
 	features = le64_to_cpu(msb_raw->nx_incompatible_features);
+
 	if (features & ~APFS_NX_SUPPORTED_INCOMPAT_MASK) {
 		apfs_warn(sb,
 			  "unknown incompatible container features (0x%llx)",
@@ -1043,6 +1044,13 @@ static int apfs_check_features(struct super_block *sb)
 		apfs_warn(sb, "encrypted volumes are not supported");
 		return -EINVAL;
 	}
+
+	features = le64_to_cpu(vsb_raw->apfs_fs_flags);
+	if (!(features & APFS_FS_UNENCRYPTED)){
+		apfs_warn(sb, "encrypted volumes are not supported");
+		return -EINVAL;
+	}
+
 
 	features = le64_to_cpu(msb_raw->nx_readonly_compatible_features);
 	if (features & ~APFS_NX_SUPPORTED_ROCOMPAT_MASK) {
