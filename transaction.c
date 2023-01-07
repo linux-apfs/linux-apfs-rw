@@ -267,24 +267,22 @@ int apfs_cpoint_data_free(struct super_block *sb, u64 bno)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
-	u64 data_base = le64_to_cpu(raw_sb->nx_xp_data_base);
 	u32 data_next = le32_to_cpu(raw_sb->nx_xp_data_next);
 	u32 data_blks = le32_to_cpu(raw_sb->nx_xp_data_blocks);
 	u32 data_len = le32_to_cpu(raw_sb->nx_xp_data_len);
-	u32 data_index = le32_to_cpu(raw_sb->nx_xp_data_index);
 	u32 i, bno_i;
 
 	/*
 	 * We can't leave a hole in the data area, so we need to shift all
 	 * blocks that come after @bno one position back.
 	 */
-	bno_i = (bno - data_base + data_blks - data_index) % data_blks;
+	bno_i = apfs_index_in_data_area(sb, bno);
 	for (i = bno_i; i < data_len - 1; ++i) {
 		struct buffer_head *old_bh, *new_bh;
 		int err;
 
-		new_bh = apfs_getblk(sb, data_base + (data_index + i) % data_blks);
-		old_bh = apfs_sb_bread(sb, data_base + (data_index + i + 1) % data_blks);
+		new_bh = apfs_getblk(sb, apfs_data_index_to_bno(sb, i));
+		old_bh = apfs_sb_bread(sb, apfs_data_index_to_bno(sb, i + 1));
 		if (!new_bh || !old_bh) {
 			brelse(new_bh);
 			brelse(old_bh);

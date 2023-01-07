@@ -160,18 +160,17 @@ fail:
  * apfs_index_in_data_area - Get position of block in current checkpoint's data
  * @sb:		superblock structure
  * @bno:	block number
- *
- * TODO: reuse this function and apfs_data_index_to_bno(), and do the same for
- * the descriptor area.
  */
-static inline u32 apfs_index_in_data_area(struct super_block *sb, u64 bno)
+u32 apfs_index_in_data_area(struct super_block *sb, u64 bno)
 {
 	struct apfs_nx_superblock *raw_sb = APFS_NXI(sb)->nx_raw;
 	u64 data_base = le64_to_cpu(raw_sb->nx_xp_data_base);
 	u32 data_index = le32_to_cpu(raw_sb->nx_xp_data_index);
 	u32 data_blks = le32_to_cpu(raw_sb->nx_xp_data_blocks);
+	u64 tmp;
 
-	return (bno - data_base + data_blks - data_index) % data_blks;
+	tmp = bno - data_base + data_blks - data_index;
+	return do_div(tmp, data_blks);
 }
 
 /**
@@ -179,7 +178,7 @@ static inline u32 apfs_index_in_data_area(struct super_block *sb, u64 bno)
  * @sb:		superblock structure
  * @index:	index of the block in the current checkpoint's data area
  */
-static inline u64 apfs_data_index_to_bno(struct super_block *sb, u32 index)
+u64 apfs_data_index_to_bno(struct super_block *sb, u32 index)
 {
 	struct apfs_nx_superblock *raw_sb = APFS_NXI(sb)->nx_raw;
 	u64 data_base = le64_to_cpu(raw_sb->nx_xp_data_base);

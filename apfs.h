@@ -930,6 +930,8 @@ extern int apfs_remove_cpoint_map(struct super_block *sb, u64 bno);
 extern struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb,
 						      u64 oid);
 extern struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool write, bool preserve);
+extern u32 apfs_index_in_data_area(struct super_block *sb, u64 bno);
+extern u64 apfs_data_index_to_bno(struct super_block *sb, u32 index);
 
 /* snapshot.c */
 extern int apfs_ioc_take_snapshot(struct file *file, void __user *user_arg);
