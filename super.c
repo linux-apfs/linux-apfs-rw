@@ -1224,6 +1224,14 @@ static int apfs_check_features(struct super_block *sb)
 		apfs_warn(sb, "encrypted volumes are not supported");
 		return -EINVAL;
 	}
+	if (features & APFS_INCOMPAT_INCOMPLETE_RESTORE) {
+		apfs_warn(sb, "incomplete restore is not supported");
+		return -EINVAL;
+	}
+	if (features & APFS_INCOMPAT_RESERVED_40) {
+		apfs_warn(sb, "reserved incompatible feature flag is set");
+		return -EINVAL;
+	}
 
 	features = le64_to_cpu(vsb_raw->apfs_fs_flags);
 	/* Some encrypted volumes are readable anyway */
