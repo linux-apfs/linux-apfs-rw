@@ -29,26 +29,43 @@ int apfs_extent_from_query(struct apfs_query *query,
 			   struct apfs_file_extent *extent)
 {
 	struct super_block *sb = query->node->object.sb;
-	struct apfs_file_extent_val *ext;
-	struct apfs_file_extent_key *ext_key;
 	char *raw = query->node->object.data;
 	u64 ext_len;
 
-	if (query->len != sizeof(*ext) || query->key_len != sizeof(*ext_key))
-		return -EFSCORRUPTED;
+	if(!apfs_is_sealed(sb)) {
+		struct apfs_file_extent_val *ext = NULL;
+		struct apfs_file_extent_key *ext_key = NULL;
 
-	ext = (struct apfs_file_extent_val *)(raw + query->off);
-	ext_key = (struct apfs_file_extent_key *)(raw + query->key_off);
-	ext_len = le64_to_cpu(ext->len_and_flags) & APFS_FILE_EXTENT_LEN_MASK;
+		if (query->len != sizeof(*ext) || query->key_len != sizeof(*ext_key))
+			return -EFSCORRUPTED;
+
+		ext = (struct apfs_file_extent_val *)(raw + query->off);
+		ext_key = (struct apfs_file_extent_key *)(raw + query->key_off);
+		ext_len = le64_to_cpu(ext->len_and_flags) & APFS_FILE_EXTENT_LEN_MASK;
+
+		extent->logical_addr = le64_to_cpu(ext_key->logical_addr);
+		extent->phys_block_num = le64_to_cpu(ext->phys_block_num);
+		extent->crypto_id = le64_to_cpu(ext->crypto_id);
+	} else {
+		struct apfs_fext_tree_val *fext_val = NULL;
+		struct apfs_fext_tree_key *fext_key = NULL;
+
+		if (query->len != sizeof(*fext_val) || query->key_len != sizeof(*fext_key))
+			return -EFSCORRUPTED;
+
+		fext_val = (struct apfs_fext_tree_val *)(raw + query->off);
+		fext_key = (struct apfs_fext_tree_key *)(raw + query->key_off);
+		ext_len = le64_to_cpu(fext_val->len_and_flags) & APFS_FILE_EXTENT_LEN_MASK;
+
+		extent->logical_addr = le64_to_cpu(fext_key->logical_addr);
+		extent->phys_block_num = le64_to_cpu(fext_val->phys_block_num);
+		extent->crypto_id = 0;
+	}
 
 	/* Extent length must be a multiple of the block size */
 	if (ext_len & (sb->s_blocksize - 1))
 		return -EFSCORRUPTED;
-
-	extent->logical_addr = le64_to_cpu(ext_key->logical_addr);
-	extent->phys_block_num = le64_to_cpu(ext->phys_block_num);
 	extent->len = ext_len;
-	extent->crypto_id = le64_to_cpu(ext->crypto_id);
 	return 0;
 }
 
@@ -66,10 +83,12 @@ static int apfs_extent_read(struct apfs_dstream_info *dstream, sector_t dsblock,
 {
 	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
 	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_file_extent *cache = &dstream->ds_cached_ext;
 	u64 iaddr = dsblock << sb->s_blocksize_bits;
+	struct apfs_node *root = NULL;
 	int ret = 0;
 
 	spin_lock(&dstream->ds_ext_lock);
@@ -82,13 +101,23 @@ static int apfs_extent_read(struct apfs_dstream_info *dstream, sector_t dsblock,
 	spin_unlock(&dstream->ds_ext_lock);
 
 	/* We will search for the extent that covers iblock */
-	apfs_init_file_extent_key(dstream->ds_id, iaddr, &key);
+	if (!apfs_is_sealed(sb)) {
+		apfs_init_file_extent_key(dstream->ds_id, iaddr, &key);
+		root = sbi->s_cat_root;
+	} else {
+		apfs_init_fext_key(dstream->ds_id, iaddr, &key);
+		root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_fext_tree_oid), APFS_OBJ_PHYSICAL, false /* write */);
+		if (IS_ERR(root))
+			return PTR_ERR(root);
+	}
 
-	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
-	if (!query)
-		return -ENOMEM;
+	query = apfs_alloc_query(root, NULL /* parent */);
+	if (!query) {
+		ret = -ENOMEM;
+		goto done;
+	}
 	query->key = &key;
-	query->flags = APFS_QUERY_CAT;
+	query->flags = apfs_is_sealed(sb) ? APFS_QUERY_FEXT : APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
 	if (ret)
@@ -112,6 +141,8 @@ static int apfs_extent_read(struct apfs_dstream_info *dstream, sector_t dsblock,
 
 done:
 	apfs_free_query(query);
+	if (apfs_is_sealed(sb))
+		apfs_node_free(root);
 	return ret;
 }
 

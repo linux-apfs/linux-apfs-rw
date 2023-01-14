@@ -142,6 +142,21 @@ int apfs_read_cat_key(void *raw, int size, struct apfs_key *key, bool hashed)
 	return 0;
 }
 
+int apfs_read_fext_key(void *raw, int size, struct apfs_key *key)
+{
+	struct apfs_fext_tree_key *raw_key;
+
+	if (size != sizeof(*raw_key))
+		return -EFSCORRUPTED;
+	raw_key = raw;
+
+	key->id = le64_to_cpu(raw_key->private_id);
+	key->type = 0;
+	key->number = le64_to_cpu(raw_key->logical_addr);
+	key->name = NULL;
+	return 0;
+}
+
 /**
  * apfs_read_free_queue_key - Parse an on-disk free queue key
  * @raw:	pointer to the raw key

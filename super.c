@@ -1232,6 +1232,13 @@ static int apfs_check_features(struct super_block *sb)
 		apfs_warn(sb, "reserved incompatible feature flag is set");
 		return -EINVAL;
 	}
+	if (features & APFS_INCOMPAT_SEALED_VOLUME) {
+		if (!sb_rdonly(sb)) {
+			apfs_warn(sb, "writes to sealed volumes are not yet supported");
+			return -EINVAL;
+		}
+		apfs_info(sb, "volume is sealed");
+	}
 
 	features = le64_to_cpu(vsb_raw->apfs_fs_flags);
 	/* Some encrypted volumes are readable anyway */

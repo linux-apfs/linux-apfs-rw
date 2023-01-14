@@ -696,6 +696,9 @@ static int apfs_key_from_query(struct apfs_query *query, struct apfs_key *key)
 	case APFS_QUERY_EXTENTREF:
 		err = apfs_read_extentref_key(raw_key, query->key_len, key);
 		break;
+	case APFS_QUERY_FEXT:
+		err = apfs_read_fext_key(raw_key, query->key_len, key);
+		break;
 	case APFS_QUERY_SNAP_META:
 		err = apfs_read_snap_meta_key(raw_key, query->key_len, key);
 		break;

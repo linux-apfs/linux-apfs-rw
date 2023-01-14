@@ -7,6 +7,17 @@
 #include <linux/slab.h>
 #include "apfs.h"
 
+static u64 apfs_catalog_base_oid(struct apfs_query *query)
+{
+	struct apfs_query *root_query = NULL;
+
+	root_query = query;
+	while (root_query->parent)
+		root_query = root_query->parent;
+
+	return root_query->node->object.oid;
+}
+
 /**
  * apfs_child_from_query - Read the child id found by a successful nonleaf query
  * @query:	the query that found the record
@@ -18,12 +29,21 @@
  */
 static int apfs_child_from_query(struct apfs_query *query, u64 *child)
 {
+	struct super_block *sb = query->node->object.sb;
 	char *raw = query->node->object.data;
 
-	if (query->len != 8) /* The data on a nonleaf node is the child id */
-		return -EFSCORRUPTED;
+	if (query->flags & APFS_QUERY_CAT && apfs_is_sealed(sb)) {
+		struct apfs_btn_index_node_val *index_val = NULL;
 
-	*child = le64_to_cpup((__le64 *)(raw + query->off));
+		if (query->len != sizeof(*index_val))
+			return -EFSCORRUPTED;
+		index_val = (struct apfs_btn_index_node_val *)(raw + query->off);
+		*child = le64_to_cpu(index_val->binv_child_oid) + apfs_catalog_base_oid(query);
+	} else {
+		if (query->len != 8) /* The data on a nonleaf node is the child id */
+			return -EFSCORRUPTED;
+		*child = le64_to_cpup((__le64 *)(raw + query->off));
+	}
 	return 0;
 }
 

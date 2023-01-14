@@ -301,6 +301,13 @@ static inline struct apfs_sb_info *APFS_SB(struct super_block *sb)
 	return sb->s_fs_info;
 }
 
+static inline bool apfs_is_sealed(struct super_block *sb)
+{
+	u64 flags = le64_to_cpu(APFS_SB(sb)->s_vsb_raw->apfs_incompatible_features);
+
+	return flags & APFS_INCOMPAT_SEALED_VOLUME;
+}
+
 /**
  * apfs_vol_is_encrypted - Check if a volume is encrypting files
  * @sb: superblock
@@ -438,6 +445,14 @@ static inline void apfs_init_file_extent_key(u64 id, u64 offset,
 	key->name = NULL;
 }
 
+static inline void apfs_init_fext_key(u64 id, u64 offset, struct apfs_key *key)
+{
+	key->id = id;
+	key->type = 0;
+	key->number = offset;
+	key->name = NULL;
+}
+
 /**
  * apfs_init_dstream_id_key - Initialize an in-memory key for a dstream query
  * @id:		data stream id
@@ -568,18 +583,19 @@ static inline u64 apfs_cat_cnid(struct apfs_key_header *key)
 }
 
 /* Flags for the query structure */
-#define APFS_QUERY_TREE_MASK	00077	/* Which b-tree we query */
+#define APFS_QUERY_TREE_MASK	00177	/* Which b-tree we query */
 #define APFS_QUERY_OMAP		00001	/* This is a b-tree object map query */
 #define APFS_QUERY_CAT		00002	/* This is a catalog tree query */
 #define APFS_QUERY_FREE_QUEUE	00004	/* This is a free queue query */
 #define APFS_QUERY_EXTENTREF	00010	/* This is an extent reference query */
-#define APFS_QUERY_SNAP_META	00020	/* This is a snapshot meta query */
-#define APFS_QUERY_OMAP_SNAP	00040	/* This is an omap snapshots query */
-#define APFS_QUERY_NEXT		00100	/* Find next of multiple matches */
-#define APFS_QUERY_EXACT	00200	/* Search for an exact match */
-#define APFS_QUERY_DONE		00400	/* The search at this level is over */
-#define APFS_QUERY_ANY_NAME	01000	/* Multiple search for any name */
-#define APFS_QUERY_ANY_NUMBER	02000	/* Multiple search for any number */
+#define APFS_QUERY_FEXT		00020	/* This is a fext tree query */
+#define APFS_QUERY_SNAP_META	00040	/* This is a snapshot meta query */
+#define APFS_QUERY_OMAP_SNAP	00100	/* This is an omap snapshots query */
+#define APFS_QUERY_NEXT		00200	/* Find next of multiple matches */
+#define APFS_QUERY_EXACT	00400	/* Search for an exact match */
+#define APFS_QUERY_DONE		01000	/* The search at this level is over */
+#define APFS_QUERY_ANY_NAME	02000	/* Multiple search for any name */
+#define APFS_QUERY_ANY_NUMBER	04000	/* Multiple search for any number */
 #define APFS_QUERY_MULTIPLE	(APFS_QUERY_ANY_NAME | APFS_QUERY_ANY_NUMBER)
 
 /*
@@ -613,6 +629,8 @@ static inline u32 apfs_query_storage(struct apfs_query *query)
 		return APFS_OBJ_PHYSICAL;
 	if (query->flags & APFS_QUERY_CAT)
 		return APFS_OBJ_VIRTUAL;
+	if (query->flags & APFS_QUERY_FEXT)
+		return APFS_OBJ_PHYSICAL;
 	if (query->flags & APFS_QUERY_FREE_QUEUE)
 		return APFS_OBJ_EPHEMERAL;
 	if (query->flags & APFS_QUERY_EXTENTREF)
@@ -893,6 +911,7 @@ extern int apfs_fileattr_set(struct user_namespace *mnt_userns, struct dentry *d
 extern int apfs_filename_cmp(struct super_block *sb, const char *name1, unsigned int len1, const char *name2, unsigned int len2);
 extern int apfs_keycmp(struct apfs_key *k1, struct apfs_key *k2);
 extern int apfs_read_cat_key(void *raw, int size, struct apfs_key *key, bool hashed);
+extern int apfs_read_fext_key(void *raw, int size, struct apfs_key *key);
 extern int apfs_read_free_queue_key(void *raw, int size, struct apfs_key *key);
 extern int apfs_read_omap_key(void *raw, int size, struct apfs_key *key);
 extern int apfs_read_extentref_key(void *raw, int size, struct apfs_key *key);
