@@ -47,7 +47,7 @@ static int apfs_create_superblock_snapshot(struct super_block *sb, u64 *bno)
 	snap_raw = (struct apfs_superblock *)snap_bh->b_data;
 	/* Volume superblocks in snapshots are physical objects */
 	snap_raw->apfs_o.o_oid = cpu_to_le64p(bno);
-	snap_raw->apfs_o.o_type = cpu_to_le64(APFS_OBJ_PHYSICAL | APFS_OBJECT_TYPE_FS);
+	snap_raw->apfs_o.o_type = cpu_to_le32(APFS_OBJ_PHYSICAL | APFS_OBJECT_TYPE_FS);
 	/* The omap is shared with the current volume */
 	snap_raw->apfs_omap_oid = 0;
 	/* The extent reference tree is given by the snapshot metadata */
@@ -104,14 +104,14 @@ static int apfs_create_snap_metadata_rec(struct inode *mntpoint, struct apfs_nod
 		goto fail;
 	}
 	raw_val->extentref_tree_oid = vsb_raw->apfs_extentref_tree_oid;
-	raw_val->sblock_oid = le64_to_cpu(sblock_oid);
+	raw_val->sblock_oid = cpu_to_le64(sblock_oid);
 	now = current_time(mntpoint);
 	raw_val->create_time = cpu_to_le64(timespec64_to_ns(&now));
 	raw_val->change_time = raw_val->create_time;
 	raw_val->inum = 0; /* TODO: what is this? */
 	raw_val->extentref_tree_type = vsb_raw->apfs_extentref_tree_type;
 	raw_val->flags = 0;
-	raw_val->name_len = cpu_to_le64(name_len + 1); /* Count the null byte */
+	raw_val->name_len = cpu_to_le16(name_len + 1); /* Count the null byte */
 	strcpy(raw_val->name, name);
 
 	err = apfs_btree_insert(query, &raw_key, sizeof(raw_key), raw_val, val_len);
