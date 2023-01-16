@@ -3,6 +3,7 @@
  * Copyright (C) 2019 Ernesto A. Fernández <ernesto.mnd.fernandez@gmail.com>
  */
 
+#include <linux/math64.h>
 #include <linux/buffer_head.h>
 #include <linux/fs.h>
 #include "apfs.h"
@@ -969,7 +970,7 @@ static int apfs_main_free(struct super_block *sb, u64 bno)
 
 	if(!sm_raw->sm_blocks_per_chunk || !sm_raw->sm_chunks_per_cib)
 		return -EINVAL;
-	chunk_idx = bno / sm->sm_blocks_per_chunk;
+	chunk_idx = div_u64(bno, sm->sm_blocks_per_chunk);
 	cib_idx = chunk_idx / sm->sm_chunks_per_cib;
 	chunk_idx -= cib_idx * sm->sm_chunks_per_cib;
 

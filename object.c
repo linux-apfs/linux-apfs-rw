@@ -28,9 +28,9 @@ static u64 apfs_fletcher64(void *addr, size_t len)
 	}
 
 	c1 = sum1 + sum2;
-	c1 = 0xFFFFFFFF - do_div(c1, 0xFFFFFFFF);
+	c1 = 0xFFFFFFFF - div_u64(c1, 0xFFFFFFFF);
 	c2 = sum1 + c1;
-	c2 = 0xFFFFFFFF - do_div(c2, 0xFFFFFFFF);
+	c2 = 0xFFFFFFFF - div_u64(c2, 0xFFFFFFFF);
 
 	return (c2 << 32) | c1;
 }
@@ -170,8 +170,9 @@ static inline u32 apfs_index_in_data_area(struct super_block *sb, u64 bno)
 	u64 data_base = le64_to_cpu(raw_sb->nx_xp_data_base);
 	u32 data_index = le32_to_cpu(raw_sb->nx_xp_data_index);
 	u32 data_blks = le32_to_cpu(raw_sb->nx_xp_data_blocks);
-
-	return (bno - data_base + data_blks - data_index) % data_blks;
+	u32 remainder;
+	div_u64_rem(bno - data_base + data_blks - data_index, data_blks, &remainder);
+	return remainder;
 }
 
 /**

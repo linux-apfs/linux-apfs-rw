@@ -278,7 +278,7 @@ int apfs_cpoint_data_free(struct super_block *sb, u64 bno)
 	 * We can't leave a hole in the data area, so we need to shift all
 	 * blocks that come after @bno one position back.
 	 */
-	bno_i = (bno - data_base + data_blks - data_index) % data_blks;
+	div_u64_rem(bno - data_base + data_blks - data_index, data_blks, &bno_i);
 	for (i = bno_i; i < data_len - 1; ++i) {
 		struct buffer_head *old_bh, *new_bh;
 		int err;

@@ -6,6 +6,7 @@
 #ifndef _APFS_H
 #define _APFS_H
 
+#include <linux/math64.h>
 #include <linux/buffer_head.h>
 #include <linux/fs.h>
 #include <linux/list.h>
@@ -321,7 +322,7 @@ static inline int apfs_max_maps_per_block(struct super_block *sb)
 	unsigned long maps_size;
 
 	maps_size = (sb->s_blocksize - sizeof(struct apfs_checkpoint_map_phys));
-	return maps_size / sizeof(struct apfs_checkpoint_mapping);
+	return div_u64(maps_size, sizeof(struct apfs_checkpoint_mapping));
 }
 
 /*
