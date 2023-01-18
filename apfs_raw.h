@@ -1413,6 +1413,7 @@ struct apfs_compress_hdr {
 #define APFS_COMPRESS_ZLIB_RSRC		4
 #define APFS_COMPRESS_PLAIN_ATTR	9
 #define APFS_COMPRESS_PLAIN_RSRC	10
+#define APFS_COMPRESS_LZBITMAP_RSRC	14
 
 struct apfs_compress_rsrc_hdr {
 	__be32 data_offs;

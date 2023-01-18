@@ -8,6 +8,7 @@
 #include <linux/mutex.h>
 
 #include "apfs.h"
+#include "libzbitmap.h"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
 
@@ -48,7 +49,7 @@ struct apfs_compress_file_data {
 
 static inline int apfs_compress_is_rsrc(u32 algo)
 {
-	return (algo == APFS_COMPRESS_ZLIB_RSRC) || (algo == APFS_COMPRESS_PLAIN_RSRC);
+	return (algo == APFS_COMPRESS_ZLIB_RSRC) || (algo == APFS_COMPRESS_PLAIN_RSRC) || (algo == APFS_COMPRESS_LZBITMAP_RSRC);
 }
 
 static int apfs_compress_file_open(struct inode *inode, struct file *filp)
@@ -164,9 +165,7 @@ fail:
 
 static ssize_t apfs_compress_file_read_block(struct apfs_compress_file_data *fd, char __user *buf, size_t size, loff_t off)
 {
-	struct apfs_compress_rsrc_hdr *hdr = fd->data;
-	u32 doffs, coffs;
-	struct apfs_compress_rsrc_data *cd;
+	u32 doffs = 0, coffs;
 	loff_t block;
 	u8 *cdata, *tmp = fd->buf;
 	size_t csize, bsize;
@@ -180,24 +179,41 @@ static ssize_t apfs_compress_file_read_block(struct apfs_compress_file_data *fd,
 	block = off / APFS_COMPRESS_BLOCK;
 	off -= block * APFS_COMPRESS_BLOCK;
 	if(block != fd->bufblk) {
-		if(fd->size < sizeof(*hdr))
-			return -EINVAL;
-		doffs = be32_to_cpu(hdr->data_offs);
-		if(doffs >= fd->size || fd->size - doffs < sizeof(*cd))
-			return -EINVAL;
-		cd = fd->data + doffs;
-		if(fd->size - doffs - sizeof(*cd) < sizeof(cd->block[0]) * (size_t)le32_to_cpu(cd->num))
-			return -EINVAL;
+		if(le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZBITMAP_RSRC) {
+			struct apfs_compress_rsrc_hdr *hdr = fd->data;
+			struct apfs_compress_rsrc_data *cd = NULL;
 
-		if(block >= le32_to_cpu(cd->num))
-			return 0;
+			if(fd->size < sizeof(*hdr))
+				return -EINVAL;
+			doffs = be32_to_cpu(hdr->data_offs);
+			if(doffs >= fd->size || fd->size - doffs < sizeof(*cd))
+				return -EINVAL;
+			cd = fd->data + doffs;
+			if(fd->size - doffs - sizeof(*cd) < sizeof(cd->block[0]) * (size_t)le32_to_cpu(cd->num))
+				return -EINVAL;
 
-		bsize = le64_to_cpu(fd->hdr.size) - block * APFS_COMPRESS_BLOCK;
-		if(bsize > APFS_COMPRESS_BLOCK)
-			bsize = APFS_COMPRESS_BLOCK;
+			if(block >= le32_to_cpu(cd->num))
+				return 0;
 
-		csize = le32_to_cpu(cd->block[block].size);
-		coffs = le32_to_cpu(cd->block[block].offs) + 4;
+			bsize = le64_to_cpu(fd->hdr.size) - block * APFS_COMPRESS_BLOCK;
+			if(bsize > APFS_COMPRESS_BLOCK)
+				bsize = APFS_COMPRESS_BLOCK;
+
+			csize = le32_to_cpu(cd->block[block].size);
+			coffs = le32_to_cpu(cd->block[block].offs) + 4;
+		} else {
+			__le32 *block_offs = fd->data + doffs;
+
+			if((size_t)fd->size < sizeof(*block_offs) * ((size_t)block + 2))
+				return -EINVAL;
+
+			bsize = le64_to_cpu(fd->hdr.size) - block * APFS_COMPRESS_BLOCK;
+			if(bsize > APFS_COMPRESS_BLOCK)
+				bsize = APFS_COMPRESS_BLOCK;
+
+			coffs = le32_to_cpu(block_offs[block]);
+			csize = le32_to_cpu(block_offs[block + 1]) - coffs;
+		}
 		if(coffs >= fd->size - doffs || fd->size - doffs - coffs < csize || csize > APFS_COMPRESS_BLOCK + 1)
 			return -EINVAL;
 		cdata = fd->data + doffs + coffs;
@@ -214,6 +230,18 @@ static ssize_t apfs_compress_file_read_block(struct apfs_compress_file_data *fd,
 				bsize = csize - 1;
 			} else
 				return -EINVAL;
+			break;
+		case APFS_COMPRESS_LZBITMAP_RSRC:
+			if(cdata[0] == 0x5a) {
+				res = zbm_decompress(tmp, bsize, cdata, csize, &bsize);
+				if(res < 0)
+					return res;
+			} else if((cdata[0] & 0x0F) == 0x0F) {
+				memcpy(tmp, &cdata[1], csize - 1);
+				bsize = csize - 1;
+			} else {
+				return -EINVAL;
+			}
 			break;
 		case APFS_COMPRESS_PLAIN_RSRC:
 			memcpy(tmp, &cdata[1], csize - 1);
@@ -309,7 +337,8 @@ int apfs_compress_get_size(struct inode *inode, loff_t *size)
 	if(algo != APFS_COMPRESS_ZLIB_RSRC &&
 	   algo != APFS_COMPRESS_ZLIB_ATTR &&
 	   algo != APFS_COMPRESS_PLAIN_RSRC &&
-	   algo != APFS_COMPRESS_PLAIN_ATTR)
+	   algo != APFS_COMPRESS_PLAIN_ATTR &&
+	   algo != APFS_COMPRESS_LZBITMAP_RSRC)
 		return 1;
 
 	*size = le64_to_cpu(hdr.size);
