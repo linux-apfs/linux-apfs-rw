@@ -48,7 +48,7 @@ struct apfs_compress_file_data {
 
 static inline int apfs_compress_is_rsrc(u32 algo)
 {
-	return (algo == APFS_COMPRESS_ZLIB_RSRC);
+	return (algo == APFS_COMPRESS_ZLIB_RSRC) || (algo == APFS_COMPRESS_PLAIN_RSRC);
 }
 
 static int apfs_compress_file_open(struct inode *inode, struct file *filp)
@@ -128,6 +128,11 @@ static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 				memcpy(fd->data, cdata + 1, csize - 1);
 			} else
 				goto fail_einval;
+			break;
+		case APFS_COMPRESS_PLAIN_ATTR:
+			if(csize - 1 != fd->size)
+				goto fail_einval;
+			memcpy(fd->data, cdata + 1, csize - 1);
 			break;
 		default:
 			goto fail_einval;
@@ -210,6 +215,12 @@ static ssize_t apfs_compress_file_read_block(struct apfs_compress_file_data *fd,
 			} else
 				return -EINVAL;
 			break;
+		case APFS_COMPRESS_PLAIN_RSRC:
+			memcpy(tmp, &cdata[1], csize - 1);
+			bsize = csize - 1;
+			break;
+		default:
+			return -EINVAL;
 		}
 		fd->bufblk = block;
 		fd->bufsize = bsize;
@@ -296,7 +307,9 @@ int apfs_compress_get_size(struct inode *inode, loff_t *size)
 
 	algo = le32_to_cpu(hdr.algo);
 	if(algo != APFS_COMPRESS_ZLIB_RSRC &&
-	   algo != APFS_COMPRESS_ZLIB_ATTR)
+	   algo != APFS_COMPRESS_ZLIB_ATTR &&
+	   algo != APFS_COMPRESS_PLAIN_RSRC &&
+	   algo != APFS_COMPRESS_PLAIN_ATTR)
 		return 1;
 
 	*size = le64_to_cpu(hdr.size);
