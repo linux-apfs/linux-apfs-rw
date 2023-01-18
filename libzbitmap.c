@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0+ OR MIT
 /*
- * Copyright (C) 2022 Ernesto A. Fernández <ernesto@corellium.com>
+ * Copyright (C) 2022 Corellium LLC
+ *
+ * Author: Ernesto A. Fernández <ernesto@corellium.com>
  *
  * Ported from libzbitmap (https://github.com/eafer/libzbitmap). Only the
  * decompression code is included.
