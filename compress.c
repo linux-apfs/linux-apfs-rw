@@ -49,7 +49,23 @@ struct apfs_compress_file_data {
 
 static inline int apfs_compress_is_rsrc(u32 algo)
 {
-	return (algo == APFS_COMPRESS_ZLIB_RSRC) || (algo == APFS_COMPRESS_PLAIN_RSRC) || (algo == APFS_COMPRESS_LZBITMAP_RSRC);
+	return (algo & 1) == 0;
+}
+
+static inline bool apfs_compress_is_supported(u32 algo)
+{
+	switch(algo) {
+	case APFS_COMPRESS_ZLIB_RSRC:
+	case APFS_COMPRESS_ZLIB_ATTR:
+	case APFS_COMPRESS_PLAIN_RSRC:
+	case APFS_COMPRESS_PLAIN_ATTR:
+	case APFS_COMPRESS_LZBITMAP_RSRC:
+		return true;
+	default:
+		/* Once will usually be enough, don't flood the console */
+		pr_err_once("APFS: unsupported compression algorithm (%u)\n", algo);
+		return false;
+	}
 }
 
 static int apfs_compress_file_open(struct inode *inode, struct file *filp)
@@ -70,6 +86,11 @@ static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 	res = ____apfs_xattr_get(inode, APFS_XATTR_NAME_COMPRESSED, &fd->hdr, sizeof(fd->hdr), 0);
 	if(res != sizeof(fd->hdr))
 		goto fail;
+
+	if(!apfs_compress_is_supported(le32_to_cpu(fd->hdr.algo))) {
+		res = -EOPNOTSUPP;
+		goto fail;
+	}
 
 	if(apfs_compress_is_rsrc(le32_to_cpu(fd->hdr.algo))) {
 		fd->buf = kvmalloc(APFS_COMPRESS_BLOCK, GFP_KERNEL);
@@ -326,19 +347,13 @@ int apfs_compress_get_size(struct inode *inode, loff_t *size)
 {
 	struct apfs_compress_hdr hdr;
 	int res = ____apfs_xattr_get(inode, APFS_XATTR_NAME_COMPRESSED, &hdr, sizeof(hdr), 0);
-	u32 algo;
 
 	if(res < 0)
 		return res;
 	if(res != sizeof(hdr))
 		return 1;
 
-	algo = le32_to_cpu(hdr.algo);
-	if(algo != APFS_COMPRESS_ZLIB_RSRC &&
-	   algo != APFS_COMPRESS_ZLIB_ATTR &&
-	   algo != APFS_COMPRESS_PLAIN_RSRC &&
-	   algo != APFS_COMPRESS_PLAIN_ATTR &&
-	   algo != APFS_COMPRESS_LZBITMAP_RSRC)
+	if(!apfs_compress_is_supported(le32_to_cpu(hdr.algo)))
 		return 1;
 
 	*size = le64_to_cpu(hdr.size);
