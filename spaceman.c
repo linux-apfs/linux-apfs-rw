@@ -473,7 +473,7 @@ int apfs_read_spaceman(struct super_block *sb)
 	sm_flags = le32_to_cpu(sm_raw->sm_flags);
 	/* Undocumented feature, but it's too common to refuse to mount */
 	if (sm_flags & APFS_SM_FLAG_VERSIONED)
-		pr_warn_once("APFS: space manager is versioned");
+		pr_warn_once("APFS: space manager is versioned\n");
 
 	/* Only read the main device; fusion drives are not yet supported */
 	err = apfs_read_spaceman_dev(sb, &sm_raw->sm_dev[APFS_SD_MAIN]);
