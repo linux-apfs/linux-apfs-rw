@@ -9,6 +9,7 @@
 
 #include "apfs.h"
 #include "libzbitmap.h"
+#include "lzfse/lzvn_decode_base.h"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
 
@@ -57,6 +58,8 @@ static inline bool apfs_compress_is_supported(u32 algo)
 	switch(algo) {
 	case APFS_COMPRESS_ZLIB_RSRC:
 	case APFS_COMPRESS_ZLIB_ATTR:
+	case APFS_COMPRESS_LZVN_RSRC:
+	case APFS_COMPRESS_LZVN_ATTR:
 	case APFS_COMPRESS_PLAIN_RSRC:
 	case APFS_COMPRESS_PLAIN_ATTR:
 	case APFS_COMPRESS_LZBITMAP_RSRC:
@@ -151,6 +154,23 @@ static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 			} else
 				goto fail_einval;
 			break;
+		case APFS_COMPRESS_LZVN_ATTR:
+			if(cdata[0] == 0x06) {
+				if(csize - 1 != fd->size)
+					goto fail_einval;
+				memcpy(fd->data, cdata + 1, csize - 1);
+			} else {
+				lzvn_decoder_state dstate = {0};
+
+				dstate.src = cdata;
+				dstate.src_end = dstate.src + csize;
+				dstate.dst = dstate.dst_begin = fd->data;
+				dstate.dst_end = dstate.dst + fd->size;
+				lzvn_decode(&dstate);
+				if(dstate.dst != fd->data + fd->size)
+					goto fail_einval;
+			}
+			break;
 		case APFS_COMPRESS_PLAIN_ATTR:
 			if(csize - 1 != fd->size)
 				goto fail_einval;
@@ -200,7 +220,8 @@ static ssize_t apfs_compress_file_read_block(struct apfs_compress_file_data *fd,
 	block = off / APFS_COMPRESS_BLOCK;
 	off -= block * APFS_COMPRESS_BLOCK;
 	if(block != fd->bufblk) {
-		if(le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZBITMAP_RSRC) {
+		if(le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZBITMAP_RSRC &&
+		   le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZVN_RSRC) {
 			struct apfs_compress_rsrc_hdr *hdr = fd->data;
 			struct apfs_compress_rsrc_data *cd = NULL;
 
@@ -251,6 +272,21 @@ static ssize_t apfs_compress_file_read_block(struct apfs_compress_file_data *fd,
 				bsize = csize - 1;
 			} else
 				return -EINVAL;
+			break;
+		case APFS_COMPRESS_LZVN_RSRC:
+			if(cdata[0] == 0x06) {
+				memcpy(tmp, &cdata[1], csize - 1);
+				bsize = csize - 1;
+			} else {
+				lzvn_decoder_state dstate = {0};
+
+				dstate.src = cdata;
+				dstate.src_end = dstate.src + csize;
+				dstate.dst = dstate.dst_begin = tmp;
+				dstate.dst_end = dstate.dst + bsize;
+				lzvn_decode(&dstate);
+				bsize = dstate.dst - tmp;
+			}
 			break;
 		case APFS_COMPRESS_LZBITMAP_RSRC:
 			if(cdata[0] == 0x5a) {
