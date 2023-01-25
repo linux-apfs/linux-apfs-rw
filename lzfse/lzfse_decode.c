@@ -21,6 +21,7 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 
 // LZFSE decode API
 
+#include <linux/slab.h>
 #include "lzfse.h"
 #include "lzfse_internal.h"
 
@@ -29,6 +30,7 @@ size_t lzfse_decode_scratch_size() { return sizeof(lzfse_decoder_state); }
 size_t lzfse_decode_buffer_with_scratch(uint8_t *__restrict dst_buffer,
                          size_t dst_size, const uint8_t *__restrict src_buffer,
                          size_t src_size, void *__restrict scratch_buffer) {
+  int status;
   lzfse_decoder_state *s = (lzfse_decoder_state *)scratch_buffer;
   memset(s, 0x00, sizeof(*s));
 
@@ -41,7 +43,7 @@ size_t lzfse_decode_buffer_with_scratch(uint8_t *__restrict dst_buffer,
   s->dst_end = dst_buffer + dst_size;
 
   // Decode
-  int status = lzfse_decode(s);
+  status = lzfse_decode(s);
   if (status == LZFSE_STATUS_DST_FULL)
     return dst_size;
   if (status != LZFSE_STATUS_OK)
@@ -58,7 +60,7 @@ size_t lzfse_decode_buffer(uint8_t *__restrict dst_buffer, size_t dst_size,
   // Deal with the possible NULL pointer
   if (scratch_buffer == NULL) {
     // +1 in case scratch size could be zero
-    scratch_buffer = malloc(lzfse_decode_scratch_size() + 1);
+    scratch_buffer = kmalloc(lzfse_decode_scratch_size() + 1, GFP_KERNEL);
     has_malloc = 1;
   }
   if (scratch_buffer == NULL)
@@ -67,6 +69,6 @@ size_t lzfse_decode_buffer(uint8_t *__restrict dst_buffer, size_t dst_size,
                                dst_size, src_buffer,
                                src_size, scratch_buffer);
   if (has_malloc)
-    free(scratch_buffer);
+    kfree(scratch_buffer);
   return ret;
 }

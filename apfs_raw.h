@@ -1415,6 +1415,8 @@ struct apfs_compress_hdr {
 #define APFS_COMPRESS_LZVN_RSRC		8
 #define APFS_COMPRESS_PLAIN_ATTR	9
 #define APFS_COMPRESS_PLAIN_RSRC	10
+#define APFS_COMPRESS_LZFSE_ATTR	11
+#define APFS_COMPRESS_LZFSE_RSRC	12
 #define APFS_COMPRESS_LZBITMAP_RSRC	14
 
 struct apfs_compress_rsrc_hdr {

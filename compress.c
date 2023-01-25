@@ -9,6 +9,7 @@
 
 #include "apfs.h"
 #include "libzbitmap.h"
+#include "lzfse/lzfse.h"
 #include "lzfse/lzvn_decode_base.h"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
@@ -62,6 +63,8 @@ static inline bool apfs_compress_is_supported(u32 algo)
 	case APFS_COMPRESS_LZVN_ATTR:
 	case APFS_COMPRESS_PLAIN_RSRC:
 	case APFS_COMPRESS_PLAIN_ATTR:
+	case APFS_COMPRESS_LZFSE_RSRC:
+	case APFS_COMPRESS_LZFSE_ATTR:
 	case APFS_COMPRESS_LZBITMAP_RSRC:
 		return true;
 	default:
@@ -171,6 +174,22 @@ static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 					goto fail_einval;
 			}
 			break;
+		case APFS_COMPRESS_LZFSE_ATTR:
+			if(cdata[0] == 0x62 && csize >= 2) {
+				res = lzfse_decode_buffer(fd->data, fd->size, cdata, csize, NULL);
+				if(res != fd->size)
+					/* Could be ENOMEM too... */
+					goto fail_einval;
+			} else {
+				/*
+				 * I've never encountered this, but I assume
+				 * it's like the resource version.
+				 */
+				if(csize - 1 != fd->size)
+					goto fail_einval;
+				memcpy(fd->data, cdata + 1, csize - 1);
+			}
+			break;
 		case APFS_COMPRESS_PLAIN_ATTR:
 			if(csize - 1 != fd->size)
 				goto fail_einval;
@@ -221,7 +240,8 @@ static ssize_t apfs_compress_file_read_block(struct apfs_compress_file_data *fd,
 	off -= block * APFS_COMPRESS_BLOCK;
 	if(block != fd->bufblk) {
 		if(le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZBITMAP_RSRC &&
-		   le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZVN_RSRC) {
+		   le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZVN_RSRC &&
+		   le32_to_cpu(fd->hdr.algo) != APFS_COMPRESS_LZFSE_RSRC) {
 			struct apfs_compress_rsrc_hdr *hdr = fd->data;
 			struct apfs_compress_rsrc_data *cd = NULL;
 
@@ -298,6 +318,19 @@ static ssize_t apfs_compress_file_read_block(struct apfs_compress_file_data *fd,
 				bsize = csize - 1;
 			} else {
 				return -EINVAL;
+			}
+			break;
+		case APFS_COMPRESS_LZFSE_RSRC:
+			if(cdata[0] == 0x62 && csize >= 2) {
+				res = lzfse_decode_buffer(tmp, bsize, cdata, csize, NULL);
+				if(res == 0)
+					/* Could be ENOMEM too... */
+					return -EINVAL;
+				bsize = res;
+			} else {
+				/* cdata[0] == 0xff, apparently */
+				memcpy(tmp, &cdata[1], csize - 1);
+				bsize = csize - 1;
 			}
 			break;
 		case APFS_COMPRESS_PLAIN_RSRC:
