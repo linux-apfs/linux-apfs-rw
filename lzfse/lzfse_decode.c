@@ -25,9 +25,9 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 #include "lzfse.h"
 #include "lzfse_internal.h"
 
-size_t lzfse_decode_scratch_size() { return sizeof(lzfse_decoder_state); }
+size_t lzfse_decode_scratch_size(void) { return sizeof(lzfse_decoder_state); }
 
-size_t lzfse_decode_buffer_with_scratch(uint8_t *__restrict dst_buffer,
+static size_t lzfse_decode_buffer_with_scratch(uint8_t *__restrict dst_buffer,
                          size_t dst_size, const uint8_t *__restrict src_buffer,
                          size_t src_size, void *__restrict scratch_buffer) {
   int status;
