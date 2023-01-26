@@ -66,6 +66,7 @@ static inline bool apfs_compress_is_supported(u32 algo)
 	case APFS_COMPRESS_LZFSE_RSRC:
 	case APFS_COMPRESS_LZFSE_ATTR:
 	case APFS_COMPRESS_LZBITMAP_RSRC:
+	case APFS_COMPRESS_LZBITMAP_ATTR:
 		return true;
 	default:
 		/* Once will usually be enough, don't flood the console */
@@ -172,6 +173,22 @@ static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 				lzvn_decode(&dstate);
 				if(dstate.dst != fd->data + fd->size)
 					goto fail_einval;
+			}
+			break;
+		case APFS_COMPRESS_LZBITMAP_ATTR:
+			if(cdata[0] == 0x5a) {
+				size_t out_len;
+				res = zbm_decompress(fd->data, fd->size, cdata, csize, &out_len);
+				if(res < 0)
+					goto fail;
+				if(out_len != fd->size)
+					goto fail_einval;
+			} else if((cdata[0] & 0x0F) == 0x0F) {
+				if(csize - 1 != fd->size)
+					goto fail_einval;
+				memcpy(fd->data, cdata + 1, csize - 1);
+			} else {
+				return -EINVAL;
 			}
 			break;
 		case APFS_COMPRESS_LZFSE_ATTR:
