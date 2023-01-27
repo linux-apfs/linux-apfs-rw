@@ -188,7 +188,7 @@ static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 					goto fail_einval;
 				memcpy(fd->data, cdata + 1, csize - 1);
 			} else {
-				return -EINVAL;
+				goto fail_einval;
 			}
 			break;
 		case APFS_COMPRESS_LZFSE_ATTR:
