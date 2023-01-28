@@ -35,8 +35,14 @@ static u64 apfs_fletcher64(void *addr, size_t len)
 	return (c2 << 32) | c1;
 }
 
-int apfs_obj_verify_csum(struct super_block *sb, struct apfs_obj_phys *obj)
+int apfs_obj_verify_csum(struct super_block *sb, struct buffer_head *bh)
 {
+	struct apfs_obj_phys *obj = (struct apfs_obj_phys *)bh->b_data;
+
+	/* The checksum may be stale until the transaction is committed */
+	if (buffer_trans(bh))
+		return 1;
+
 	return  (le64_to_cpu(obj->o_cksum) ==
 		 apfs_fletcher64((char *) obj + APFS_MAX_CKSUM_SIZE,
 				 sb->s_blocksize - APFS_MAX_CKSUM_SIZE));
@@ -324,7 +330,7 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool
 	obj = (struct apfs_obj_phys *)bh->b_data;
 	type = le32_to_cpu(obj->o_type);
 	ASSERT(!(type & APFS_OBJ_EPHEMERAL));
-	if (nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, obj)) {
+	if (nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, bh)) {
 		err = -EFSBADCRC;
 		goto fail;
 	}

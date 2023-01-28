@@ -128,8 +128,7 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 	node->object.o_bh = bh;
 	node->object.data = bh->b_data;
 
-	if (nxi->nx_flags & APFS_CHECK_NODES &&
-	    !apfs_obj_verify_csum(sb, &raw->btn_o)) {
+	if (nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, bh)) {
 		/* TODO: don't check this twice for virtual/physical objects */
 		apfs_alert(sb, "bad checksum for node in block 0x%llx", bh->b_blocknr);
 		apfs_node_free(node);

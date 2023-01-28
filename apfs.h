@@ -940,8 +940,7 @@ extern int apfs_create_single_rec_node(struct apfs_query *query, void *key, int 
 extern int apfs_make_empty_btree_root(struct super_block *sb, u32 subtype, u64 *oid);
 
 /* object.c */
-extern int apfs_obj_verify_csum(struct super_block *sb,
-				struct apfs_obj_phys *obj);
+extern int apfs_obj_verify_csum(struct super_block *sb, struct buffer_head *bh);
 extern void apfs_obj_set_csum(struct super_block *sb,
 			      struct apfs_obj_phys *obj);
 extern int apfs_create_cpoint_map(struct super_block *sb, u64 oid, u64 bno);

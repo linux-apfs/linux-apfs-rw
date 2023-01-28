@@ -463,13 +463,6 @@ int apfs_read_spaceman(struct super_block *sb)
 		return PTR_ERR(sm_bh);
 	sm_raw = (struct apfs_spaceman_phys *)sm_bh->b_data;
 
-	if (nxi->nx_flags & APFS_CHECK_NODES &&
-	    !apfs_obj_verify_csum(sb, &sm_raw->sm_o)) {
-		apfs_err(sb, "bad checksum for the space manager");
-		err = -EFSBADCRC;
-		goto fail;
-	}
-
 	sm_flags = le32_to_cpu(sm_raw->sm_flags);
 	/* Undocumented feature, but it's too common to refuse to mount */
 	if (sm_flags & APFS_SM_FLAG_VERSIONED)
@@ -870,8 +863,7 @@ static int apfs_cib_allocate_block(struct super_block *sb,
 	int i;
 
 	cib = (struct apfs_chunk_info_block *)(*cib_bh)->b_data;
-	if (nxi->nx_flags & APFS_CHECK_NODES &&
-	    !apfs_obj_verify_csum(sb, &cib->cib_o)) {
+	if (nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, *cib_bh)) {
 		apfs_err(sb, "bad checksum for chunk-info block");
 		return -EFSBADCRC;
 	}

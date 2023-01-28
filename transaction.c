@@ -44,6 +44,12 @@ static int apfs_cpoint_init_area(struct super_block *sb, u64 base, u32 blks,
 		memcpy(new_bh->b_data, old_bh->b_data, sb->s_blocksize);
 		brelse(old_bh);
 
+		if (nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, new_bh)) {
+			apfs_err(sb, "bad checksum for checkpoint area block");
+			brelse(new_bh);
+			return -EFSBADCRC;
+		}
+
 		new_obj = (struct apfs_obj_phys *)new_bh->b_data;
 		type = le32_to_cpu(new_obj->o_type);
 		if ((type & APFS_OBJ_STORAGETYPE_MASK) == APFS_OBJ_PHYSICAL)

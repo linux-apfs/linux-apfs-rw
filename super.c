@@ -110,7 +110,7 @@ static struct buffer_head *apfs_read_super_copy(struct super_block *sb)
 		apfs_err(sb, "not an apfs filesystem");
 		goto fail;
 	}
-	if (!apfs_obj_verify_csum(sb, &msb_raw->nx_o)) {
+	if (!apfs_obj_verify_csum(sb, bh)) {
 		apfs_err(sb, "inconsistent container superblock");
 		err = -EFSBADCRC;
 		goto fail;
@@ -217,7 +217,7 @@ static int apfs_map_main_super(struct super_block *sb)
 			continue; /* Not a superblock */
 		if (le64_to_cpu(desc_raw->nx_o.o_xid) <= xid)
 			continue; /* Old */
-		if (!apfs_obj_verify_csum(sb, &desc_raw->nx_o))
+		if (!apfs_obj_verify_csum(sb, desc_bh))
 			continue; /* Corrupted */
 
 		xid = le64_to_cpu(desc_raw->nx_o.o_xid);
@@ -341,7 +341,7 @@ int apfs_map_volume_super_bno(struct super_block *sb, u64 bno, bool check)
 	 * XXX: apfs_omap_lookup_block() only runs this check when write
 	 * is true, but it should always do it.
 	 */
-	if (check && !apfs_obj_verify_csum(sb, &vsb_raw->apfs_o)) {
+	if (check && !apfs_obj_verify_csum(sb, bh)) {
 		apfs_err(sb, "inconsistent volume superblock");
 		err = -EFSBADCRC;
 		goto fail;
