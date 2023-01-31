@@ -496,6 +496,8 @@ int apfs_read_spaceman(struct super_block *sb)
 
 fail:
 	brelse(sm_bh);
+	spaceman->sm_bh = sm_bh = NULL;
+	spaceman->sm_raw = NULL;
 	return err;
 }
 
