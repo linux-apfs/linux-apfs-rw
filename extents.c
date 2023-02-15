@@ -1200,8 +1200,9 @@ static inline u64 apfs_size_to_blocks(struct super_block *sb, u64 size)
 static int apfs_zero_dstream_tail(struct apfs_dstream_info *dstream)
 {
 	struct super_block *sb = dstream->ds_sb;
-	struct buffer_head *bh = NULL;
-	u64 bno = 0, dstream_blks;
+	struct inode *inode = NULL;
+	struct page *page = NULL;
+	void *fsdata = NULL;
 	int valid_length;
 	int err;
 
@@ -1214,64 +1215,18 @@ static int apfs_zero_dstream_tail(struct apfs_dstream_info *dstream)
 	if (valid_length == 0)
 		return 0;
 
-	dstream_blks = apfs_size_to_blocks(sb, dstream->ds_size);
+	inode = dstream->ds_inode;
+	if (!inode) {
+		/* This should never happen, but be safe */
+		apfs_alert(sb, "attempt to zero the tail of xattr dstream 0x%llx", dstream->ds_id);
+		return -EFSCORRUPTED;
+	}
 
-	err = apfs_logic_to_phys_bno(dstream, dstream_blks - 1, &bno);
+	/* This will take care of the CoW and zeroing */
+	err = __apfs_write_begin(NULL, inode->i_mapping, inode->i_size, 0, 0, &page, &fsdata);
 	if (err)
 		return err;
-	if (bno == 0) /* No stale bytes in holes */
-		return 0;
-
-	bh = apfs_sb_bread(sb, bno);
-	if (!bh)
-		return -EIO;
-
-	if (!buffer_trans(bh)) {
-		/*
-		 * I think the CoW is only really needed for snapshots, but do
-		 * it always because it simplifies testing
-		 */
-		struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
-		struct buffer_head *new_bh = NULL;
-		struct apfs_file_extent ext = {0};
-		u64 new_bno;
-
-		err = apfs_spaceman_allocate_block(sb, &new_bno, false /* backwards */);
-		if (err)
-			goto fail;
-		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
-		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
-
-		new_bh = apfs_getblk(sb, new_bno);
-		if (!bh) {
-			err = -EIO;
-			goto fail;
-		}
-		err = apfs_transaction_join(sb, new_bh);
-		if (err) {
-			brelse(new_bh);
-			goto fail;
-		}
-		memcpy(new_bh->b_data, bh->b_data, valid_length);
-
-		brelse(bh);
-		bh = new_bh;
-		bno = new_bno;
-
-		ext.logical_addr = (dstream_blks - 1) << sb->s_blocksize_bits;
-		ext.phys_block_num = bno;
-		ext.len = sb->s_blocksize;
-		err = apfs_update_extent(dstream, &ext);
-		if (err)
-			goto fail;
-		err = apfs_insert_phys_extent(dstream, &ext);
-		if (err)
-			goto fail;
-	}
-	memset(bh->b_data + valid_length, 0, sb->s_blocksize - valid_length);
-fail:
-	brelse(bh);
-	return err;
+	return __apfs_write_end(NULL, inode->i_mapping, inode->i_size, 0, 0, page, fsdata);
 }
 
 /**
@@ -1397,12 +1352,10 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 {
 	struct super_block *sb = dstream->ds_sb;
 	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
-	struct apfs_file_extent *cache = &dstream->ds_cached_ext;
+	struct apfs_file_extent *cache = NULL;
 	u64 phys_bno, logical_addr, cache_blks, dstream_blks;
 	bool in_snap = true;
 	int err;
-
-	cache_blks = apfs_size_to_blocks(sb, cache->len);
 
 	/* TODO: preallocate tail blocks */
 	logical_addr = dsblock << sb->s_blocksize_bits;
@@ -1436,9 +1389,23 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 		}
 	}
 
+	dstream_blks = apfs_size_to_blocks(sb, dstream->ds_size);
+	if (dstream_blks < dsblock) {
+		/*
+		 * This recurses into apfs_dstream_get_new_block() and dirties
+		 * the extent cache, so it must happen before flushing it.
+		 */
+		err = apfs_zero_dstream_tail(dstream);
+		if (err)
+			return err;
+	}
+
 	err = apfs_dstream_cache_in_snap(dstream, &in_snap);
 	if (err)
 		return err;
+
+	cache = &dstream->ds_cached_ext;
+	cache_blks = apfs_size_to_blocks(sb, cache->len);
 
 	if (!in_snap && apfs_dstream_cache_is_tail(dstream) &&
 	    logical_addr == cache->logical_addr + cache->len &&
@@ -1452,11 +1419,12 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 	if (err)
 		return err;
 
-	dstream_blks = apfs_size_to_blocks(sb, dstream->ds_size);
 	if (dstream_blks < dsblock) {
-		err = apfs_zero_dstream_tail(dstream);
-		if (err)
-			return err;
+		/*
+		 * This puts new extents after the reported end of the file, so
+		 * it must happen after the flush to avoid conflict with those
+		 * extent operations.
+		 */
 		err = apfs_create_hole(dstream, dstream_blks, dsblock);
 		if (err)
 			return err;

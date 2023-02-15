@@ -68,6 +68,7 @@ static void apfs_dstream_from_xattr(struct super_block *sb, struct apfs_xattr *x
 	struct apfs_xattr_dstream *xdata = (void *)xattr->xdata;
 
 	dstream->ds_sb = sb;
+	dstream->ds_inode = NULL;
 	dstream->ds_id = le64_to_cpu(xdata->xattr_obj_id);
 	dstream->ds_size = le64_to_cpu(xdata->dstream.size);
 	dstream->ds_sparse_bytes = 0; /* Irrelevant for xattrs */

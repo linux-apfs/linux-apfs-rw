@@ -668,6 +668,7 @@ struct apfs_phys_extent {
  */
 struct apfs_dstream_info {
 	struct super_block	*ds_sb;		/* Filesystem superblock */
+	struct inode		*ds_inode;	/* NULL for xattr dstreams */
 	u64			ds_id;		/* ID of the extent records */
 	u64			ds_size;	/* Length of the stream */
 	u64			ds_sparse_bytes;/* Hole byte count in stream */
@@ -876,6 +877,8 @@ extern struct inode *apfs_new_inode(struct inode *dir, umode_t mode,
 extern int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 				 struct dentry *dentry);
 extern int APFS_CREATE_INODE_REC_MAXOPS(void);
+extern int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata);
+extern int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 extern int apfs_setattr(struct dentry *dentry, struct iattr *iattr);

@@ -382,15 +382,7 @@ out:
 	return ret;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
-static int apfs_write_begin(struct file *file, struct address_space *mapping,
-			    loff_t pos, unsigned int len,
-			    struct page **pagep, void **fsdata)
-#else
-static int apfs_write_begin(struct file *file, struct address_space *mapping,
-			    loff_t pos, unsigned int len, unsigned int flags,
-			    struct page **pagep, void **fsdata)
-#endif
+int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata)
 {
 	struct inode *inode = mapping->host;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
@@ -400,36 +392,19 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 	unsigned int blocksize, block_start, block_end, from, to;
 	pgoff_t index = pos >> PAGE_SHIFT;
 	sector_t iblock = (sector_t)index << (PAGE_SHIFT - inode->i_blkbits);
-	int blkcount = (len + sb->s_blocksize - 1) >> inode->i_blkbits;
 	loff_t i_blks_end;
-	struct apfs_max_ops maxops;
 	int err;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
-	unsigned int flags = 0;
-#endif
 
-	if (unlikely(pos >= APFS_MAX_FILE_SIZE))
-		return -EFBIG;
-
-	maxops.cat = APFS_CREATE_DSTREAM_REC_MAXOPS +
-		     APFS_CREATE_CRYPTO_REC_MAXOPS +
-		     APFS_UPDATE_INODE_MAXOPS() +
-		     blkcount * APFS_GET_NEW_BLOCK_MAXOPS();
-	maxops.blks = blkcount;
-
-	err = apfs_transaction_start(sb, maxops);
-	if (err)
-		return err;
 	apfs_inode_join_transaction(sb, inode);
 
 	err = apfs_inode_create_dstream_rec(inode);
 	if (err)
-		goto out_abort;
+		return err;
 
 	if(apfs_vol_is_encrypted(sb)) {
 		err = apfs_create_crypto_rec(inode);
 		if (err)
-			goto out_abort;
+			return err;
 	}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
@@ -439,10 +414,8 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 #else
 	page = grab_cache_page_write_begin(mapping, index, flags | AOP_FLAG_NOFS);
 #endif
-	if (!page) {
-		err = -ENOMEM;
-		goto out_abort;
-	}
+	if (!page)
+		return -ENOMEM;
 	if (!page_has_buffers(page))
 		create_empty_buffers(page, sb->s_blocksize, 0);
 
@@ -496,19 +469,55 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 out_put_page:
 	unlock_page(page);
 	put_page(page);
-out_abort:
+	return err;
+}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+static int apfs_write_begin(struct file *file, struct address_space *mapping,
+			    loff_t pos, unsigned int len,
+			    struct page **pagep, void **fsdata)
+#else
+static int apfs_write_begin(struct file *file, struct address_space *mapping,
+			    loff_t pos, unsigned int len, unsigned int flags,
+			    struct page **pagep, void **fsdata)
+#endif
+{
+	struct inode *inode = mapping->host;
+	struct super_block *sb = inode->i_sb;
+	int blkcount = (len + sb->s_blocksize - 1) >> inode->i_blkbits;
+	struct apfs_max_ops maxops;
+	int err;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+	unsigned int flags = 0;
+#endif
+
+	if (unlikely(pos >= APFS_MAX_FILE_SIZE))
+		return -EFBIG;
+
+	maxops.cat = APFS_CREATE_DSTREAM_REC_MAXOPS +
+		     APFS_CREATE_CRYPTO_REC_MAXOPS +
+		     APFS_UPDATE_INODE_MAXOPS() +
+		     blkcount * APFS_GET_NEW_BLOCK_MAXOPS();
+	maxops.blks = blkcount;
+
+	err = apfs_transaction_start(sb, maxops);
+	if (err)
+		return err;
+
+	err = __apfs_write_begin(file, mapping, pos, len, flags, pagep, fsdata);
+	if (err)
+		goto fail;
+	return 0;
+
+fail:
 	apfs_transaction_abort(sb);
 	return err;
 }
 
-static int apfs_write_end(struct file *file, struct address_space *mapping,
-			  loff_t pos, unsigned int len, unsigned int copied,
-			  struct page *page, void *fsdata)
+int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata)
 {
 	struct inode *inode = mapping->host;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
-	struct super_block *sb = inode->i_sb;
-	struct apfs_nx_transaction *trans = &APFS_NXI(sb)->nx_transaction;
 	int ret, err;
 
 	ret = generic_write_end(file, mapping, pos, len, copied, page, fsdata);
@@ -517,7 +526,24 @@ static int apfs_write_end(struct file *file, struct address_space *mapping,
 		truncate_pagecache(inode, inode->i_size);
 		err = apfs_truncate(dstream, inode->i_size);
 		if (err)
-			goto out_abort;
+			return err;
+	}
+	return ret;
+}
+
+static int apfs_write_end(struct file *file, struct address_space *mapping,
+			  loff_t pos, unsigned int len, unsigned int copied,
+			  struct page *page, void *fsdata)
+{
+	struct inode *inode = mapping->host;
+	struct super_block *sb = inode->i_sb;
+	struct apfs_nx_transaction *trans = &APFS_NXI(sb)->nx_transaction;
+	int ret, err;
+
+	ret = __apfs_write_end(file, mapping, pos, len, copied, page, fsdata);
+	if (ret < 0) {
+		err = ret;
+		goto fail;
 	}
 
 	if ((pos + ret) & (sb->s_blocksize - 1))
@@ -529,7 +555,7 @@ static int apfs_write_end(struct file *file, struct address_space *mapping,
 	if (!err)
 		return ret;
 
-out_abort:
+fail:
 	apfs_transaction_abort(sb);
 	return err;
 }

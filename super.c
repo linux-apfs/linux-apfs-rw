@@ -733,6 +733,7 @@ static struct inode *apfs_alloc_inode(struct super_block *sb)
 	ai->vfs_inode.i_version = 1;
 #endif
 	dstream->ds_sb = sb;
+	dstream->ds_inode = &ai->vfs_inode;
 	dstream->ds_cached_ext.len = 0;
 	dstream->ds_ext_dirty = false;
 	ai->i_nchildren = 0;
