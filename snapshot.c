@@ -33,7 +33,6 @@ static int apfs_create_superblock_snapshot(struct super_block *sb, u64 *bno)
 		goto fail;
 	}
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
-	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
 
 	curr_bh = sbi->s_vobject.o_bh;
 	memcpy(snap_bh->b_data, curr_bh->b_data, sb->s_blocksize);
