@@ -107,11 +107,14 @@ static int apfs_create_snap_metadata_rec(struct inode *mntpoint, struct apfs_nod
 	now = current_time(mntpoint);
 	raw_val->create_time = cpu_to_le64(timespec64_to_ns(&now));
 	raw_val->change_time = raw_val->create_time;
-	raw_val->inum = 0; /* TODO: what is this? */
 	raw_val->extentref_tree_type = vsb_raw->apfs_extentref_tree_type;
 	raw_val->flags = 0;
 	raw_val->name_len = cpu_to_le16(name_len + 1); /* Count the null byte */
 	strcpy(raw_val->name, name);
+
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+	raw_val->inum = vsb_raw->apfs_next_obj_id;
+	le64_add_cpu(&vsb_raw->apfs_next_obj_id, 1);
 
 	err = apfs_btree_insert(query, &raw_key, sizeof(raw_key), raw_val, val_len);
 fail:
