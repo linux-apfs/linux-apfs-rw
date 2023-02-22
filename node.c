@@ -169,12 +169,12 @@ static int apfs_node_min_table_size(struct super_block *sb, u32 type, u16 flags)
 		break;
 	case APFS_OBJECT_TYPE_OMAP_SNAPSHOT:
 		key_size = sizeof(__le64);
-		val_size = sizeof(struct apfs_omap_snapshot);
+		val_size = leaf ? sizeof(struct apfs_omap_snapshot) : sizeof(__le64);
 		toc_size = sizeof(struct apfs_kvoff);
 		break;
 	case APFS_OBJECT_TYPE_FEXT_TREE:
 		key_size = sizeof(struct apfs_fext_tree_key);
-		val_size = sizeof(struct apfs_fext_tree_val);
+		val_size = leaf ? sizeof(struct apfs_fext_tree_val) : sizeof(__le64);
 		toc_size = sizeof(struct apfs_kvoff);
 		break;
 	default:
