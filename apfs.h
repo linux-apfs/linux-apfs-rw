@@ -675,6 +675,7 @@ struct apfs_dstream_info {
 	struct apfs_file_extent	ds_cached_ext;	/* Latest extent record */
 	bool			ds_ext_dirty;	/* Is ds_cached_ext dirty? */
 	spinlock_t		ds_ext_lock;	/* Protects ds_cached_ext */
+	bool			ds_shared;	/* Has multiple references? */
 };
 
 /**
@@ -863,6 +864,7 @@ extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			      struct buffer_head *bh_result, int create);
 extern int APFS_GET_NEW_BLOCK_MAXOPS(void);
 extern int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size);
+extern loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags);
 
 /* file.c */
 extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync);
@@ -879,6 +881,7 @@ extern int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 extern int APFS_CREATE_INODE_REC_MAXOPS(void);
 extern int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata);
 extern int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata);
+extern int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 extern int apfs_setattr(struct dentry *dentry, struct iattr *iattr);

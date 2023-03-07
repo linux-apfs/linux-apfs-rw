@@ -130,13 +130,14 @@ int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 }
 
 const struct file_operations apfs_file_operations = {
-	.llseek		= generic_file_llseek,
-	.read_iter	= generic_file_read_iter,
-	.write_iter	= generic_file_write_iter,
-	.mmap		= apfs_file_mmap,
-	.open		= generic_file_open,
-	.fsync		= apfs_fsync,
-	.unlocked_ioctl	= apfs_file_ioctl,
+	.llseek			= generic_file_llseek,
+	.read_iter		= generic_file_read_iter,
+	.write_iter		= generic_file_write_iter,
+	.mmap			= apfs_file_mmap,
+	.open			= generic_file_open,
+	.fsync			= apfs_fsync,
+	.unlocked_ioctl		= apfs_file_ioctl,
+	.remap_file_range	= apfs_remap_file_range,
 };
 
 const struct inode_operations apfs_file_inode_operations = {

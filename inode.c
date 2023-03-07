@@ -116,13 +116,14 @@ static int apfs_inode_create_dstream_rec(struct inode *inode)
 }
 
 /**
- * apfs_put_dstream_rec - Put a reference for a data stream record
- * @dstream: data stream info
+ * apfs_dstream_adj_refcnt - Adjust dstream record refcount
+ * @dstream:	data stream info
+ * @delta:	desired change in reference count
  *
  * Deletes the record if the reference count goes to zero. Returns 0 on success
  * or a negative error code in case of failure.
  */
-static int apfs_put_dstream_rec(struct apfs_dstream_info *dstream)
+int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta)
 {
 	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
@@ -132,6 +133,8 @@ static int apfs_put_dstream_rec(struct apfs_dstream_info *dstream)
 	void *raw = NULL;
 	u32 refcnt;
 	int ret;
+
+	ASSERT(APFS_I(dstream->ds_inode)->i_has_dstream);
 
 	apfs_init_dstream_id_key(dstream->ds_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
@@ -143,7 +146,7 @@ static int apfs_put_dstream_rec(struct apfs_dstream_info *dstream)
 	ret = apfs_btree_query(sb, &query);
 	if (ret) {
 		if (ret == -ENODATA)
-			ret = dstream->ds_size ? -EFSCORRUPTED : 0;
+			ret = -EFSCORRUPTED;
 		goto out;
 	}
 
@@ -155,16 +158,33 @@ static int apfs_put_dstream_rec(struct apfs_dstream_info *dstream)
 	raw_val = *(struct apfs_dstream_id_val *)(raw + query->off);
 	refcnt = le32_to_cpu(raw_val.refcnt);
 
-	if (refcnt == 1) {
+	refcnt += delta;
+	if (refcnt == 0) {
 		ret = apfs_btree_remove(query);
 		goto out;
 	}
 
-	raw_val.refcnt = cpu_to_le32(refcnt - 1);
+	raw_val.refcnt = cpu_to_le32(refcnt);
 	ret = apfs_btree_replace(query, NULL /* key */, 0 /* key_len */, &raw_val, sizeof(raw_val));
 out:
 	apfs_free_query(query);
 	return ret;
+}
+
+/**
+ * apfs_put_dstream_rec - Put a reference for a data stream record
+ * @dstream: data stream info
+ *
+ * Deletes the record if the reference count goes to zero. Returns 0 on success
+ * or a negative error code in case of failure.
+ */
+static int apfs_put_dstream_rec(struct apfs_dstream_info *dstream)
+{
+	struct apfs_inode_info *ai = APFS_I(dstream->ds_inode);
+
+	if (!ai->i_has_dstream)
+		return 0;
+	return apfs_dstream_adj_refcnt(dstream, -1);
 }
 
 /**
@@ -803,6 +823,59 @@ static struct inode *apfs_iget_locked(struct super_block *sb, u64 cnid)
 }
 
 /**
+ * apfs_check_dstream_refcnt - Check if an inode's dstream is shared
+ * @inode:	the inode to check
+ *
+ * Sets the value of ds_shared for the inode's dstream. Returns 0 on success,
+ * or a negative error code in case of failure.
+ */
+static int apfs_check_dstream_refcnt(struct inode *inode)
+{
+	struct apfs_inode_info *ai = APFS_I(inode);
+	struct apfs_dstream_info *dstream = &ai->i_dstream;
+	struct super_block *sb = inode->i_sb;
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_key key;
+	struct apfs_query *query = NULL;
+	struct apfs_dstream_id_val raw_val;
+	void *raw = NULL;
+	u32 refcnt;
+	int ret;
+
+	if (!ai->i_has_dstream) {
+		dstream->ds_shared = false;
+		return 0;
+	}
+
+	apfs_init_dstream_id_key(dstream->ds_id, &key);
+	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+	query->key = &key;
+	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
+
+	ret = apfs_btree_query(sb, &query);
+	if (ret) {
+		if (ret == -ENODATA)
+			ret = -EFSCORRUPTED;
+		goto fail;
+	}
+
+	if (query->len != sizeof(raw_val)) {
+		ret = -EFSCORRUPTED;
+		goto fail;
+	}
+	raw = query->node->object.data;
+	raw_val = *(struct apfs_dstream_id_val *)(raw + query->off);
+	refcnt = le32_to_cpu(raw_val.refcnt);
+
+	dstream->ds_shared = refcnt > 1;
+fail:
+	apfs_free_query(query);
+	return ret;
+}
+
+/**
  * apfs_iget - Populate inode structures with metadata from disk
  * @sb:		filesystem superblock
  * @cnid:	inode number
@@ -833,6 +906,9 @@ struct inode *apfs_iget(struct super_block *sb, u64 cnid)
 	}
 	err = apfs_inode_from_query(query, inode);
 	apfs_free_query(query);
+	if (err)
+		goto fail;
+	err = apfs_check_dstream_refcnt(inode);
 	if (err)
 		goto fail;
 	up_read(&nxi->nx_big_sem);
@@ -1431,6 +1507,7 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 	dstream->ds_id = cnid;
 	dstream->ds_size = 0;
 	dstream->ds_sparse_bytes = 0;
+	dstream->ds_shared = false;
 
 	now = current_time(inode);
 	inode->i_atime = inode->i_mtime = inode->i_ctime = ai->i_crtime = now;

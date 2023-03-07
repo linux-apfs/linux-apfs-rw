@@ -1598,3 +1598,86 @@ int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size)
 	old_blks = apfs_size_to_blocks(sb, dstream->ds_size);
 	return apfs_create_hole(dstream, old_blks, new_blks);
 }
+
+loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags)
+{
+	struct inode *src_inode = file_inode(src_file);
+	struct inode *dst_inode = file_inode(dst_file);
+	struct apfs_inode_info *src_ai = APFS_I(src_inode);
+	struct apfs_inode_info *dst_ai = APFS_I(dst_inode);
+	struct apfs_dstream_info *src_ds = &src_ai->i_dstream;
+	struct apfs_dstream_info *dst_ds = &dst_ai->i_dstream;
+	struct super_block *sb = src_inode->i_sb;
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	/* TODO: remember to update the maxops in the future */
+	struct apfs_max_ops maxops = {0};
+	int err;
+
+	if (remap_flags & ~(REMAP_FILE_ADVISORY))
+		return -EINVAL;
+	if (src_inode == dst_inode)
+		return -EINVAL;
+
+	/*
+	 * Clones here work in two steps: first the user creates an empty target
+	 * file, and then the user calls the ioctl, which replaces the file with
+	 * a clone. This is not atomic, of course.
+	 */
+	if (dst_ai->i_has_dstream || dst_ai->i_bsd_flags & APFS_INOBSD_COMPRESSED) {
+		apfs_err(sb, "clones can only replace freshly created files");
+		return -EOPNOTSUPP;
+	}
+
+	if (!src_ai->i_has_dstream) {
+		apfs_err(sb, "can't clone a file with no dstream");
+		return -EOPNOTSUPP;
+	}
+
+	err = apfs_transaction_start(sb, maxops);
+	if (err)
+		return err;
+	apfs_inode_join_transaction(sb, src_inode);
+	apfs_inode_join_transaction(sb, dst_inode);
+
+	err = apfs_flush_extent_cache(src_ds);
+	if (err)
+		goto fail;
+	err = apfs_dstream_adj_refcnt(src_ds, +1);
+	if (err)
+		goto fail;
+	src_ds->ds_shared = true;
+
+	dst_inode->i_mtime = dst_inode->i_ctime = current_time(dst_inode);
+	dst_inode->i_size = src_inode->i_size;
+	dst_ai->i_key_class = src_ai->i_key_class;
+	dst_ai->i_int_flags = src_ai->i_int_flags;
+	dst_ai->i_bsd_flags = src_ai->i_bsd_flags;
+	dst_ai->i_has_dstream = true;
+
+	dst_ds->ds_sb = src_ds->ds_sb;
+	dst_ds->ds_inode = dst_inode;
+	dst_ds->ds_id = src_ds->ds_id;
+	dst_ds->ds_size = src_ds->ds_size;
+	dst_ds->ds_sparse_bytes = src_ds->ds_sparse_bytes;
+	dst_ds->ds_cached_ext = src_ds->ds_cached_ext;
+	dst_ds->ds_ext_dirty = false;
+	dst_ds->ds_shared = true;
+
+	dst_ai->i_int_flags |= APFS_INODE_WAS_EVER_CLONED | APFS_INODE_WAS_CLONED;
+	src_ai->i_int_flags |= APFS_INODE_WAS_EVER_CLONED;
+
+	/*
+	 * Commit the transaction to make sure all buffers in the source inode
+	 * go through copy-on-write. This is a bit excessive, but I don't expect
+	 * clones to be created often enough for it to matter.
+	 */
+	sbi->s_nxi->nx_transaction.t_state |= APFS_NX_TRANS_FORCE_COMMIT;
+	err = apfs_transaction_commit(sb);
+	if (err)
+		goto fail;
+	return 0;
+
+fail:
+	apfs_transaction_abort(sb);
+	return err;
+}

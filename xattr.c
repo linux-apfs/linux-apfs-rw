@@ -76,6 +76,9 @@ static void apfs_dstream_from_xattr(struct super_block *sb, struct apfs_xattr *x
 	dstream->ds_cached_ext.len = 0;
 	dstream->ds_ext_dirty = false;
 	spin_lock_init(&dstream->ds_ext_lock);
+
+	/* Xattrs can't be cloned */
+	dstream->ds_shared = false;
 }
 
 /**
