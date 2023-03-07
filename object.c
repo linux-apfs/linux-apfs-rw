@@ -365,6 +365,7 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool
 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+		le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
 	}
 
 	brelse(bh);

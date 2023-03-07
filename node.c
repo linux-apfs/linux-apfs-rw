@@ -248,6 +248,7 @@ int apfs_make_empty_btree_root(struct super_block *sb, u32 subtype, u64 *oid)
 		return err;
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+	le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
 
 	bh = apfs_getblk(sb, bno);
 	if (!bh)
@@ -325,7 +326,9 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 		err = apfs_spaceman_allocate_block(sb, &bno, true /* backwards */);
 		if (err)
 			return ERR_PTR(err);
+		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+		le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
 
 		oid = le64_to_cpu(msb_raw->nx_next_oid);
 		le64_add_cpu(&msb_raw->nx_next_oid, 1);
@@ -338,7 +341,9 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 		if (err)
 			return ERR_PTR(err);
 		/* We don't write to the container's omap */
+		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+		le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
 		oid = bno;
 		break;
 	case APFS_OBJ_EPHEMERAL:
@@ -438,6 +443,7 @@ int apfs_delete_node(struct apfs_query *query)
 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
+		le64_add_cpu(&vsb_raw->apfs_total_blocks_freed, 1);
 		return 0;
 	case APFS_QUERY_OMAP:
 	case APFS_QUERY_EXTENTREF:
@@ -449,6 +455,7 @@ int apfs_delete_node(struct apfs_query *query)
 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
+		le64_add_cpu(&vsb_raw->apfs_total_blocks_freed, 1);
 		return 0;
 	case APFS_QUERY_FREE_QUEUE:
 		err = apfs_cpoint_data_free(sb, bno);

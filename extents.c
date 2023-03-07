@@ -777,6 +777,7 @@ static int apfs_free_phys_ext(struct super_block *sb, struct apfs_phys_extent *p
 
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -pext->blkcount);
+	le64_add_cpu(&vsb_raw->apfs_total_blocks_freed, pext->blkcount);
 
 	return apfs_free_queue_insert(sb, pext->bno, pext->blkcount);
 }
@@ -1365,6 +1366,7 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 		return err;
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+	le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
 	if (bno)
 		*bno = phys_bno;
 
