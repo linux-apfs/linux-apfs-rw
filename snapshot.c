@@ -344,11 +344,11 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name)
 	 */
 	err = apfs_transaction_flush_all_inodes(sb);
 	if (err)
-		return err;
+		goto fail;
 
 	err = apfs_create_superblock_snapshot(sb, &sblock_oid);
 	if (err)
-		return err;
+		goto fail;
 
 	err = apfs_create_snap_meta_records(mntpoint, name, sblock_oid);
 	if (err)
