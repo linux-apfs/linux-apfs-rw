@@ -865,6 +865,7 @@ extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 extern int APFS_GET_NEW_BLOCK_MAXOPS(void);
 extern int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size);
 extern loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags);
+extern int apfs_clone_extents(struct apfs_dstream_info *dstream, u64 new_id);
 
 /* file.c */
 extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync);

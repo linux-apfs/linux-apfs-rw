@@ -7,6 +7,8 @@
 #include <linux/slab.h>
 #include "apfs.h"
 
+#define MAX(X, Y)	((X) <= (Y) ? (Y) : (X))
+
 /**
  * apfs_ext_is_hole - Does this extent represent a hole in a sparse file?
  * @extent: the extent to check
@@ -803,6 +805,32 @@ static int apfs_put_phys_extent(struct apfs_phys_extent *pext, struct apfs_query
 			return err;
 		return apfs_free_phys_ext(sb, pext);
 	}
+
+	err = apfs_query_join_transaction(query);
+	if (err)
+		return err;
+	raw = query->node->object.data;
+	val = raw + query->off;
+	val->refcnt = cpu_to_le32(pext->refcnt);
+	return 0;
+}
+
+/**
+ * apfs_take_phys_extent - Increase the reference count for a physical extent
+ * @pext:	physical extent data, already read
+ * @query:	query that found the extent
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_take_phys_extent(struct apfs_phys_extent *pext, struct apfs_query *query)
+{
+	struct apfs_phys_ext_val *val;
+	void *raw;
+	int err;
+
+	/* An update extent may be dropped when a reference is taken */
+	if (++pext->refcnt == 0)
+		return apfs_btree_remove(query);
 
 	err = apfs_query_join_transaction(query);
 	if (err)
@@ -1680,4 +1708,235 @@ loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst
 fail:
 	apfs_transaction_abort(sb);
 	return err;
+}
+
+/**
+ * apfs_extent_create_record - Create a logical extent record for a dstream id
+ * @sb:		filesystem superblock
+ * @dstream_id:	the dstream id
+ * @extent:	extent info for the record
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_extent_create_record(struct super_block *sb, u64 dstream_id, struct apfs_file_extent *extent)
+{
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_key key;
+	struct apfs_query *query = NULL;
+	struct apfs_file_extent_val raw_val;
+	struct apfs_file_extent_key raw_key;
+	int ret = 0;
+
+	apfs_init_file_extent_key(dstream_id, extent->logical_addr, &key);
+
+	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+	query->key = &key;
+	query->flags = APFS_QUERY_CAT | APFS_QUERY_EXACT;
+
+	ret = apfs_btree_query(sb, &query);
+	if (ret && ret != -ENODATA)
+		goto out;
+
+	apfs_key_set_hdr(APFS_TYPE_FILE_EXTENT, dstream_id, &raw_key);
+	raw_key.logical_addr = cpu_to_le64(extent->logical_addr);
+	raw_val.len_and_flags = cpu_to_le64(extent->len);
+	raw_val.phys_block_num = cpu_to_le64(extent->phys_block_num);
+	raw_val.crypto_id = cpu_to_le64(apfs_vol_is_encrypted(sb) ? dstream_id : 0); /* TODO */
+
+	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+out:
+	apfs_free_query(query);
+	return ret;
+}
+
+/**
+ * apfs_take_single_extent - Take a reference to a single extent
+ * @sb:		filesystem superblock
+ * @paddr_end:	first block after the extent to take
+ * @paddr_min:	don't take references before this block
+ *
+ * Takes a reference to the physical extent range that ends in paddr. Sets
+ * @paddr_end to the beginning of the extent, so that the caller can continue
+ * with the previous one. Returns 0 on success, or a negative error code in
+ * case of failure.
+ */
+static int apfs_take_single_extent(struct super_block *sb, u64 *paddr_end, u64 paddr_min)
+{
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	struct apfs_node *extref_root = NULL;
+	struct apfs_key key;
+	struct apfs_query *query = NULL;
+	struct apfs_phys_extent prev_ext;
+	u64 prev_start, prev_end;
+	bool cropped_head = false, cropped_tail = false;
+	struct apfs_file_extent tmp = {0}; /* TODO: clean up all the fake extent interfaces? */
+	int ret;
+
+	extref_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_extentref_tree_oid), APFS_OBJ_PHYSICAL, true /* write */);
+	if (IS_ERR(extref_root))
+		return PTR_ERR(extref_root);
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+	vsb_raw->apfs_extentref_tree_oid = cpu_to_le64(extref_root->object.oid);
+
+	apfs_init_extent_key(*paddr_end - 1, &key);
+
+restart:
+	query = apfs_alloc_query(extref_root, NULL /* parent */);
+	if (!query) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	query->key = &key;
+	query->flags = APFS_QUERY_EXTENTREF;
+
+	ret = apfs_btree_query(sb, &query);
+	if (ret && ret != -ENODATA)
+		goto out;
+
+	if (ret == -ENODATA) {
+		/* The whole range to take is part of a snapshot */
+		tmp.phys_block_num = paddr_min;
+		tmp.len = (*paddr_end - paddr_min) << sb->s_blocksize_bits;
+		ret = apfs_create_update_pext(query, &tmp, +1);
+		*paddr_end = paddr_min;
+		goto out;
+	}
+
+	ret = apfs_phys_ext_from_query(query, &prev_ext);
+	if (ret)
+		goto out;
+	prev_start = prev_ext.bno;
+	prev_end = prev_ext.bno + prev_ext.blkcount;
+	if (prev_end < *paddr_end) {
+		/* The extent to take is part of a snapshot */
+		tmp.phys_block_num = MAX(prev_end, paddr_min);
+		tmp.len = (*paddr_end - tmp.phys_block_num) << sb->s_blocksize_bits;
+		ret = apfs_create_update_pext(query, &tmp, +1);
+		*paddr_end = tmp.phys_block_num;
+		goto out;
+	}
+
+	if ((cropped_tail && prev_end > *paddr_end) || (cropped_head && prev_start < paddr_min)) {
+		/* This should never happen, but be safe */
+		apfs_alert(sb, "recursion cropping physical extent 0x%llx-0x%llx", prev_start, prev_end);
+		ret = -EFSCORRUPTED;
+		goto out;
+	}
+
+	if (prev_end > *paddr_end) {
+		ret = apfs_split_phys_ext(query, *paddr_end);
+		if (ret)
+			goto out;
+		/* The split may make the query invalid */
+		apfs_free_query(query);
+		cropped_tail = true;
+		goto restart;
+	}
+
+	if (prev_start < paddr_min) {
+		ret = apfs_split_phys_ext(query, paddr_min);
+		if (ret)
+			goto out;
+		/* The split may make the query invalid */
+		apfs_free_query(query);
+		cropped_head = true;
+		goto restart;
+	}
+
+	/* The extent to take already exists */
+	ret = apfs_take_phys_extent(&prev_ext, query);
+	*paddr_end = prev_start;
+
+out:
+	apfs_free_query(query);
+	apfs_node_free(extref_root);
+	return ret;
+}
+
+/**
+ * apfs_range_take_reference - Take a reference to a physical range
+ * @sb:		filesystem superblock
+ * @paddr:	first block of the range
+ * @length:	length of the range (in bytes)
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_range_take_reference(struct super_block *sb, u64 paddr, u64 length)
+{
+	u64 extent_end;
+	int err;
+
+	ASSERT(paddr);
+
+	extent_end = paddr + (length >> sb->s_blocksize_bits);
+	while (extent_end > paddr) {
+		err = apfs_take_single_extent(sb, &extent_end, paddr);
+		if (err)
+			return err;
+	}
+	return 0;
+}
+
+/**
+ * apfs_clone_single_extent - Make a copy of an extent in a dstream to a new one
+ * @dstream:	old dstream
+ * @new_id:	id of the new dstream
+ * @log_addr:	logical address for the extent
+ *
+ * Duplicates the logical extent, and updates the references to the physical
+ * extents as required. Sets @addr to the end of the extent, so that the caller
+ * can continue in the same place. Returns 0 on success, or a negative error
+ * code in case of failure.
+ */
+static int apfs_clone_single_extent(struct apfs_dstream_info *dstream, u64 new_id, u64 *log_addr)
+{
+	struct super_block *sb = dstream->ds_sb;
+	struct apfs_file_extent extent;
+	int err;
+
+	err = apfs_extent_read(dstream, *log_addr >> sb->s_blocksize_bits, &extent);
+	if (err) {
+		if (err == -ENODATA)
+			err = -EFSCORRUPTED;
+		apfs_err(sb, "failed to read an extent to clone for dstream 0x%llx", dstream->ds_id);
+		return err;
+	}
+	err = apfs_extent_create_record(sb, new_id, &extent);
+	if (err) {
+		apfs_err(sb, "failed to create extent record for clone of dstream 0x%llx", dstream->ds_id);
+		return err;
+	}
+
+	if (!apfs_ext_is_hole(&extent)) {
+		err = apfs_range_take_reference(sb, extent.phys_block_num, extent.len);
+		if (err) {
+			apfs_err(sb, "failed to take a reference to physical range 0x%llx-0x%llx\n", extent.phys_block_num, extent.len);
+			return err;
+		}
+	}
+
+	*log_addr += extent.len;
+	return 0;
+}
+
+/**
+ * apfs_clone_extents - Make a copy of all extents in a dstream to a new one
+ * @dstream:	old dstream
+ * @new_id:	id for the new dstream
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+int apfs_clone_extents(struct apfs_dstream_info *dstream, u64 new_id)
+{
+	u64 next = 0;
+	int err;
+
+	while (next < dstream->ds_size) {
+		err = apfs_clone_single_extent(dstream, new_id, &next);
+		if (err)
+			return err;
+	}
+	return 0;
 }

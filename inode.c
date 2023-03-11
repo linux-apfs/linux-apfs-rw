@@ -92,6 +92,59 @@ out:
 }
 #define APFS_CREATE_DSTREAM_REC_MAXOPS	1
 
+static int apfs_check_dstream_refcnt(struct inode *inode);
+static int apfs_put_dstream_rec(struct apfs_dstream_info *dstream);
+
+/**
+ * apfs_inode_create_exclusive_dstream - Make an inode's dstream not shared
+ * @inode: the vfs inode
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_inode_create_exclusive_dstream(struct inode *inode)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	struct apfs_inode_info *ai = APFS_I(inode);
+	struct apfs_dstream_info *dstream = &ai->i_dstream;
+	u64 new_id;
+	int err;
+
+	if (!ai->i_has_dstream || !dstream->ds_shared)
+		return 0;
+
+	/*
+	 * The ds_shared field is not updated when the other user of the
+	 * dstream puts it, so it could be a false positive. Check it again
+	 * before actually putting the dstream. The double query is wasteful,
+	 * but I don't know if it makes sense to optimize this (TODO).
+	 */
+	err = apfs_check_dstream_refcnt(inode);
+	if (err)
+		return err;
+	if (!dstream->ds_shared)
+		return 0;
+	err = apfs_put_dstream_rec(dstream);
+	if (err)
+		return err;
+
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+	new_id = le64_to_cpu(vsb_raw->apfs_next_obj_id);
+	le64_add_cpu(&vsb_raw->apfs_next_obj_id, 1);
+
+	err = apfs_clone_extents(dstream, new_id);
+	if (err)
+		return err;
+
+	dstream->ds_id = new_id;
+	err = apfs_create_dstream_rec(dstream);
+	if (err)
+		return err;
+
+	dstream->ds_shared = false;
+	return 0;
+}
+
 /**
  * apfs_inode_create_dstream_rec - Create the data stream record for an inode
  * @inode: the vfs inode
@@ -105,7 +158,7 @@ static int apfs_inode_create_dstream_rec(struct inode *inode)
 	int err;
 
 	if (ai->i_has_dstream)
-		return 0;
+		return apfs_inode_create_exclusive_dstream(inode);
 
 	err = apfs_create_dstream_rec(&ai->i_dstream);
 	if (err)
@@ -1384,7 +1437,7 @@ int APFS_UPDATE_INODE_MAXOPS(void)
  */
 static int apfs_delete_inode(struct inode *inode)
 {
-	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
+	struct apfs_dstream_info *dstream = NULL;
 	struct apfs_query *query;
 	int ret;
 
@@ -1392,6 +1445,16 @@ static int apfs_delete_inode(struct inode *inode)
 	if (ret)
 		return ret;
 
+	/*
+	 * This is very wasteful since all the new extents and references will
+	 * get deleted right away, but it only affects clones, so I don't see a
+	 * big reason to improve it (TODO)
+	 */
+	ret = apfs_inode_create_exclusive_dstream(inode);
+	if (ret)
+		return ret;
+
+	dstream = &APFS_I(inode)->i_dstream;
 	ret = apfs_truncate(dstream, 0 /* new_size */);
 	if (ret)
 		return ret;
