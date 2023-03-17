@@ -1565,7 +1565,7 @@ loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst
 	err = apfs_transaction_commit(sb);
 	if (err)
 		goto fail;
-	return 0;
+	return dst_ds->ds_size;
 
 fail:
 	apfs_transaction_abort(sb);
