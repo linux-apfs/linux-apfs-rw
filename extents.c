@@ -1504,6 +1504,10 @@ loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst
 	if (src_inode == dst_inode)
 		return -EINVAL;
 
+	/* We only want to clone whole files, like in the official driver */
+	if (off != 0 || destoff != 0 || len != 0)
+		return -EINVAL;
+
 	/*
 	 * Clones here work in two steps: first the user creates an empty target
 	 * file, and then the user calls the ioctl, which replaces the file with

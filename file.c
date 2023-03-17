@@ -137,6 +137,7 @@ const struct file_operations apfs_file_operations = {
 	.open			= generic_file_open,
 	.fsync			= apfs_fsync,
 	.unlocked_ioctl		= apfs_file_ioctl,
+	.copy_file_range	= generic_copy_file_range,
 	.remap_file_range	= apfs_remap_file_range,
 };
 
