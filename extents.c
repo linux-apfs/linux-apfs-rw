@@ -1497,6 +1497,7 @@ loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	/* TODO: remember to update the maxops in the future */
 	struct apfs_max_ops maxops = {0};
+	const u64 xfield_flags = APFS_INODE_MAINTAIN_DIR_STATS | APFS_INODE_IS_SPARSE | APFS_INODE_HAS_PURGEABLE_FLAGS;
 	int err;
 
 	if (remap_flags & ~(REMAP_FILE_ADVISORY))
@@ -1515,6 +1516,10 @@ loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst
 	 */
 	if (dst_ai->i_has_dstream || dst_ai->i_bsd_flags & APFS_INOBSD_COMPRESSED) {
 		apfs_err(sb, "clones can only replace freshly created files");
+		return -EOPNOTSUPP;
+	}
+	if (dst_ai->i_int_flags & xfield_flags) {
+		apfs_err(sb, "clone can't replace a file that has xfields");
 		return -EOPNOTSUPP;
 	}
 
@@ -1555,6 +1560,12 @@ loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst
 
 	dst_ai->i_int_flags |= APFS_INODE_WAS_EVER_CLONED | APFS_INODE_WAS_CLONED;
 	src_ai->i_int_flags |= APFS_INODE_WAS_EVER_CLONED;
+
+	/*
+	 * The sparse flag is the important one here: if we need it, it will get
+	 * set later by apfs_update_inode(), after the xfield gets created.
+	 */
+	dst_ai->i_int_flags &= ~xfield_flags;
 
 	/*
 	 * Commit the transaction to make sure all buffers in the source inode
