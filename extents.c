@@ -853,7 +853,7 @@ static int apfs_put_phys_extent(struct apfs_phys_extent *pext, struct apfs_query
 		err = apfs_btree_remove(query);
 		if (err)
 			return err;
-		return apfs_free_phys_ext(sb, pext);
+		return pext->kind == APFS_KIND_NEW ? apfs_free_phys_ext(sb, pext) : 0;
 	}
 
 	err = apfs_query_join_transaction(query);
