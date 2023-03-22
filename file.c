@@ -141,6 +141,17 @@ const struct file_operations apfs_file_operations = {
 	.remap_file_range	= apfs_remap_file_range,
 };
 
+#if LINUX_VERSION_CODE == KERNEL_VERSION(5, 3, 0)
+/*
+ * This is needed mainly to test clones with xfstests, so we only support the
+ * kernel version I use during testing. TODO: support all kernel versions.
+ */
+int apfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo, u64 start, u64 len)
+{
+	return generic_block_fiemap(inode, fieinfo, start, len, apfs_get_block);
+}
+#endif
+
 const struct inode_operations apfs_file_inode_operations = {
 	.getattr	= apfs_getattr,
 	.listxattr	= apfs_listxattr,
@@ -149,5 +160,8 @@ const struct inode_operations apfs_file_inode_operations = {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
 	.fileattr_get	= apfs_fileattr_get,
 	.fileattr_set	= apfs_fileattr_set,
+#endif
+#if LINUX_VERSION_CODE == KERNEL_VERSION(5, 3, 0)
+	.fiemap		= apfs_fiemap,
 #endif
 };
