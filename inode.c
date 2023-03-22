@@ -101,7 +101,7 @@ static int apfs_put_dstream_rec(struct apfs_dstream_info *dstream);
  *
  * Returns 0 on success, or a negative error code in case of failure.
  */
-static int apfs_inode_create_exclusive_dstream(struct inode *inode)
+int apfs_inode_create_exclusive_dstream(struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;

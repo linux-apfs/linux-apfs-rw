@@ -879,6 +879,7 @@ extern struct inode *apfs_new_inode(struct inode *dir, umode_t mode,
 				    dev_t rdev);
 extern int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 				 struct dentry *dentry);
+extern int apfs_inode_create_exclusive_dstream(struct inode *inode);
 extern int APFS_CREATE_INODE_REC_MAXOPS(void);
 extern int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata);
 extern int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata);

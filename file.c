@@ -41,6 +41,10 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 		goto out;
 	apfs_inode_join_transaction(sb, inode);
 
+	err = apfs_inode_create_exclusive_dstream(inode);
+	if (err)
+		goto out_abort;
+
 	lock_page(page);
 	wait_for_stable_page(page);
 	if (page->mapping != inode->i_mapping) {
