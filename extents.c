@@ -19,6 +19,18 @@ static inline bool apfs_ext_is_hole(struct apfs_file_extent *extent)
 }
 
 /**
+ * apfs_size_to_blocks - Return the block count for a given size, rounded up
+ * @sb:		filesystem superblock
+ * @size:	size in bytes
+ *
+ * TODO: reuse for inode.c
+ */
+static inline u64 apfs_size_to_blocks(struct super_block *sb, u64 size)
+{
+	return (size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
+}
+
+/**
  * apfs_extent_from_query - Read the extent found by a successful query
  * @query:	the query that found the record
  * @extent:	Return parameter.  The extent found.
@@ -74,7 +86,7 @@ int apfs_extent_from_query(struct apfs_query *query,
 /**
  * apfs_extent_read - Read the extent record that covers a block
  * @dstream:	data stream info
- * @dsblock:	logical number of the wanted block
+ * @dsblock:	logical number of the wanted block (must be in range)
  * @extent:	Return parameter.  The extent found.
  *
  * Finds and caches the extent record.  On success, returns a pointer to the
@@ -122,12 +134,20 @@ static int apfs_extent_read(struct apfs_dstream_info *dstream, sector_t dsblock,
 	query->flags = apfs_is_sealed(sb) ? APFS_QUERY_FEXT : APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret)
+	if (ret) {
+		if (ret == -ENODATA)
+			ret = -EFSCORRUPTED;
 		goto done;
+	}
 
 	ret = apfs_extent_from_query(query, extent);
 	if (ret) {
 		apfs_alert(sb, "bad extent record for dstream 0x%llx", dstream->ds_id);
+		goto done;
+	}
+	if (iaddr < extent->logical_addr || iaddr >= extent->logical_addr + extent->len) {
+		apfs_alert(sb, "no extent for addr 0x%llx in dstream 0x%llx", iaddr, dstream->ds_id);
+		ret = -EFSCORRUPTED;
 		goto done;
 	}
 
@@ -188,6 +208,9 @@ int __apfs_get_block(struct apfs_dstream_info *dstream, sector_t dsblock,
 	int ret;
 
 	ASSERT(!create);
+
+	if (dsblock >= apfs_size_to_blocks(sb, dstream->ds_size))
+		return 0;
 
 	ret = apfs_extent_read(dstream, dsblock, &ext);
 	if (ret)
@@ -1067,18 +1090,6 @@ out:
 }
 
 /**
- * apfs_size_to_blocks - Return the block count for a given size, rounded up
- * @sb:		filesystem superblock
- * @size:	size in bytes
- *
- * TODO: reuse for inode.c
- */
-static inline u64 apfs_size_to_blocks(struct super_block *sb, u64 size)
-{
-	return (size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
-}
-
-/**
  * apfs_zero_dstream_tail - Zero out stale bytes in a data stream's last block
  * @dstream: data stream info
  *
@@ -1901,8 +1912,6 @@ static int apfs_clone_single_extent(struct apfs_dstream_info *dstream, u64 new_i
 
 	err = apfs_extent_read(dstream, *log_addr >> sb->s_blocksize_bits, &extent);
 	if (err) {
-		if (err == -ENODATA)
-			err = -EFSCORRUPTED;
 		apfs_err(sb, "failed to read an extent to clone for dstream 0x%llx", dstream->ds_id);
 		return err;
 	}
