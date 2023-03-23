@@ -1306,6 +1306,7 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 	cache = &dstream->ds_cached_ext;
 	cache_blks = apfs_size_to_blocks(sb, cache->len);
 
+	/* TODO: allow dirty caches of several blocks in the middle of a file */
 	if (!in_snap && apfs_dstream_cache_is_tail(dstream) &&
 	    logical_addr == cache->logical_addr + cache->len &&
 	    phys_bno == cache->phys_block_num + cache_blks) {

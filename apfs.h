@@ -133,6 +133,13 @@ struct apfs_spaceman {
 	u32 sm_cib_count;		/* Number of chunk-info blocks */
 	u64 sm_free_count;		/* Number of free blocks */
 	u32 sm_addr_offset;		/* Offset of cib addresses in @sm_raw */
+
+	/*
+	 * A range of freed blocks not yet put in the free queue. Extend this as
+	 * much as possible before creating an actual record.
+	 */
+	u64 sm_free_cache_base;
+	u64 sm_free_cache_blkcnt;
 };
 
 #define TRANSACTION_MAIN_QUEUE_MAX	4096
@@ -966,6 +973,7 @@ extern int apfs_switch_to_snapshot(struct super_block *sb);
 
 /* spaceman.c */
 extern int apfs_read_spaceman(struct super_block *sb);
+extern int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count);
 extern int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count);
 extern int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backwards);
 

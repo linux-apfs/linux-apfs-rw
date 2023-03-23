@@ -1454,6 +1454,7 @@ static int apfs_delete_inode(struct inode *inode)
 	if (ret)
 		return ret;
 
+	/* TODO: truncate an orphan inode in multiple transactions */
 	dstream = &APFS_I(inode)->i_dstream;
 	ret = apfs_truncate(dstream, 0 /* new_size */);
 	if (ret)

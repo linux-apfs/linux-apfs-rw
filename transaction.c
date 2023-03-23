@@ -590,6 +590,7 @@ int apfs_transaction_flush_all_inodes(struct super_block *sb)
  */
 static int apfs_transaction_commit_nx(struct super_block *sb)
 {
+	struct apfs_spaceman *sm = APFS_SM(sb);
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_sb_info *sbi;
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
@@ -603,6 +604,17 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	err = apfs_transaction_flush_all_inodes(sb);
 	if (err)
 		return err;
+
+	/*
+	 * Now that nothing else will be freed, flush the last update to the
+	 * free queues so that it can be committed to disk with the other bhs
+	 */
+	if (sm->sm_free_cache_base) {
+		err = apfs_free_queue_insert_nocache(sb, sm->sm_free_cache_base, sm->sm_free_cache_blkcnt);
+		if (err)
+			return err;
+		sm->sm_free_cache_base = sm->sm_free_cache_blkcnt = 0;
+	}
 
 	list_for_each_entry_safe(bhi, tmp, &nx_trans->t_buffers, list) {
 		struct buffer_head *bh = bhi->bh;
