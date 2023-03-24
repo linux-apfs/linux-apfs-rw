@@ -838,7 +838,7 @@ extern int apfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		       unsigned int flags);
 extern int apfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 		       bool excl);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 extern int apfs_mknod(struct user_namespace *mnt_userns, struct inode *dir,
 		      struct dentry *dentry, umode_t mode, dev_t rdev);
 extern int apfs_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
@@ -847,6 +847,16 @@ extern int apfs_rename(struct user_namespace *mnt_userns, struct inode *old_dir,
 		       struct dentry *old_dentry, struct inode *new_dir,
 		       struct dentry *new_dentry, unsigned int flags);
 extern int apfs_create(struct user_namespace *mnt_userns, struct inode *dir,
+		       struct dentry *dentry, umode_t mode, bool excl);
+#else
+extern int apfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
+		      struct dentry *dentry, umode_t mode, dev_t rdev);
+extern int apfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+		      struct dentry *dentry, umode_t mode);
+extern int apfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
+		       struct dentry *old_dentry, struct inode *new_dir,
+		       struct dentry *new_dentry, unsigned int flags);
+extern int apfs_create(struct mnt_idmap *idmap, struct inode *dir,
 		       struct dentry *dentry, umode_t mode, bool excl);
 #endif
 
@@ -894,8 +904,11 @@ extern int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta)
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 extern int apfs_setattr(struct dentry *dentry, struct iattr *iattr);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 extern int apfs_setattr(struct user_namespace *mnt_userns,
+			struct dentry *dentry, struct iattr *iattr);
+#else
+extern int apfs_setattr(struct mnt_idmap *idmap,
 			struct dentry *dentry, struct iattr *iattr);
 #endif
 
@@ -909,8 +922,12 @@ extern int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 extern int apfs_getattr(const struct path *path, struct kstat *stat,
 			u32 request_mask, unsigned int query_flags);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 extern int apfs_getattr(struct user_namespace *mnt_userns,
+		const struct path *path, struct kstat *stat, u32 request_mask,
+		unsigned int query_flags);
+#else
+extern int apfs_getattr(struct mnt_idmap *idmap,
 		const struct path *path, struct kstat *stat, u32 request_mask,
 		unsigned int query_flags);
 #endif
@@ -918,7 +935,10 @@ extern int apfs_getattr(struct user_namespace *mnt_userns,
 extern int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta);
 extern int APFS_CRYPTO_ADJ_REFCNT_MAXOPS(void);
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+extern int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa);
+extern int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct fileattr *fa);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
 extern int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa);
 extern int apfs_fileattr_set(struct user_namespace *mnt_userns, struct dentry *dentry, struct fileattr *fa);
 #endif

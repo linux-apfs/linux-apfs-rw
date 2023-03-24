@@ -999,8 +999,12 @@ int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 int apfs_getattr(const struct path *path, struct kstat *stat,
 		 u32 request_mask, unsigned int query_flags)
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 int apfs_getattr(struct user_namespace *mnt_userns,
+		 const struct path *path, struct kstat *stat, u32 request_mask,
+		 unsigned int query_flags)
+#else
+int apfs_getattr(struct mnt_idmap *idmap,
 		 const struct path *path, struct kstat *stat, u32 request_mask,
 		 unsigned int query_flags)
 #endif
@@ -1027,8 +1031,10 @@ int apfs_getattr(struct user_namespace *mnt_userns,
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	generic_fillattr(inode, stat);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 	generic_fillattr(mnt_userns, inode, stat);
+#else
+	generic_fillattr(idmap, inode, stat);
 #endif
 
 	stat->ino = apfs_ino(inode);
@@ -1551,8 +1557,10 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	inode_init_owner(inode, dir, mode);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 	inode_init_owner(&init_user_ns, inode, dir, mode);
+#else
+	inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
 #endif
 
 	ai->i_saved_uid = i_uid_read(inode);
@@ -1681,8 +1689,11 @@ static int apfs_setsize(struct inode *inode, loff_t new_size)
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 int apfs_setattr(struct dentry *dentry, struct iattr *iattr)
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 int apfs_setattr(struct user_namespace *mnt_userns,
+		 struct dentry *dentry, struct iattr *iattr)
+#else
+int apfs_setattr(struct mnt_idmap *idmap,
 		 struct dentry *dentry, struct iattr *iattr)
 #endif
 {
@@ -1697,8 +1708,10 @@ int apfs_setattr(struct user_namespace *mnt_userns,
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	err = setattr_prepare(dentry, iattr);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 	err = setattr_prepare(&init_user_ns, dentry, iattr);
+#else
+	err = setattr_prepare(&nop_mnt_idmap, dentry, iattr);
 #endif
 	if (err)
 		return err;
@@ -1720,8 +1733,10 @@ int apfs_setattr(struct user_namespace *mnt_userns,
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	setattr_copy(inode, iattr);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 	setattr_copy(&init_user_ns, inode, iattr);
+#else
+	setattr_copy(&nop_mnt_idmap, inode, iattr);
 #endif
 
 	mark_inode_dirty(inode);
@@ -2095,7 +2110,7 @@ static int apfs_ioc_setflags(struct file *file, int __user *arg)
 	return err;
 }
 
-#else /* LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0) */
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 
 int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 {
@@ -2106,6 +2121,49 @@ int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 }
 
 int apfs_fileattr_set(struct user_namespace *mnt_userns, struct dentry *dentry, struct fileattr *fa)
+{
+	struct inode *inode = d_inode(dentry);
+	struct super_block *sb = inode->i_sb;
+	struct apfs_max_ops maxops;
+	int err;
+
+	if (sb->s_flags & SB_RDONLY)
+		return -EROFS;
+
+	if (fa->flags & ~(FS_APPEND_FL | FS_IMMUTABLE_FL | FS_NODUMP_FL))
+		return -EOPNOTSUPP;
+	if (fileattr_has_fsx(fa))
+		return -EOPNOTSUPP;
+
+	lockdep_assert_held_write(&inode->i_rwsem);
+
+	maxops.cat = APFS_UPDATE_INODE_MAXOPS();
+	maxops.blks = 0;
+	err = apfs_transaction_start(sb, maxops);
+	if (err)
+		return err;
+
+	apfs_inode_join_transaction(sb, inode);
+	apfs_setflags(inode, fa->flags);
+	inode->i_ctime = current_time(inode);
+
+	err = apfs_transaction_commit(sb);
+	if (err)
+		apfs_transaction_abort(sb);
+	return err;
+}
+
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0) */
+
+int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
+{
+	unsigned int flags = apfs_getflags(d_inode(dentry));
+
+	fileattr_fill_flags(fa, flags);
+	return 0;
+}
+
+int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct fileattr *fa)
 {
 	struct inode *inode = d_inode(dentry);
 	struct super_block *sb = inode->i_sb;

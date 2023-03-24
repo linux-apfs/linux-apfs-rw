@@ -671,8 +671,11 @@ out_abort:
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 int apfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 	       dev_t rdev)
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 int apfs_mknod(struct user_namespace *mnt_userns, struct inode *dir,
+	       struct dentry *dentry, umode_t mode, dev_t rdev)
+#else
+int apfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 	       struct dentry *dentry, umode_t mode, dev_t rdev)
 #endif
 {
@@ -686,12 +689,20 @@ int apfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 	return apfs_mknod(dir, dentry, mode | S_IFDIR, 0 /* rdev */);
 }
 
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 
 int apfs_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
 	       struct dentry *dentry, umode_t mode)
 {
 	return apfs_mknod(mnt_userns, dir, dentry, mode | S_IFDIR, 0 /* rdev */);
+}
+
+#else
+
+int apfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+	       struct dentry *dentry, umode_t mode)
+{
+	return apfs_mknod(idmap, dir, dentry, mode | S_IFDIR, 0 /* rdev */);
 }
 
 #endif
@@ -705,12 +716,20 @@ int apfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 	return apfs_mknod(dir, dentry, mode, 0 /* rdev */);
 }
 
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 
 int apfs_create(struct user_namespace *mnt_userns, struct inode *dir,
 		struct dentry *dentry, umode_t mode, bool excl)
 {
 	return apfs_mknod(mnt_userns, dir, dentry, mode, 0 /* rdev */);
+}
+
+#else
+
+int apfs_create(struct mnt_idmap *idmap, struct inode *dir,
+		struct dentry *dentry, umode_t mode, bool excl)
+{
+	return apfs_mknod(idmap, dir, dentry, mode, 0 /* rdev */);
 }
 
 #endif
@@ -1288,8 +1307,12 @@ int apfs_rmdir(struct inode *dir, struct dentry *dentry)
 int apfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		struct inode *new_dir, struct dentry *new_dentry,
 		unsigned int flags)
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 int apfs_rename(struct user_namespace *mnt_userns, struct inode *old_dir,
+		struct dentry *old_dentry, struct inode *new_dir,
+		struct dentry *new_dentry, unsigned int flags)
+#else
+int apfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
 		struct dentry *old_dentry, struct inode *new_dir,
 		struct dentry *new_dentry, unsigned int flags)
 #endif
