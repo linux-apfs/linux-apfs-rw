@@ -315,6 +315,7 @@ struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb, u64 oid)
 struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool write, bool preserve)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_superblock *vsb_raw = NULL;
 	struct buffer_head *bh, *new_bh;
 	struct apfs_obj_phys *obj;
 	u32 type;
@@ -353,9 +354,20 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool
 	}
 	memcpy(new_bh->b_data, bh->b_data, sb->s_blocksize);
 
-	/* Don't free the old copy if it's part of a snapshot */
-	if (!preserve)
+	/*
+	 * Don't free the old copy of the object if it's part of a snapshot.
+	 * Also increase the allocation count, except for the volume superblock
+	 * which is never counted there.
+	 */
+	if (!preserve) {
 		err = apfs_free_queue_insert(sb, bh->b_blocknr, 1);
+	} else if ((type & APFS_OBJECT_TYPE_MASK) != APFS_OBJECT_TYPE_FS) {
+		vsb_raw = APFS_SB(sb)->s_vsb_raw;
+		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+		le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
+	}
+
 	brelse(bh);
 	bh = new_bh;
 	new_bh = NULL;

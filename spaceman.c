@@ -458,6 +458,8 @@ int apfs_read_spaceman(struct super_block *sb)
 	if (sb->s_flags & SB_RDONLY) /* The space manager won't be needed */
 		return 0;
 
+	spaceman->sm_free_cache_base = spaceman->sm_free_cache_blkcnt = 0;
+
 	sm_bh = apfs_read_ephemeral_object(sb, oid);
 	if (IS_ERR(sm_bh))
 		return PTR_ERR(sm_bh);
@@ -607,14 +609,17 @@ static inline int apfs_chunk_mark_free(struct super_block *sb, char *bitmap,
 }
 
 /**
- * apfs_free_queue_insert - Add a block range to its free queue
+ * apfs_free_queue_insert_nocache - Add a block range to its free queue
  * @sb:		superblock structure
  * @bno:	first block number to free
  * @count:	number of consecutive blocks to free
  *
+ * Same as apfs_free_queue_insert(), but writes to the free queue directly,
+ * bypassing the cache of the latest freed block range.
+ *
  * Returns 0 on success or a negative error code in case of failure.
  */
-int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count)
+int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_spaceman *sm = APFS_SM(sb);
@@ -672,6 +677,53 @@ fail:
 	apfs_free_query(query);
 	apfs_node_free(fq_root);
 	return err;
+}
+
+/**
+ * apfs_free_queue_insert - Add a block range to its free queue
+ * @sb:		superblock structure
+ * @bno:	first block number to free
+ * @count:	number of consecutive blocks to free
+ *
+ * Uses a cache to delay the actual tree operations as much as possible.
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count)
+{
+	struct apfs_spaceman *sm = APFS_SM(sb);
+	int err;
+
+	if (sm->sm_free_cache_base == 0) {
+		/* Nothing yet cached */
+		sm->sm_free_cache_base = bno;
+		sm->sm_free_cache_blkcnt = count;
+		return 0;
+	}
+
+	/*
+	 * First attempt to extend the cache of freed blocks, but never cache
+	 * a range that doesn't belong to a single free queue.
+	 */
+	if (apfs_block_in_ip(sm, bno) == apfs_block_in_ip(sm, sm->sm_free_cache_base)) {
+		if (bno == sm->sm_free_cache_base + sm->sm_free_cache_blkcnt) {
+			sm->sm_free_cache_blkcnt += count;
+			return 0;
+		}
+		if (bno + count == sm->sm_free_cache_base) {
+			sm->sm_free_cache_base -= count;
+			sm->sm_free_cache_blkcnt += count;
+			return 0;
+		}
+	}
+
+	/* Failed to extend the cache, so flush it and replace it */
+	err = apfs_free_queue_insert_nocache(sb, sm->sm_free_cache_base, sm->sm_free_cache_blkcnt);
+	if (err)
+		return err;
+	sm->sm_free_cache_base = bno;
+	sm->sm_free_cache_blkcnt = count;
+	return 0;
 }
 
 /**

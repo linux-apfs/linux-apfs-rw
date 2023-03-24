@@ -41,6 +41,10 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 		goto out;
 	apfs_inode_join_transaction(sb, inode);
 
+	err = apfs_inode_create_exclusive_dstream(inode);
+	if (err)
+		goto out_abort;
+
 	lock_page(page);
 	wait_for_stable_page(page);
 	if (page->mapping != inode->i_mapping) {
@@ -130,14 +134,27 @@ int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 }
 
 const struct file_operations apfs_file_operations = {
-	.llseek		= generic_file_llseek,
-	.read_iter	= generic_file_read_iter,
-	.write_iter	= generic_file_write_iter,
-	.mmap		= apfs_file_mmap,
-	.open		= generic_file_open,
-	.fsync		= apfs_fsync,
-	.unlocked_ioctl	= apfs_file_ioctl,
+	.llseek			= generic_file_llseek,
+	.read_iter		= generic_file_read_iter,
+	.write_iter		= generic_file_write_iter,
+	.mmap			= apfs_file_mmap,
+	.open			= generic_file_open,
+	.fsync			= apfs_fsync,
+	.unlocked_ioctl		= apfs_file_ioctl,
+	.copy_file_range	= generic_copy_file_range,
+	.remap_file_range	= apfs_remap_file_range,
 };
+
+#if LINUX_VERSION_CODE == KERNEL_VERSION(5, 3, 0)
+/*
+ * This is needed mainly to test clones with xfstests, so we only support the
+ * kernel version I use during testing. TODO: support all kernel versions.
+ */
+int apfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo, u64 start, u64 len)
+{
+	return generic_block_fiemap(inode, fieinfo, start, len, apfs_get_block);
+}
+#endif
 
 const struct inode_operations apfs_file_inode_operations = {
 	.getattr	= apfs_getattr,
@@ -147,5 +164,8 @@ const struct inode_operations apfs_file_inode_operations = {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
 	.fileattr_get	= apfs_fileattr_get,
 	.fileattr_set	= apfs_fileattr_set,
+#endif
+#if LINUX_VERSION_CODE == KERNEL_VERSION(5, 3, 0)
+	.fiemap		= apfs_fiemap,
 #endif
 };

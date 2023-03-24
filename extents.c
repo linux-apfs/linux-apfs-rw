@@ -7,6 +7,8 @@
 #include <linux/slab.h>
 #include "apfs.h"
 
+#define MAX(X, Y)	((X) <= (Y) ? (Y) : (X))
+
 /**
  * apfs_ext_is_hole - Does this extent represent a hole in a sparse file?
  * @extent: the extent to check
@@ -14,6 +16,18 @@
 static inline bool apfs_ext_is_hole(struct apfs_file_extent *extent)
 {
 	return extent->phys_block_num == 0;
+}
+
+/**
+ * apfs_size_to_blocks - Return the block count for a given size, rounded up
+ * @sb:		filesystem superblock
+ * @size:	size in bytes
+ *
+ * TODO: reuse for inode.c
+ */
+static inline u64 apfs_size_to_blocks(struct super_block *sb, u64 size)
+{
+	return (size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
 }
 
 /**
@@ -72,7 +86,7 @@ int apfs_extent_from_query(struct apfs_query *query,
 /**
  * apfs_extent_read - Read the extent record that covers a block
  * @dstream:	data stream info
- * @dsblock:	logical number of the wanted block
+ * @dsblock:	logical number of the wanted block (must be in range)
  * @extent:	Return parameter.  The extent found.
  *
  * Finds and caches the extent record.  On success, returns a pointer to the
@@ -120,12 +134,20 @@ static int apfs_extent_read(struct apfs_dstream_info *dstream, sector_t dsblock,
 	query->flags = apfs_is_sealed(sb) ? APFS_QUERY_FEXT : APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret)
+	if (ret) {
+		if (ret == -ENODATA)
+			ret = -EFSCORRUPTED;
 		goto done;
+	}
 
 	ret = apfs_extent_from_query(query, extent);
 	if (ret) {
 		apfs_alert(sb, "bad extent record for dstream 0x%llx", dstream->ds_id);
+		goto done;
+	}
+	if (iaddr < extent->logical_addr || iaddr >= extent->logical_addr + extent->len) {
+		apfs_alert(sb, "no extent for addr 0x%llx in dstream 0x%llx", iaddr, dstream->ds_id);
+		ret = -EFSCORRUPTED;
 		goto done;
 	}
 
@@ -187,6 +209,9 @@ int __apfs_get_block(struct apfs_dstream_info *dstream, sector_t dsblock,
 
 	ASSERT(!create);
 
+	if (dsblock >= apfs_size_to_blocks(sb, dstream->ds_size))
+		return 0;
+
 	ret = apfs_extent_read(dstream, dsblock, &ext);
 	if (ret)
 		return ret;
@@ -227,8 +252,6 @@ int apfs_get_block(struct inode *inode, sector_t iblock,
 	return ret;
 }
 
-static int apfs_delete_phys_extent(struct super_block *sb, const struct apfs_file_extent *extent);
-
 /**
  * apfs_set_extent_length - Set a new length in an extent record's value
  * @ext: the extent record's value
@@ -244,6 +267,8 @@ static inline void apfs_set_extent_length(struct apfs_file_extent_val *ext, u64 
 
 	ext->len_and_flags = cpu_to_le64(flags | len);
 }
+
+static int apfs_range_put_reference(struct super_block *sb, u64 paddr, u64 length);
 
 /**
  * apfs_shrink_extent_head - Shrink an extent record in its head
@@ -276,11 +301,7 @@ static int apfs_shrink_extent_head(struct apfs_query *query, struct apfs_dstream
 
 	/* Delete the physical records for the blocks lost in the shrinkage */
 	if (!apfs_ext_is_hole(&extent)) {
-		struct apfs_file_extent head = {0};
-
-		head.phys_block_num = extent.phys_block_num;
-		head.len = head_len;
-		err = apfs_delete_phys_extent(sb, &head);
+		err = apfs_range_put_reference(sb, extent.phys_block_num, head_len);
 		if (err)
 			return err;
 	} else {
@@ -301,8 +322,8 @@ static int apfs_shrink_extent_head(struct apfs_query *query, struct apfs_dstream
  * @dstream:	data stream info
  * @end:	new logical end for the extent
  *
- * Also deletes the physical extent records for the tail. Returns 0 on success
- * or a negative error code in case of failure.
+ * Also puts the physical extent records for the tail. Returns 0 on success or
+ * a negative error code in case of failure.
  */
 static int apfs_shrink_extent_tail(struct apfs_query *query, struct apfs_dstream_info *dstream, u64 end)
 {
@@ -331,11 +352,7 @@ static int apfs_shrink_extent_tail(struct apfs_query *query, struct apfs_dstream
 
 	/* Delete the physical records for the blocks lost in the shrinkage */
 	if (!apfs_ext_is_hole(&extent)) {
-		struct apfs_file_extent tail = {0};
-
-		tail.phys_block_num = extent.phys_block_num + new_blkcount;
-		tail.len = tail_len;
-		err = apfs_delete_phys_extent(sb, &tail);
+		err = apfs_range_put_reference(sb, extent.phys_block_num + new_blkcount, tail_len);
 		if (err)
 			return err;
 	} else {
@@ -406,7 +423,7 @@ static int apfs_update_tail_extent(struct apfs_dstream_info *dstream, const stru
 		goto out;
 
 	if (ret == -ENODATA || !apfs_query_found_extent(query)) {
-		/* We are creting the first extent for the file */
+		/* We are creating the first extent for the file */
 		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
 		if (ret)
 			goto out;
@@ -427,7 +444,7 @@ static int apfs_update_tail_extent(struct apfs_dstream_info *dstream, const stru
 			if (apfs_ext_is_hole(&tail)) {
 				dstream->ds_sparse_bytes -= tail.len;
 			} else if (tail.phys_block_num != extent->phys_block_num) {
-				ret = apfs_delete_phys_extent(sb, &tail);
+				ret = apfs_range_put_reference(sb, tail.phys_block_num, tail.len);
 				if (ret)
 					goto out;
 			}
@@ -593,7 +610,7 @@ search_and_insert:
 		if (apfs_ext_is_hole(&prev_ext)) {
 			dstream->ds_sparse_bytes -= prev_ext.len;
 		} else if (prev_ext.phys_block_num != extent->phys_block_num) {
-			ret = apfs_delete_phys_extent(sb, &prev_ext);
+			ret = apfs_range_put_reference(sb, prev_ext.phys_block_num, prev_ext.len);
 			if (ret)
 				goto out;
 		}
@@ -672,6 +689,34 @@ static int apfs_update_extent(struct apfs_dstream_info *dstream, const struct ap
 }
 #define APFS_UPDATE_EXTENTS_MAXOPS	(1 + 2 * APFS_CRYPTO_ADJ_REFCNT_MAXOPS())
 
+static int apfs_extend_phys_extent(struct apfs_query *query, u64 bno, u64 blkcnt, u64 dstream_id)
+{
+	struct apfs_phys_ext_key raw_key;
+	struct apfs_phys_ext_val raw_val;
+	u64 kind = (u64)APFS_KIND_NEW << APFS_PEXT_KIND_SHIFT;
+
+	apfs_key_set_hdr(APFS_TYPE_EXTENT, bno, &raw_key);
+	raw_val.len_and_kind = cpu_to_le64(kind | blkcnt);
+	raw_val.owning_obj_id = cpu_to_le64(dstream_id);
+	raw_val.refcnt = cpu_to_le32(1);
+	return apfs_btree_replace(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+}
+
+static int apfs_insert_new_phys_extent(struct apfs_query *query, u64 bno, u64 blkcnt, u64 dstream_id)
+{
+	struct apfs_phys_ext_key raw_key;
+	struct apfs_phys_ext_val raw_val;
+	u64 kind = (u64)APFS_KIND_NEW << APFS_PEXT_KIND_SHIFT;
+
+	apfs_key_set_hdr(APFS_TYPE_EXTENT, bno, &raw_key);
+	raw_val.len_and_kind = cpu_to_le64(kind | blkcnt);
+	raw_val.owning_obj_id = cpu_to_le64(dstream_id);
+	raw_val.refcnt = cpu_to_le32(1);
+	return apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+}
+
+static int apfs_phys_ext_from_query(struct apfs_query *query, struct apfs_phys_extent *pext);
+
 /**
  * apfs_insert_phys_extent - Create or grow the physical record for an extent
  * @dstream:	data stream info for the extent
@@ -687,10 +732,9 @@ static int apfs_insert_phys_extent(struct apfs_dstream_info *dstream, const stru
 	struct apfs_node *extref_root;
 	struct apfs_key key;
 	struct apfs_query *query = NULL;
-	struct apfs_phys_ext_key raw_key;
-	struct apfs_phys_ext_val raw_val;
-	u64 kind = (u64)APFS_KIND_NEW << APFS_PEXT_KIND_SHIFT;
+	struct apfs_phys_extent pext;
 	u64 blkcnt = extent->len >> sb->s_blocksize_bits;
+	u64 last_bno, new_base, new_blkcnt;
 	int ret;
 
 	extref_root = apfs_read_node(sb,
@@ -704,31 +748,62 @@ static int apfs_insert_phys_extent(struct apfs_dstream_info *dstream, const stru
 	query = apfs_alloc_query(extref_root, NULL /* parent */);
 	if (!query) {
 		ret = -ENOMEM;
-		goto fail;
+		goto out;
 	}
 
-	apfs_init_extent_key(extent->phys_block_num, &key);
+	/*
+	 * The cached logical extent may have been split into multiple physical
+	 * extents because of clones. If that happens, we want to grow the last
+	 * one.
+	 */
+	last_bno = extent->phys_block_num + blkcnt - 1;
+	apfs_init_extent_key(last_bno, &key);
 	query->key = &key;
-	/* The query is exact for now because we assume single-block extents */
-	query->flags = APFS_QUERY_EXTENTREF | APFS_QUERY_EXACT;
+	query->flags = APFS_QUERY_EXTENTREF;
 
 	ret = apfs_btree_query(sb, &query);
 	if (ret && ret != -ENODATA)
-		goto fail;
+		goto out;
 
-	apfs_key_set_hdr(APFS_TYPE_EXTENT, extent->phys_block_num, &raw_key);
-	raw_val.len_and_kind = cpu_to_le64(kind | blkcnt);
-	raw_val.owning_obj_id = cpu_to_le64(dstream->ds_id);
-	raw_val.refcnt = cpu_to_le32(1);
+	if (ret == -ENODATA) {
+		/* This is a fresh new physical extent */
+		ret = apfs_insert_new_phys_extent(query, extent->phys_block_num, blkcnt, dstream->ds_id);
+		goto out;
+	}
 
+	ret = apfs_phys_ext_from_query(query, &pext);
 	if (ret)
-		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
-					&raw_val, sizeof(raw_val));
-	else
-		ret = apfs_btree_replace(query, &raw_key, sizeof(raw_key),
-					 &raw_val, sizeof(raw_val));
+		goto out;
+	if (pext.bno + pext.blkcount <= extent->phys_block_num) {
+		/* Also a fresh new physical extent */
+		ret = apfs_insert_new_phys_extent(query, extent->phys_block_num, blkcnt, dstream->ds_id);
+		goto out;
+	}
 
-fail:
+	/*
+	 * There is an existing physical extent that overlaps the new one. The
+	 * cache was dirty, so the existing extent can't cover the whole tail.
+	 */
+	if (pext.bno + pext.blkcount >= extent->phys_block_num + blkcnt) {
+		apfs_err(sb, "dirty cache tail covered by existing physical extent 0x%llx-0x%llx", pext.bno, pext.blkcount);
+		ret = -EFSCORRUPTED;
+		goto out;
+	}
+	if (pext.refcnt == 1) {
+		new_base = pext.bno;
+		new_blkcnt = extent->phys_block_num + blkcnt - new_base;
+		ret = apfs_extend_phys_extent(query, new_base, new_blkcnt, dstream->ds_id);
+	} else {
+		/*
+		 * We can't extend this one, because it would extend the other
+		 * references as well.
+		 */
+		new_base = pext.bno + pext.blkcount;
+		new_blkcnt = extent->phys_block_num + blkcnt - new_base;
+		ret = apfs_insert_new_phys_extent(query, new_base, new_blkcnt, dstream->ds_id);
+	}
+
+out:
 	apfs_free_query(query);
 	apfs_node_free(extref_root);
 	return ret;
@@ -760,6 +835,7 @@ static int apfs_phys_ext_from_query(struct apfs_query *query, struct apfs_phys_e
 	pext->blkcount = le64_to_cpu(val->len_and_kind) & APFS_PEXT_LEN_MASK;
 	pext->len = pext->blkcount << sb->s_blocksize_bits;
 	pext->refcnt = le32_to_cpu(val->refcnt);
+	pext->kind = le64_to_cpu(val->len_and_kind) >> APFS_PEXT_KIND_SHIFT;
 	return 0;
 }
 
@@ -776,6 +852,7 @@ static int apfs_free_phys_ext(struct super_block *sb, struct apfs_phys_extent *p
 
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -pext->blkcount);
+	le64_add_cpu(&vsb_raw->apfs_total_blocks_freed, pext->blkcount);
 
 	return apfs_free_queue_insert(sb, pext->bno, pext->blkcount);
 }
@@ -799,8 +876,34 @@ static int apfs_put_phys_extent(struct apfs_phys_extent *pext, struct apfs_query
 		err = apfs_btree_remove(query);
 		if (err)
 			return err;
-		return apfs_free_phys_ext(sb, pext);
+		return pext->kind == APFS_KIND_NEW ? apfs_free_phys_ext(sb, pext) : 0;
 	}
+
+	err = apfs_query_join_transaction(query);
+	if (err)
+		return err;
+	raw = query->node->object.data;
+	val = raw + query->off;
+	val->refcnt = cpu_to_le32(pext->refcnt);
+	return 0;
+}
+
+/**
+ * apfs_take_phys_extent - Increase the reference count for a physical extent
+ * @pext:	physical extent data, already read
+ * @query:	query that found the extent
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_take_phys_extent(struct apfs_phys_extent *pext, struct apfs_query *query)
+{
+	struct apfs_phys_ext_val *val;
+	void *raw;
+	int err;
+
+	/* An update extent may be dropped when a reference is taken */
+	if (++pext->refcnt == 0)
+		return apfs_btree_remove(query);
 
 	err = apfs_query_join_transaction(query);
 	if (err)
@@ -824,89 +927,6 @@ static inline void apfs_set_phys_ext_length(struct apfs_phys_ext_val *pext, u64 
 	u64 kind = len_and_kind & APFS_PEXT_KIND_MASK;
 
 	pext->len_and_kind = cpu_to_le64(kind | len);
-}
-
-/**
- * apfs_shrink_phys_ext_head - Shrink a physical extent record in its head
- * @query:	the query that found the record
- * @start:	new first physical block for the extent
- *
- * Returns 0 on success or a negative error code in case of failure.
- */
-static int apfs_shrink_phys_ext_head(struct apfs_query *query, u64 start)
-{
-	struct super_block *sb = query->node->object.sb;
-	struct apfs_phys_ext_key key;
-	struct apfs_phys_ext_val val;
-	struct apfs_phys_extent pextent;
-	struct apfs_phys_extent head = {0};
-	u64 new_blkcount;
-	void *raw = NULL;
-	int err = 0;
-
-	err = apfs_phys_ext_from_query(query, &pextent);
-	if (err)
-		return err;
-	raw = query->node->object.data;
-	key = *(struct apfs_phys_ext_key *)(raw + query->key_off);
-	val = *(struct apfs_phys_ext_val *)(raw + query->off);
-
-	new_blkcount = pextent.bno + pextent.blkcount - start;
-
-	/* Free the blocks lost in the shrinkage */
-	head.bno = pextent.bno;
-	head.blkcount = pextent.blkcount - new_blkcount;
-	head.len = head.blkcount << sb->s_blocksize_bits;
-	err = apfs_free_phys_ext(sb, &head);
-	if (err)
-		return err;
-
-	/* This is the actual shrinkage of the physical extent */
-	apfs_key_set_hdr(APFS_TYPE_EXTENT, start, &key);
-	apfs_set_phys_ext_length(&val, new_blkcount);
-	return apfs_btree_replace(query, &key, sizeof(key), &val, sizeof(val));
-}
-
-/**
- * apfs_shrink_phys_ext_tail - Shrink a physical extent record in its tail
- * @query:	the query that found the record
- * @end:	new physical block to end the extent
- *
- * Returns 0 on success or a negative error code in case of failure.
- */
-static int apfs_shrink_phys_ext_tail(struct apfs_query *query, u64 end)
-{
-	struct super_block *sb = query->node->object.sb;
-	struct apfs_phys_ext_val *val;
-	struct apfs_phys_extent pextent;
-	struct apfs_phys_extent tail = {0};
-	u64 new_blkcount;
-	void *raw;
-	int err = 0;
-
-	err = apfs_query_join_transaction(query);
-	if (err)
-		return err;
-	raw = query->node->object.data;
-
-	err = apfs_phys_ext_from_query(query, &pextent);
-	if (err)
-		return err;
-	val = raw + query->off;
-
-	new_blkcount = end - pextent.bno;
-
-	/* Free the blocks lost in the shrinkage */
-	tail.bno = end;
-	tail.blkcount = pextent.blkcount - new_blkcount;
-	tail.len = tail.blkcount << sb->s_blocksize_bits;
-	err = apfs_free_phys_ext(sb, &tail);
-	if (err)
-		return err;
-
-	/* This is the actual shrinkage of the logical extent */
-	apfs_set_phys_ext_length(val, new_blkcount);
-	return err;
 }
 
 /**
@@ -951,102 +971,24 @@ static int apfs_split_phys_ext(struct apfs_query *query, u64 div)
 }
 
 /**
- * apfs_delete_phys_extent - Delete (or modify) physical extent records in range
- * @sb:		superblock structure
- * @extent:	range of physical blocks to delete
+ * apfs_create_update_pext - Create a reference update physical extent record
+ * @query:	query that searched for the physical extent
+ * @extent:	range of physical blocks to update
+ * @diff:	reference count change
  *
- * The range to delete must either be a whole extent, the tail of an extent, or
- * a single block. Returns 0 on success or a negative error code in case of
- * failure.
+ * Returns 0 on success or a negative error code in case of failure.
  */
-static int apfs_delete_phys_extent(struct super_block *sb, const struct apfs_file_extent *extent)
+static int apfs_create_update_pext(struct apfs_query *query, const struct apfs_file_extent *extent, u32 diff)
 {
-	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
-	struct apfs_node *extref_root;
-	struct apfs_key key;
-	struct apfs_query *query = NULL;
-	struct apfs_phys_extent prev_ext;
-	u64 del_start, del_end, prev_start, prev_end;
-	bool second_run = false;
-	int ret;
+	struct super_block *sb = query->node->object.sb;
+	struct apfs_phys_ext_key key = {0};
+	struct apfs_phys_ext_val val = {0};
 
-	if (extent->len == 0)
-		return 0;
-
-	extref_root = apfs_read_node(sb,
-				le64_to_cpu(vsb_raw->apfs_extentref_tree_oid),
-				APFS_OBJ_PHYSICAL, true /* write */);
-	if (IS_ERR(extref_root))
-		return PTR_ERR(extref_root);
-	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
-	vsb_raw->apfs_extentref_tree_oid = cpu_to_le64(extref_root->object.oid);
-
-	apfs_init_extent_key(extent->phys_block_num, &key);
-
-search_and_insert:
-	query = apfs_alloc_query(extref_root, NULL /* parent */);
-	if (!query) {
-		ret = -ENOMEM;
-		goto fail;
-	}
-	query->key = &key;
-	query->flags = APFS_QUERY_EXTENTREF;
-
-	ret = apfs_btree_query(sb, &query);
-	if (ret == -ENODATA)
-		ret = -EFSCORRUPTED;
-	if (ret)
-		goto fail;
-
-	ret = apfs_phys_ext_from_query(query, &prev_ext);
-	if (ret)
-		goto fail;
-	del_start = extent->phys_block_num;
-	del_end = del_start + (extent->len >> sb->s_blocksize_bits);
-	prev_start = prev_ext.bno;
-	prev_end = prev_ext.bno + prev_ext.blkcount;
-
-	if (prev_ext.len == extent->len) {
-		/* The range to free is the whole extent */
-		ret = apfs_put_phys_extent(&prev_ext, query);
-	} else if (prev_ext.refcnt > 1) {
-		ret = -EOPNOTSUPP; /* TODO */
-	} else if (prev_start == del_start) {
-		/* The range to free is the first block of the extent */
-		if (extent->len != sb->s_blocksize) {
-			apfs_alert(sb, "deleting a large physical extent's head at 0x%llx", del_start);
-			ret = -EFSCORRUPTED;
-		} else {
-			ret = apfs_shrink_phys_ext_head(query, del_end);
-		}
-	} else if (prev_end == del_end) {
-		/* The range to free is the tail of the extent */
-		ret = apfs_shrink_phys_ext_tail(query, del_start);
-	} else if (prev_start < del_start && prev_end > del_end) {
-		/* The range to free is a block in the middle of the extent */
-		if (second_run) {
-			/* I don't know if this is possible, but be safe */
-			apfs_alert(sb, "recursion splitting physical extents at block 0x%llx", del_start);
-			ret = -EFSCORRUPTED;
-			goto fail;
-		}
-		ret = apfs_split_phys_ext(query, del_end);
-		if (ret)
-			goto fail;
-		/* The split may make the query invalid */
-		apfs_free_query(query);
-		second_run = true;
-		goto search_and_insert;
-	} else {
-		/* I don't know how we got here, be safe */
-		apfs_alert(sb, "strange physical extents at block 0x%llx", del_start);
-		ret = -EFSCORRUPTED;
-	}
-
-fail:
-	apfs_free_query(query);
-	apfs_node_free(extref_root);
-	return ret;
+	apfs_key_set_hdr(APFS_TYPE_EXTENT, extent->phys_block_num, &key);
+	val.len_and_kind = cpu_to_le64((u64)APFS_KIND_UPDATE << APFS_PEXT_KIND_SHIFT | extent->len >> sb->s_blocksize_bits);
+	val.owning_obj_id = cpu_to_le64(APFS_OWNING_OBJ_ID_INVALID);
+	val.refcnt = cpu_to_le32(diff);
+	return apfs_btree_insert(query, &key, sizeof(key), &val, sizeof(val));
 }
 
 /**
@@ -1148,18 +1090,6 @@ out:
 }
 
 /**
- * apfs_size_to_blocks - Return the block count for a given size, rounded up
- * @sb:		filesystem superblock
- * @size:	size in bytes
- *
- * TODO: reuse for inode.c
- */
-static inline u64 apfs_size_to_blocks(struct super_block *sb, u64 size)
-{
-	return (size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
-}
-
-/**
  * apfs_zero_dstream_tail - Zero out stale bytes in a data stream's last block
  * @dstream: data stream info
  *
@@ -1168,8 +1098,9 @@ static inline u64 apfs_size_to_blocks(struct super_block *sb, u64 size)
 static int apfs_zero_dstream_tail(struct apfs_dstream_info *dstream)
 {
 	struct super_block *sb = dstream->ds_sb;
-	struct buffer_head *bh;
-	u64 bno = 0, dstream_blks;
+	struct inode *inode = NULL;
+	struct page *page = NULL;
+	void *fsdata = NULL;
 	int valid_length;
 	int err;
 
@@ -1182,27 +1113,18 @@ static int apfs_zero_dstream_tail(struct apfs_dstream_info *dstream)
 	if (valid_length == 0)
 		return 0;
 
-	dstream_blks = apfs_size_to_blocks(sb, dstream->ds_size);
+	inode = dstream->ds_inode;
+	if (!inode) {
+		/* This should never happen, but be safe */
+		apfs_alert(sb, "attempt to zero the tail of xattr dstream 0x%llx", dstream->ds_id);
+		return -EFSCORRUPTED;
+	}
 
-	err = apfs_logic_to_phys_bno(dstream, dstream_blks - 1, &bno);
+	/* This will take care of the CoW and zeroing */
+	err = __apfs_write_begin(NULL, inode->i_mapping, inode->i_size, 0, 0, &page, &fsdata);
 	if (err)
 		return err;
-	if (bno == 0) /* No stale bytes in holes */
-		return 0;
-
-	bh = apfs_sb_bread(sb, bno);
-	if (!bh)
-		return -EIO;
-
-	/*
-	 * We are only modifying stale data, so no need to join the
-	 * transaction. TODO: snapshots?
-	 */
-	memset(bh->b_data + valid_length, 0, sb->s_blocksize - valid_length);
-	mark_buffer_dirty(bh);
-	sync_dirty_buffer(bh); /* TODO: add to trans but mark as no-CoWed? */
-	brelse(bh);
-	return 0;
+	return __apfs_write_end(NULL, inode->i_mapping, inode->i_size, 0, 0, page, fsdata);
 }
 
 /**
@@ -1219,6 +1141,103 @@ static void apfs_zero_bh_tail(struct super_block *sb, struct buffer_head *bh, u6
 }
 
 /**
+ * apfs_range_in_snap - Check if a given block range overlaps a snapshot
+ * @sb:		filesystem superblock
+ * @bno:	first block in the range
+ * @blkcnt:	block count for the range
+ * @in_snap:	on return, the result
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_range_in_snap(struct super_block *sb, u64 bno, u64 blkcnt, bool *in_snap)
+{
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	struct apfs_node *extref_root = NULL;
+	struct apfs_key key;
+	struct apfs_query *query = NULL;
+	struct apfs_phys_extent pext = {0};
+	int ret;
+
+	/* Avoid the tree queries when we don't even have snapshots */
+	if (vsb_raw->apfs_num_snapshots == 0) {
+		*in_snap = false;
+		return 0;
+	}
+
+	/*
+	 * Now check if the current physical extent tree has an entry for
+	 * these blocks
+	 */
+	extref_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_extentref_tree_oid), APFS_OBJ_PHYSICAL, false /* write */);
+	if (IS_ERR(extref_root))
+		return PTR_ERR(extref_root);
+
+	query = apfs_alloc_query(extref_root, NULL /* parent */);
+	if (!query) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	apfs_init_extent_key(bno, &key);
+	query->key = &key;
+	query->flags = APFS_QUERY_EXTENTREF;
+
+	ret = apfs_btree_query(sb, &query);
+	if (ret && ret != -ENODATA)
+		goto out;
+	if (ret == -ENODATA) {
+		*in_snap = false;
+		ret = 0;
+		goto out;
+	}
+
+	ret = apfs_phys_ext_from_query(query, &pext);
+	if (ret)
+		goto out;
+
+	if (pext.bno <= bno && pext.bno + pext.blkcount >= bno + blkcnt) {
+		if (pext.kind == APFS_KIND_NEW) {
+			*in_snap = false;
+			goto out;
+		}
+	}
+
+	/*
+	 * I think the file extent could still be covered by two different
+	 * physical extents from the current tree, but it's easier to just
+	 * assume the worst here.
+	 */
+	*in_snap = true;
+
+out:
+	apfs_free_query(query);
+	apfs_node_free(extref_root);
+	return ret;
+}
+
+/**
+ * apfs_dstream_cache_in_snap - Check if the cached extent overlaps a snapshot
+ * @dstream:	the data stream to check
+ * @in_snap:	on return, the result
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_dstream_cache_in_snap(struct apfs_dstream_info *dstream, bool *in_snap)
+{
+	struct super_block *sb = dstream->ds_sb;
+	struct apfs_file_extent *cache = NULL;
+
+	/* All changes to extents get flushed when a snaphot is created */
+	if (dstream->ds_ext_dirty) {
+		*in_snap = false;
+		return 0;
+	}
+
+	cache = &dstream->ds_cached_ext;
+	return apfs_range_in_snap(sb, cache->phys_block_num, cache->len >> sb->s_blocksize_bits, in_snap);
+}
+
+/**
  * apfs_dstream_get_new_block - Like the get_block_t function, but for dstreams
  * @dstream:	data stream info
  * @dsblock:	logical dstream block to map
@@ -1231,11 +1250,10 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 {
 	struct super_block *sb = dstream->ds_sb;
 	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
-	struct apfs_file_extent *cache = &dstream->ds_cached_ext;
+	struct apfs_file_extent *cache = NULL;
 	u64 phys_bno, logical_addr, cache_blks, dstream_blks;
+	bool in_snap = true;
 	int err;
-
-	cache_blks = apfs_size_to_blocks(sb, cache->len);
 
 	/* TODO: preallocate tail blocks */
 	logical_addr = dsblock << sb->s_blocksize_bits;
@@ -1245,6 +1263,7 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 		return err;
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+	le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
 	if (bno)
 		*bno = phys_bno;
 
@@ -1269,7 +1288,26 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 		}
 	}
 
-	if (apfs_dstream_cache_is_tail(dstream) &&
+	dstream_blks = apfs_size_to_blocks(sb, dstream->ds_size);
+	if (dstream_blks < dsblock) {
+		/*
+		 * This recurses into apfs_dstream_get_new_block() and dirties
+		 * the extent cache, so it must happen before flushing it.
+		 */
+		err = apfs_zero_dstream_tail(dstream);
+		if (err)
+			return err;
+	}
+
+	err = apfs_dstream_cache_in_snap(dstream, &in_snap);
+	if (err)
+		return err;
+
+	cache = &dstream->ds_cached_ext;
+	cache_blks = apfs_size_to_blocks(sb, cache->len);
+
+	/* TODO: allow dirty caches of several blocks in the middle of a file */
+	if (!in_snap && apfs_dstream_cache_is_tail(dstream) &&
 	    logical_addr == cache->logical_addr + cache->len &&
 	    phys_bno == cache->phys_block_num + cache_blks) {
 		cache->len += sb->s_blocksize;
@@ -1281,11 +1319,12 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 	if (err)
 		return err;
 
-	dstream_blks = apfs_size_to_blocks(sb, dstream->ds_size);
 	if (dstream_blks < dsblock) {
-		err = apfs_zero_dstream_tail(dstream);
-		if (err)
-			return err;
+		/*
+		 * This puts new extents after the reported end of the file, so
+		 * it must happen after the flush to avoid conflict with those
+		 * extent operations.
+		 */
 		err = apfs_create_hole(dstream, dstream_blks, dsblock);
 		if (err)
 			return err;
@@ -1383,7 +1422,7 @@ static int apfs_shrink_dstream_last_extent(struct apfs_dstream_info *dstream, lo
 		if (apfs_ext_is_hole(&tail)) {
 			dstream->ds_sparse_bytes -= tail.len;
 		} else {
-			ret = apfs_delete_phys_extent(sb, &tail);
+			ret = apfs_range_put_reference(sb, tail.phys_block_num, tail.len);
 			if (ret)
 				goto out;
 		}
@@ -1456,4 +1495,461 @@ int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size)
 	new_blks = apfs_size_to_blocks(sb, new_size);
 	old_blks = apfs_size_to_blocks(sb, dstream->ds_size);
 	return apfs_create_hole(dstream, old_blks, new_blks);
+}
+
+loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags)
+{
+	struct inode *src_inode = file_inode(src_file);
+	struct inode *dst_inode = file_inode(dst_file);
+	struct apfs_inode_info *src_ai = APFS_I(src_inode);
+	struct apfs_inode_info *dst_ai = APFS_I(dst_inode);
+	struct apfs_dstream_info *src_ds = &src_ai->i_dstream;
+	struct apfs_dstream_info *dst_ds = &dst_ai->i_dstream;
+	struct super_block *sb = src_inode->i_sb;
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	/* TODO: remember to update the maxops in the future */
+	struct apfs_max_ops maxops = {0};
+	const u64 xfield_flags = APFS_INODE_MAINTAIN_DIR_STATS | APFS_INODE_IS_SPARSE | APFS_INODE_HAS_PURGEABLE_FLAGS;
+	int err;
+
+	if (remap_flags & ~(REMAP_FILE_ADVISORY))
+		return -EINVAL;
+	if (src_inode == dst_inode)
+		return -EINVAL;
+
+	/* We only want to clone whole files, like in the official driver */
+	if (off != 0 || destoff != 0 || len != 0)
+		return -EINVAL;
+
+	/*
+	 * Clones here work in two steps: first the user creates an empty target
+	 * file, and then the user calls the ioctl, which replaces the file with
+	 * a clone. This is not atomic, of course.
+	 */
+	if (dst_ai->i_has_dstream || dst_ai->i_bsd_flags & APFS_INOBSD_COMPRESSED) {
+		apfs_err(sb, "clones can only replace freshly created files");
+		return -EOPNOTSUPP;
+	}
+	if (dst_ai->i_int_flags & xfield_flags) {
+		apfs_err(sb, "clone can't replace a file that has xfields");
+		return -EOPNOTSUPP;
+	}
+
+	if (!src_ai->i_has_dstream) {
+		apfs_err(sb, "can't clone a file with no dstream");
+		return -EOPNOTSUPP;
+	}
+
+	err = apfs_transaction_start(sb, maxops);
+	if (err)
+		return err;
+	apfs_inode_join_transaction(sb, src_inode);
+	apfs_inode_join_transaction(sb, dst_inode);
+
+	err = apfs_flush_extent_cache(src_ds);
+	if (err)
+		goto fail;
+	err = apfs_dstream_adj_refcnt(src_ds, +1);
+	if (err)
+		goto fail;
+	src_ds->ds_shared = true;
+
+	dst_inode->i_mtime = dst_inode->i_ctime = current_time(dst_inode);
+	dst_inode->i_size = src_inode->i_size;
+	dst_ai->i_key_class = src_ai->i_key_class;
+	dst_ai->i_int_flags = src_ai->i_int_flags;
+	dst_ai->i_bsd_flags = src_ai->i_bsd_flags;
+	dst_ai->i_has_dstream = true;
+
+	dst_ds->ds_sb = src_ds->ds_sb;
+	dst_ds->ds_inode = dst_inode;
+	dst_ds->ds_id = src_ds->ds_id;
+	dst_ds->ds_size = src_ds->ds_size;
+	dst_ds->ds_sparse_bytes = src_ds->ds_sparse_bytes;
+	dst_ds->ds_cached_ext = src_ds->ds_cached_ext;
+	dst_ds->ds_ext_dirty = false;
+	dst_ds->ds_shared = true;
+
+	dst_ai->i_int_flags |= APFS_INODE_WAS_EVER_CLONED | APFS_INODE_WAS_CLONED;
+	src_ai->i_int_flags |= APFS_INODE_WAS_EVER_CLONED;
+
+	/*
+	 * The sparse flag is the important one here: if we need it, it will get
+	 * set later by apfs_update_inode(), after the xfield gets created.
+	 */
+	dst_ai->i_int_flags &= ~xfield_flags;
+
+	/*
+	 * Commit the transaction to make sure all buffers in the source inode
+	 * go through copy-on-write. This is a bit excessive, but I don't expect
+	 * clones to be created often enough for it to matter.
+	 */
+	sbi->s_nxi->nx_transaction.t_state |= APFS_NX_TRANS_FORCE_COMMIT;
+	err = apfs_transaction_commit(sb);
+	if (err)
+		goto fail;
+	return dst_ds->ds_size;
+
+fail:
+	apfs_transaction_abort(sb);
+	return err;
+}
+
+/**
+ * apfs_extent_create_record - Create a logical extent record for a dstream id
+ * @sb:		filesystem superblock
+ * @dstream_id:	the dstream id
+ * @extent:	extent info for the record
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_extent_create_record(struct super_block *sb, u64 dstream_id, struct apfs_file_extent *extent)
+{
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_key key;
+	struct apfs_query *query = NULL;
+	struct apfs_file_extent_val raw_val;
+	struct apfs_file_extent_key raw_key;
+	int ret = 0;
+
+	apfs_init_file_extent_key(dstream_id, extent->logical_addr, &key);
+
+	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+	query->key = &key;
+	query->flags = APFS_QUERY_CAT | APFS_QUERY_EXACT;
+
+	ret = apfs_btree_query(sb, &query);
+	if (ret && ret != -ENODATA)
+		goto out;
+
+	apfs_key_set_hdr(APFS_TYPE_FILE_EXTENT, dstream_id, &raw_key);
+	raw_key.logical_addr = cpu_to_le64(extent->logical_addr);
+	raw_val.len_and_flags = cpu_to_le64(extent->len);
+	raw_val.phys_block_num = cpu_to_le64(extent->phys_block_num);
+	raw_val.crypto_id = cpu_to_le64(apfs_vol_is_encrypted(sb) ? dstream_id : 0); /* TODO */
+
+	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+out:
+	apfs_free_query(query);
+	return ret;
+}
+
+/**
+ * apfs_put_single_extent - Put a reference to a single extent
+ * @sb:		filesystem superblock
+ * @paddr_end:	first block after the extent to put
+ * @paddr_min:	don't put references before this block
+ *
+ * Puts a reference to the physical extent range that ends in paddr. Sets
+ * @paddr_end to the beginning of the extent, so that the caller can continue
+ * with the previous one. Returns 0 on success, or a negative error code in
+ * case of failure.
+ *
+ * TODO: unify this with apfs_take_single_extent(), they are almost the same.
+ */
+static int apfs_put_single_extent(struct super_block *sb, u64 *paddr_end, u64 paddr_min)
+{
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	struct apfs_node *extref_root = NULL;
+	struct apfs_key key;
+	struct apfs_query *query = NULL;
+	struct apfs_phys_extent prev_ext;
+	u64 prev_start, prev_end;
+	bool cropped_head = false, cropped_tail = false;
+	struct apfs_file_extent tmp = {0}; /* TODO: clean up all the fake extent interfaces? */
+	int ret;
+
+	extref_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_extentref_tree_oid), APFS_OBJ_PHYSICAL, true /* write */);
+	if (IS_ERR(extref_root))
+		return PTR_ERR(extref_root);
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+	vsb_raw->apfs_extentref_tree_oid = cpu_to_le64(extref_root->object.oid);
+
+	apfs_init_extent_key(*paddr_end - 1, &key);
+
+restart:
+	query = apfs_alloc_query(extref_root, NULL /* parent */);
+	if (!query) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	query->key = &key;
+	query->flags = APFS_QUERY_EXTENTREF;
+
+	ret = apfs_btree_query(sb, &query);
+	if (ret && ret != -ENODATA)
+		goto out;
+
+	if (ret == -ENODATA) {
+		/* The whole range to put is part of a snapshot */
+		tmp.phys_block_num = paddr_min;
+		tmp.len = (*paddr_end - paddr_min) << sb->s_blocksize_bits;
+		ret = apfs_create_update_pext(query, &tmp, -1);
+		*paddr_end = paddr_min;
+		goto out;
+	}
+
+	ret = apfs_phys_ext_from_query(query, &prev_ext);
+	if (ret)
+		goto out;
+	prev_start = prev_ext.bno;
+	prev_end = prev_ext.bno + prev_ext.blkcount;
+	if (prev_end < *paddr_end) {
+		/* The extent to put is part of a snapshot */
+		tmp.phys_block_num = MAX(prev_end, paddr_min);
+		tmp.len = (*paddr_end - tmp.phys_block_num) << sb->s_blocksize_bits;
+		ret = apfs_create_update_pext(query, &tmp, -1);
+		*paddr_end = tmp.phys_block_num;
+		goto out;
+	}
+
+	if ((cropped_tail && prev_end > *paddr_end) || (cropped_head && prev_start < paddr_min)) {
+		/* This should never happen, but be safe */
+		apfs_alert(sb, "recursion cropping physical extent 0x%llx-0x%llx", prev_start, prev_end);
+		ret = -EFSCORRUPTED;
+		goto out;
+	}
+
+	if (prev_end > *paddr_end) {
+		ret = apfs_split_phys_ext(query, *paddr_end);
+		if (ret)
+			goto out;
+		/* The split may make the query invalid */
+		apfs_free_query(query);
+		cropped_tail = true;
+		goto restart;
+	}
+
+	if (prev_start < paddr_min) {
+		ret = apfs_split_phys_ext(query, paddr_min);
+		if (ret)
+			goto out;
+		/* The split may make the query invalid */
+		apfs_free_query(query);
+		cropped_head = true;
+		goto restart;
+	}
+
+	/* The extent to put already exists */
+	ret = apfs_put_phys_extent(&prev_ext, query);
+	*paddr_end = prev_start;
+
+out:
+	apfs_free_query(query);
+	apfs_node_free(extref_root);
+	return ret;
+}
+
+/**
+ * apfs_range_put_reference - Put a reference to a physical range
+ * @sb:		filesystem superblock
+ * @paddr:	first block of the range
+ * @length:	length of the range (in bytes)
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_range_put_reference(struct super_block *sb, u64 paddr, u64 length)
+{
+	u64 extent_end;
+	int err;
+
+	ASSERT(paddr);
+
+	extent_end = paddr + (length >> sb->s_blocksize_bits);
+	while (extent_end > paddr) {
+		err = apfs_put_single_extent(sb, &extent_end, paddr);
+		if (err)
+			return err;
+	}
+	return 0;
+}
+
+/**
+ * apfs_take_single_extent - Take a reference to a single extent
+ * @sb:		filesystem superblock
+ * @paddr_end:	first block after the extent to take
+ * @paddr_min:	don't take references before this block
+ *
+ * Takes a reference to the physical extent range that ends in paddr. Sets
+ * @paddr_end to the beginning of the extent, so that the caller can continue
+ * with the previous one. Returns 0 on success, or a negative error code in
+ * case of failure.
+ */
+static int apfs_take_single_extent(struct super_block *sb, u64 *paddr_end, u64 paddr_min)
+{
+	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	struct apfs_node *extref_root = NULL;
+	struct apfs_key key;
+	struct apfs_query *query = NULL;
+	struct apfs_phys_extent prev_ext;
+	u64 prev_start, prev_end;
+	bool cropped_head = false, cropped_tail = false;
+	struct apfs_file_extent tmp = {0}; /* TODO: clean up all the fake extent interfaces? */
+	int ret;
+
+	extref_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_extentref_tree_oid), APFS_OBJ_PHYSICAL, true /* write */);
+	if (IS_ERR(extref_root))
+		return PTR_ERR(extref_root);
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+	vsb_raw->apfs_extentref_tree_oid = cpu_to_le64(extref_root->object.oid);
+
+	apfs_init_extent_key(*paddr_end - 1, &key);
+
+restart:
+	query = apfs_alloc_query(extref_root, NULL /* parent */);
+	if (!query) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	query->key = &key;
+	query->flags = APFS_QUERY_EXTENTREF;
+
+	ret = apfs_btree_query(sb, &query);
+	if (ret && ret != -ENODATA)
+		goto out;
+
+	if (ret == -ENODATA) {
+		/* The whole range to take is part of a snapshot */
+		tmp.phys_block_num = paddr_min;
+		tmp.len = (*paddr_end - paddr_min) << sb->s_blocksize_bits;
+		ret = apfs_create_update_pext(query, &tmp, +1);
+		*paddr_end = paddr_min;
+		goto out;
+	}
+
+	ret = apfs_phys_ext_from_query(query, &prev_ext);
+	if (ret)
+		goto out;
+	prev_start = prev_ext.bno;
+	prev_end = prev_ext.bno + prev_ext.blkcount;
+	if (prev_end < *paddr_end) {
+		/* The extent to take is part of a snapshot */
+		tmp.phys_block_num = MAX(prev_end, paddr_min);
+		tmp.len = (*paddr_end - tmp.phys_block_num) << sb->s_blocksize_bits;
+		ret = apfs_create_update_pext(query, &tmp, +1);
+		*paddr_end = tmp.phys_block_num;
+		goto out;
+	}
+
+	if ((cropped_tail && prev_end > *paddr_end) || (cropped_head && prev_start < paddr_min)) {
+		/* This should never happen, but be safe */
+		apfs_alert(sb, "recursion cropping physical extent 0x%llx-0x%llx", prev_start, prev_end);
+		ret = -EFSCORRUPTED;
+		goto out;
+	}
+
+	if (prev_end > *paddr_end) {
+		ret = apfs_split_phys_ext(query, *paddr_end);
+		if (ret)
+			goto out;
+		/* The split may make the query invalid */
+		apfs_free_query(query);
+		cropped_tail = true;
+		goto restart;
+	}
+
+	if (prev_start < paddr_min) {
+		ret = apfs_split_phys_ext(query, paddr_min);
+		if (ret)
+			goto out;
+		/* The split may make the query invalid */
+		apfs_free_query(query);
+		cropped_head = true;
+		goto restart;
+	}
+
+	/* The extent to take already exists */
+	ret = apfs_take_phys_extent(&prev_ext, query);
+	*paddr_end = prev_start;
+
+out:
+	apfs_free_query(query);
+	apfs_node_free(extref_root);
+	return ret;
+}
+
+/**
+ * apfs_range_take_reference - Take a reference to a physical range
+ * @sb:		filesystem superblock
+ * @paddr:	first block of the range
+ * @length:	length of the range (in bytes)
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_range_take_reference(struct super_block *sb, u64 paddr, u64 length)
+{
+	u64 extent_end;
+	int err;
+
+	ASSERT(paddr);
+
+	extent_end = paddr + (length >> sb->s_blocksize_bits);
+	while (extent_end > paddr) {
+		err = apfs_take_single_extent(sb, &extent_end, paddr);
+		if (err)
+			return err;
+	}
+	return 0;
+}
+
+/**
+ * apfs_clone_single_extent - Make a copy of an extent in a dstream to a new one
+ * @dstream:	old dstream
+ * @new_id:	id of the new dstream
+ * @log_addr:	logical address for the extent
+ *
+ * Duplicates the logical extent, and updates the references to the physical
+ * extents as required. Sets @addr to the end of the extent, so that the caller
+ * can continue in the same place. Returns 0 on success, or a negative error
+ * code in case of failure.
+ */
+static int apfs_clone_single_extent(struct apfs_dstream_info *dstream, u64 new_id, u64 *log_addr)
+{
+	struct super_block *sb = dstream->ds_sb;
+	struct apfs_file_extent extent;
+	int err;
+
+	err = apfs_extent_read(dstream, *log_addr >> sb->s_blocksize_bits, &extent);
+	if (err) {
+		apfs_err(sb, "failed to read an extent to clone for dstream 0x%llx", dstream->ds_id);
+		return err;
+	}
+	err = apfs_extent_create_record(sb, new_id, &extent);
+	if (err) {
+		apfs_err(sb, "failed to create extent record for clone of dstream 0x%llx", dstream->ds_id);
+		return err;
+	}
+
+	if (!apfs_ext_is_hole(&extent)) {
+		err = apfs_range_take_reference(sb, extent.phys_block_num, extent.len);
+		if (err) {
+			apfs_err(sb, "failed to take a reference to physical range 0x%llx-0x%llx\n", extent.phys_block_num, extent.len);
+			return err;
+		}
+	}
+
+	*log_addr += extent.len;
+	return 0;
+}
+
+/**
+ * apfs_clone_extents - Make a copy of all extents in a dstream to a new one
+ * @dstream:	old dstream
+ * @new_id:	id for the new dstream
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+int apfs_clone_extents(struct apfs_dstream_info *dstream, u64 new_id)
+{
+	u64 next = 0;
+	int err;
+
+	while (next < dstream->ds_size) {
+		err = apfs_clone_single_extent(dstream, new_id, &next);
+		if (err)
+			return err;
+	}
+	return 0;
 }

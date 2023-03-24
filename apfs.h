@@ -133,6 +133,13 @@ struct apfs_spaceman {
 	u32 sm_cib_count;		/* Number of chunk-info blocks */
 	u64 sm_free_count;		/* Number of free blocks */
 	u32 sm_addr_offset;		/* Offset of cib addresses in @sm_raw */
+
+	/*
+	 * A range of freed blocks not yet put in the free queue. Extend this as
+	 * much as possible before creating an actual record.
+	 */
+	u64 sm_free_cache_base;
+	u64 sm_free_cache_blkcnt;
 };
 
 #define TRANSACTION_MAIN_QUEUE_MAX	4096
@@ -660,6 +667,7 @@ struct apfs_phys_extent {
 	u64 blkcount;
 	u64 len;	/* In bytes */
 	u32 refcnt;
+	u8 kind;
 };
 
 /*
@@ -667,12 +675,14 @@ struct apfs_phys_extent {
  */
 struct apfs_dstream_info {
 	struct super_block	*ds_sb;		/* Filesystem superblock */
+	struct inode		*ds_inode;	/* NULL for xattr dstreams */
 	u64			ds_id;		/* ID of the extent records */
 	u64			ds_size;	/* Length of the stream */
 	u64			ds_sparse_bytes;/* Hole byte count in stream */
 	struct apfs_file_extent	ds_cached_ext;	/* Latest extent record */
 	bool			ds_ext_dirty;	/* Is ds_cached_ext dirty? */
 	spinlock_t		ds_ext_lock;	/* Protects ds_cached_ext */
+	bool			ds_shared;	/* Has multiple references? */
 };
 
 /**
@@ -871,6 +881,8 @@ extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			      struct buffer_head *bh_result, int create);
 extern int APFS_GET_NEW_BLOCK_MAXOPS(void);
 extern int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size);
+extern loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags);
+extern int apfs_clone_extents(struct apfs_dstream_info *dstream, u64 new_id);
 
 /* file.c */
 extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync);
@@ -884,7 +896,11 @@ extern struct inode *apfs_new_inode(struct inode *dir, umode_t mode,
 				    dev_t rdev);
 extern int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 				 struct dentry *dentry);
+extern int apfs_inode_create_exclusive_dstream(struct inode *inode);
 extern int APFS_CREATE_INODE_REC_MAXOPS(void);
+extern int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata);
+extern int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata);
+extern int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 extern int apfs_setattr(struct dentry *dentry, struct iattr *iattr);
@@ -977,6 +993,7 @@ extern int apfs_switch_to_snapshot(struct super_block *sb);
 
 /* spaceman.c */
 extern int apfs_read_spaceman(struct super_block *sb);
+extern int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count);
 extern int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count);
 extern int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backwards);
 

@@ -33,7 +33,6 @@ static int apfs_create_superblock_snapshot(struct super_block *sb, u64 *bno)
 		goto fail;
 	}
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
-	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
 
 	curr_bh = sbi->s_vobject.o_bh;
 	memcpy(snap_bh->b_data, curr_bh->b_data, sb->s_blocksize);
@@ -108,11 +107,14 @@ static int apfs_create_snap_metadata_rec(struct inode *mntpoint, struct apfs_nod
 	now = current_time(mntpoint);
 	raw_val->create_time = cpu_to_le64(timespec64_to_ns(&now));
 	raw_val->change_time = raw_val->create_time;
-	raw_val->inum = 0; /* TODO: what is this? */
 	raw_val->extentref_tree_type = vsb_raw->apfs_extentref_tree_type;
 	raw_val->flags = 0;
 	raw_val->name_len = cpu_to_le16(name_len + 1); /* Count the null byte */
 	strcpy(raw_val->name, name);
+
+	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+	raw_val->inum = vsb_raw->apfs_next_obj_id;
+	le64_add_cpu(&vsb_raw->apfs_next_obj_id, 1);
 
 	err = apfs_btree_insert(query, &raw_key, sizeof(raw_key), raw_val, val_len);
 fail:
@@ -342,11 +344,11 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name)
 	 */
 	err = apfs_transaction_flush_all_inodes(sb);
 	if (err)
-		return err;
+		goto fail;
 
 	err = apfs_create_superblock_snapshot(sb, &sblock_oid);
 	if (err)
-		return err;
+		goto fail;
 
 	err = apfs_create_snap_meta_records(mntpoint, name, sblock_oid);
 	if (err)
