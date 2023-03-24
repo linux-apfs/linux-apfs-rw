@@ -1708,7 +1708,7 @@ int apfs_setattr(struct mnt_idmap *idmap,
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	err = setattr_prepare(dentry, iattr);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 	err = setattr_prepare(&init_user_ns, dentry, iattr);
 #else
 	err = setattr_prepare(&nop_mnt_idmap, dentry, iattr);
