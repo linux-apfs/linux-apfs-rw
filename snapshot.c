@@ -404,8 +404,10 @@ int apfs_ioc_take_snapshot(struct file *file, void __user *user_arg)
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	if (!inode_owner_or_capable(inode))
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 	if (!inode_owner_or_capable(&init_user_ns, inode))
+#else
+	if (!inode_owner_or_capable(&nop_mnt_idmap, inode))
 #endif
 		return -EPERM;
 
