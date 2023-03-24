@@ -33,7 +33,7 @@ static struct dentry *apfs_lookup(struct inode *dir, struct dentry *dentry,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 static int apfs_symlink(struct inode *dir, struct dentry *dentry,
 			const char *symname)
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 static int apfs_symlink(struct user_namespace *mnt_userns, struct inode *dir,
 			struct dentry *dentry, const char *symname)
 #else
