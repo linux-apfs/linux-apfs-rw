@@ -42,8 +42,10 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 	apfs_inode_join_transaction(sb, inode);
 
 	err = apfs_inode_create_exclusive_dstream(inode);
-	if (err)
+	if (err) {
+		apfs_err(sb, "dstream creation failed for ino 0x%llx", apfs_ino(inode));
 		goto out_abort;
+	}
 
 	lock_page(page);
 	wait_for_stable_page(page);
@@ -77,8 +79,10 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 	unlock_page(page); /* XXX: race? */
 
 	err = block_page_mkwrite(vma, vmf, apfs_get_new_block);
-	if (err)
+	if (err) {
+		apfs_err(sb, "mkwrite failed for ino 0x%llx", apfs_ino(inode));
 		goto out_abort;
+	}
 	set_page_dirty(page);
 
 	/* An immediate commit would leave the page unlocked */

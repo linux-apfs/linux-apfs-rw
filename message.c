@@ -6,8 +6,9 @@
 #include <linux/fs.h>
 #include "apfs.h"
 
-void apfs_msg(struct super_block *sb, const char *prefix, const char *fmt, ...)
+void apfs_msg(struct super_block *sb, const char *prefix, const char *func, int line, const char *fmt, ...)
 {
+	char *sb_id = NULL;
 	struct va_format vaf;
 	va_list args;
 
@@ -16,7 +17,13 @@ void apfs_msg(struct super_block *sb, const char *prefix, const char *fmt, ...)
 	vaf.fmt = fmt;
 	vaf.va = &args;
 
-	printk("%sAPFS (%s): %pV\n", prefix, sb->s_id, &vaf);
+	/* The superblock is not available to all callers */
+	sb_id = sb ? sb->s_id : "?";
+
+	if (func)
+		printk("%sAPFS (%s): %pV (%s:%d)\n", prefix, sb_id, &vaf, func, line);
+	else
+		printk("%sAPFS (%s): %pV\n", prefix, sb_id, &vaf);
 
 	va_end(args);
 }

@@ -35,6 +35,7 @@ static const char *apfs_get_link(struct dentry *dentry, struct inode *inode,
 	size = __apfs_xattr_get(inode, APFS_XATTR_NAME_SYMLINK,
 				NULL /* buffer */, 0 /* size */);
 	if (size < 0) { /* TODO: return a better error code */
+		apfs_err(sb, "symlink size read failed");
 		err = size;
 		goto fail;
 	}
@@ -47,13 +48,13 @@ static const char *apfs_get_link(struct dentry *dentry, struct inode *inode,
 
 	size = __apfs_xattr_get(inode, APFS_XATTR_NAME_SYMLINK, target, size);
 	if (size < 0) {
+		apfs_err(sb, "symlink read failed");
 		err = size;
 		goto fail;
 	}
 	if (size == 0 || *(target + size - 1) != 0) {
 		/* Target path must be NULL-terminated */
-		apfs_alert(sb, "bad link target in inode 0x%llx",
-			   apfs_ino(inode));
+		apfs_err(sb, "bad link target in inode 0x%llx", apfs_ino(inode));
 		err = -EFSCORRUPTED;
 		goto fail;
 	}

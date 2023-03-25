@@ -22,6 +22,7 @@
  */
 static int apfs_drec_from_query(struct apfs_query *query, struct apfs_drec *drec, bool hashed)
 {
+	struct super_block *sb = query->node->object.sb;
 	char *raw = query->node->object.data;
 	struct apfs_drec_hashed_key *de_hkey = NULL;
 	struct apfs_drec_key *de_ukey = NULL;
@@ -30,28 +31,37 @@ static int apfs_drec_from_query(struct apfs_query *query, struct apfs_drec *drec
 	char *xval = NULL, *name;
 
 	namelen = query->key_len - (hashed ? sizeof(*de_hkey) : sizeof(*de_ukey));
-	if (namelen < 1)
+	if (namelen < 1) {
+		apfs_err(sb, "key is too small (%d)", query->key_len);
 		return -EFSCORRUPTED;
-	if (query->len < sizeof(*de))
+	}
+	if (query->len < sizeof(*de)) {
+		apfs_err(sb, "value is too small (%d)", query->len);
 		return -EFSCORRUPTED;
+	}
 
 	de = (struct apfs_drec_val *)(raw + query->off);
 	if (hashed) {
 		de_hkey = (struct apfs_drec_hashed_key *)(raw + query->key_off);
-		if (namelen != (le32_to_cpu(de_hkey->name_len_and_hash) &
-				APFS_DREC_LEN_MASK))
+		if (namelen != (le32_to_cpu(de_hkey->name_len_and_hash) & APFS_DREC_LEN_MASK)) {
+			apfs_err(sb, "inconsistent name length");
 			return -EFSCORRUPTED;
+		}
 		name = de_hkey->name;
 	} else {
 		de_ukey = (struct apfs_drec_key *)(raw + query->key_off);
-		if (namelen != le16_to_cpu(de_ukey->name_len))
+		if (namelen != le16_to_cpu(de_ukey->name_len)) {
+			apfs_err(sb, "inconsistent name length");
 			return -EFSCORRUPTED;
+		}
 		name = de_ukey->name;
 	}
 
 	/* Filename must be NULL-terminated */
-	if (name[namelen - 1] != 0)
+	if (name[namelen - 1] != 0) {
+		apfs_err(sb, "null termination missing");
 		return -EFSCORRUPTED;
+	}
 
 	/* The dentry may have at most one xfield: the sibling id */
 	drec->sibling_id = 0;
@@ -121,6 +131,8 @@ static struct apfs_query *apfs_dentry_lookup(struct inode *dir,
 	return query;
 
 fail:
+	if (err != -ENODATA)
+		apfs_err(sb, "query failed in dir 0x%llx", cnid);
 	apfs_free_query(query);
 	return ERR_PTR(err);
 }
@@ -365,8 +377,10 @@ static int apfs_create_dentry_rec(struct inode *inode, struct qstr *qname,
 	query->flags |= APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed in dir 0x%llx (hash 0x%llx)", parent_id, key.number);
 		goto fail;
+	}
 
 	if (hashed)
 		key_len = apfs_build_dentry_hashed_key(qname, key.number, parent_id,
@@ -386,6 +400,8 @@ static int apfs_create_dentry_rec(struct inode *inode, struct qstr *qname,
 	}
 	/* TODO: deal with hash collisions */
 	ret = apfs_btree_insert(query, raw_key, key_len, raw_val, val_len);
+	if (ret)
+		apfs_err(sb, "insertion failed in dir 0x%llx (hash 0x%llx)", parent_id, key.number);
 
 fail:
 	kfree(raw_val);
@@ -452,8 +468,10 @@ static int apfs_create_sibling_link_rec(struct dentry *dentry,
 	query->flags |= APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for ino 0x%llx, sibling 0x%llx", apfs_ino(inode), sibling_id);
 		goto fail;
+	}
 
 	apfs_key_set_hdr(APFS_TYPE_SIBLING_LINK, apfs_ino(inode), &raw_key);
 	raw_key.sibling_id = cpu_to_le64(sibling_id);
@@ -461,8 +479,9 @@ static int apfs_create_sibling_link_rec(struct dentry *dentry,
 	if (val_len < 0)
 		goto fail;
 
-	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
-				raw_val, val_len);
+	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), raw_val, val_len);
+	if (ret)
+		apfs_err(sb, "insertion failed for ino 0x%llx, sibling 0x%llx", apfs_ino(inode), sibling_id);
 	kfree(raw_val);
 
 fail:
@@ -498,14 +517,17 @@ static int apfs_create_sibling_map_rec(struct dentry *dentry,
 	query->flags |= APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for sibling 0x%llx", sibling_id);
 		goto fail;
+	}
 
 	apfs_key_set_hdr(APFS_TYPE_SIBLING_MAP, sibling_id, &raw_key);
 	raw_val.file_id = cpu_to_le64(apfs_ino(inode));
 
-	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
-				&raw_val, sizeof(raw_val));
+	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+	if (ret)
+		apfs_err(sb, "insertion failed for sibling 0x%llx", sibling_id);
 
 fail:
 	apfs_free_query(query);
@@ -558,6 +580,7 @@ static int apfs_create_sibling_recs(struct dentry *dentry,
  */
 static int apfs_create_dentry(struct dentry *dentry, struct inode *inode)
 {
+	struct super_block *sb = inode->i_sb;
 	struct inode *parent = d_inode(dentry->d_parent);
 	u64 sibling_id = 0;
 	int err;
@@ -565,14 +588,17 @@ static int apfs_create_dentry(struct dentry *dentry, struct inode *inode)
 	if (inode->i_nlink > 1) {
 		/* This is optional for a single link, so don't waste space */
 		err = apfs_create_sibling_recs(dentry, inode, &sibling_id);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to create sibling recs for ino 0x%llx", apfs_ino(inode));
 			return err;
+		}
 	}
 
-	err = apfs_create_dentry_rec(inode, &dentry->d_name,
-				     apfs_ino(parent), sibling_id);
-	if (err)
+	err = apfs_create_dentry_rec(inode, &dentry->d_name, apfs_ino(parent), sibling_id);
+	if (err) {
+		apfs_err(sb, "failed to create drec for ino 0x%llx", apfs_ino(inode));
 		return err;
+	}
 
 	/* Now update the parent inode */
 	parent->i_mtime = parent->i_ctime = current_time(inode);
@@ -629,20 +655,28 @@ int apfs_mkany(struct inode *dir, struct dentry *dentry, umode_t mode,
 	}
 
 	err = apfs_create_inode_rec(sb, inode, dentry);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to create inode rec for ino 0x%llx", apfs_ino(inode));
 		goto out_discard_inode;
+	}
 
 	err = apfs_create_dentry(dentry, inode);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to create dentry recs for ino 0x%llx", apfs_ino(inode));
 		goto out_discard_inode;
+	}
 
 	if (symname) {
 		err = apfs_xattr_set(inode, APFS_XATTR_NAME_SYMLINK, symname,
 				     strlen(symname) + 1, 0 /* flags */);
-		if (err == -ERANGE)
+		if (err == -ERANGE) {
 			err = -ENAMETOOLONG;
-		if (err)
 			goto out_undo_create;
+		}
+		if (err) {
+			apfs_err(sb, "failed to set symlink xattr for ino 0x%llx", apfs_ino(inode));
+			goto out_undo_create;
+		}
 	}
 
 	err = apfs_transaction_commit(sb);
@@ -744,14 +778,17 @@ int apfs_create(struct mnt_idmap *idmap, struct inode *dir,
 static int apfs_prepare_dentry_for_link(struct dentry *dentry)
 {
 	struct inode *parent = d_inode(dentry->d_parent);
+	struct super_block *sb = parent->i_sb;
 	struct apfs_query *query;
 	struct apfs_drec drec;
 	u64 sibling_id;
 	int ret;
 
 	query = apfs_dentry_lookup(parent, &dentry->d_name, &drec);
-	if (IS_ERR(query))
+	if (IS_ERR(query)) {
+		apfs_err(sb, "lookup failed in dir 0x%llx", apfs_ino(parent));
 		return PTR_ERR(query);
+	}
 	if (drec.sibling_id) {
 		/* This dentry already has a sibling id xfield */
 		apfs_free_query(query);
@@ -761,12 +798,16 @@ static int apfs_prepare_dentry_for_link(struct dentry *dentry)
 	/* Don't modify the dentry record, just delete it to make a new one */
 	ret = apfs_btree_remove(query);
 	apfs_free_query(query);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "removal failed in dir 0x%llx", apfs_ino(parent));
 		return ret;
+	}
 
 	ret = apfs_create_sibling_recs(dentry, d_inode(dentry), &sibling_id);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "failed to create sibling recs in dir 0x%llx", apfs_ino(parent));
 		return ret;
+	}
 	return apfs_create_dentry_rec(d_inode(dentry), &dentry->d_name,
 				      apfs_ino(parent), sibling_id);
 }
@@ -795,6 +836,7 @@ static void __apfs_undo_link(struct dentry *dentry, struct inode *inode)
 static int __apfs_link(struct dentry *old_dentry, struct dentry *dentry)
 {
 	struct inode *inode = d_inode(old_dentry);
+	struct super_block *sb = inode->i_sb;
 	int err;
 
 	/* First update the inode's link count */
@@ -805,13 +847,17 @@ static int __apfs_link(struct dentry *old_dentry, struct dentry *dentry)
 	if (inode->i_nlink == 2) {
 		/* A single link may lack sibling records, so create them now */
 		err = apfs_prepare_dentry_for_link(old_dentry);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to prepare original dentry");
 			goto fail;
+		}
 	}
 
 	err = apfs_create_dentry(dentry, inode);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to create new dentry");
 		goto fail;
+	}
 	return 0;
 
 fail:
@@ -887,9 +933,13 @@ static int apfs_delete_sibling_link_rec(struct dentry *dentry, u64 sibling_id)
 		/* A dentry with a sibling id must have sibling records */
 		ret = -EFSCORRUPTED;
 	}
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "query failed for ino 0x%llx, sibling 0x%llx", apfs_ino(inode), sibling_id);
 		goto fail;
+	}
 	ret = apfs_btree_remove(query);
+	if (ret)
+		apfs_err(sb, "removal failed for ino 0x%llx, sibling 0x%llx", apfs_ino(inode), sibling_id);
 
 fail:
 	apfs_free_query(query);
@@ -926,9 +976,13 @@ static int apfs_delete_sibling_map_rec(struct dentry *dentry, u64 sibling_id)
 		/* A dentry with a sibling id must have sibling records */
 		ret = -EFSCORRUPTED;
 	}
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "query failed for sibling 0x%llx", sibling_id);
 		goto fail;
+	}
 	ret = apfs_btree_remove(query);
+	if (ret)
+		apfs_err(sb, "removal failed for sibling 0x%llx", sibling_id);
 
 fail:
 	apfs_free_query(query);
@@ -957,16 +1011,22 @@ static int apfs_delete_dentry(struct dentry *dentry)
 		return PTR_ERR(query);
 	err = apfs_btree_remove(query);
 	apfs_free_query(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "drec removal failed");
 		return err;
+	}
 
 	if (drec.sibling_id) {
 		err = apfs_delete_sibling_link_rec(dentry, drec.sibling_id);
-		if (err)
+		if (err) {
+			apfs_err(sb, "sibling link removal failed");
 			return err;
+		}
 		err = apfs_delete_sibling_map_rec(dentry, drec.sibling_id);
-		if (err)
+		if (err) {
+			apfs_err(sb, "sibling map removal failed");
 			return err;
+		}
 	}
 
 	/* Now update the parent inode */
@@ -1005,19 +1065,26 @@ static inline void apfs_undo_delete_dentry(struct dentry *dentry)
 static int apfs_sibling_link_from_query(struct apfs_query *query,
 					char **name, u64 *parent)
 {
+	struct super_block *sb = query->node->object.sb;
 	char *raw = query->node->object.data;
 	struct apfs_sibling_val *siblink;
 	int namelen = query->len - sizeof(*siblink);
 
-	if (namelen < 1)
+	if (namelen < 1) {
+		apfs_err(sb, "value is too small (%d)", query->len);
 		return -EFSCORRUPTED;
+	}
 	siblink = (struct apfs_sibling_val *)(raw + query->off);
 
-	if (namelen != le16_to_cpu(siblink->name_len))
+	if (namelen != le16_to_cpu(siblink->name_len)) {
+		apfs_err(sb, "inconsistent name length");
 		return -EFSCORRUPTED;
+	}
 	/* Filename must be NULL-terminated */
-	if (siblink->name[namelen - 1] != 0)
+	if (siblink->name[namelen - 1] != 0) {
+		apfs_err(sb, "null termination missing");
 		return -EFSCORRUPTED;
+	}
 
 	*name = kmalloc(namelen, GFP_KERNEL);
 	if (!*name)
@@ -1060,14 +1127,20 @@ static int apfs_find_primary_link(struct inode *inode, char **name, u64 *parent)
 		if (err == -ENODATA) /* No more link records */
 			break;
 		kfree(*name);
-		if (err)
+		if (err) {
+			apfs_err(sb, "query failed for ino 0x%llx", apfs_ino(inode));
 			goto fail;
+		}
 
 		err = apfs_sibling_link_from_query(query, name, parent);
-		if (err)
+		if (err) {
+			apfs_err(sb, "bad sibling link record for ino 0x%llx", apfs_ino(inode));
 			goto fail;
+		}
 	}
 	err = *name ? 0 : -EFSCORRUPTED; /* Sibling records must exist */
+	if (err)
+		apfs_err(sb, "query failed for ino 0x%llx", apfs_ino(inode));
 
 fail:
 	apfs_free_query(query);
@@ -1114,10 +1187,11 @@ static int apfs_create_orphan_link(struct inode *inode)
 	err = apfs_orphan_name(inode, &qname);
 	if (err)
 		return err;
-	err = apfs_create_dentry_rec(inode, &qname, apfs_ino(priv_dir),
-				     0 /* sibling_id */);
-	if (err)
+	err = apfs_create_dentry_rec(inode, &qname, apfs_ino(priv_dir), 0 /* sibling_id */);
+	if (err) {
+		apfs_err(sb, "failed to create drec for ino 0x%llx", apfs_ino(inode));
 		goto fail;
+	}
 
 	/* Now update the child count for private-dir */
 	priv_dir->i_mtime = priv_dir->i_ctime = current_time(priv_dir);
@@ -1153,13 +1227,16 @@ int apfs_delete_orphan_link(struct inode *inode)
 
 	query = apfs_dentry_lookup(priv_dir, &qname, &drec);
 	if (IS_ERR(query)) {
+		apfs_err(sb, "dentry lookup failed");
 		err = PTR_ERR(query);
 		query = NULL;
 		goto fail;
 	}
 	err = apfs_btree_remove(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "dentry removal failed");
 		goto fail;
+	}
 
 	/* Now update the child count for private-dir */
 	priv_dir->i_mtime = priv_dir->i_ctime = current_time(priv_dir);
@@ -1228,13 +1305,16 @@ static void apfs_vol_filecnt_dec(struct inode *orphan)
 static int __apfs_unlink(struct inode *dir, struct dentry *dentry)
 {
 	struct inode *inode = d_inode(dentry);
+	struct super_block *sb = inode->i_sb;
 	struct apfs_inode_info *ai = APFS_I(inode);
 	char *primary_name = NULL;
 	int err;
 
 	err = apfs_delete_dentry(dentry);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to delete dentry recs for ino 0x%llx", apfs_ino(inode));
 		return err;
+	}
 
 	drop_nlink(inode);
 	if (!inode->i_nlink) {
@@ -1253,6 +1333,8 @@ static int __apfs_unlink(struct inode *dir, struct dentry *dentry)
 	inode->i_ctime = dir->i_ctime;
 	/* TODO: defer write of the primary name? */
 	err = apfs_update_inode(inode, primary_name);
+	if (err)
+		apfs_err(sb, "inode update failed for 0x%llx", apfs_ino(inode));
 
 fail:
 	kfree(primary_name);
@@ -1340,17 +1422,23 @@ int apfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
 
 	if (new_inode) {
 		err = __apfs_unlink(new_dir, new_dentry);
-		if (err)
+		if (err) {
+			apfs_err(sb, "unlink failed for replaced dentry");
 			goto out_abort;
+		}
 	}
 
 	err = __apfs_link(old_dentry, new_dentry);
-	if (err)
+	if (err) {
+		apfs_err(sb, "link failed for new dentry");
 		goto out_undo_unlink_new;
+	}
 
 	err = __apfs_unlink(old_dir, old_dentry);
-	if (err)
+	if (err) {
+		apfs_err(sb, "unlink failed for old dentry");
 		goto out_undo_link;
+	}
 
 	err = apfs_transaction_commit(sb);
 	if (err)

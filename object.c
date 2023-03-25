@@ -78,8 +78,10 @@ static int apfs_cpm_lookup_oid(struct super_block *sb,
 	u32 map_count = le32_to_cpu(cpm->cpm_count);
 	int i;
 
-	if (map_count > apfs_max_maps_per_block(sb))
+	if (map_count > apfs_max_maps_per_block(sb)) {
+		apfs_err(sb, "block has too many maps (%d)", map_count);
 		return -EFSCORRUPTED;
+	}
 
 	for (i = 0; i < map_count; ++i) {
 		struct apfs_checkpoint_mapping *map = &cpm->cpm_map[i];
@@ -214,14 +216,17 @@ int apfs_remove_cpoint_map(struct super_block *sb, u64 bno)
 	int err = 0;
 
 	bh = apfs_read_cpm_block(sb);
-	if (!bh)
+	if (!bh) {
+		apfs_err(sb, "failed to read cpm block");
 		return -EIO;
+	}
 	cpm = (struct apfs_checkpoint_map_phys *)bh->b_data;
 	apfs_assert_in_transaction(sb, &cpm->cpm_o);
 
 	/* TODO: multiple cpm blocks? */
 	cpm_count = le32_to_cpu(cpm->cpm_count);
 	if (cpm_count > apfs_max_maps_per_block(sb)) {
+		apfs_err(sb, "block has too many maps (%d)", cpm_count);
 		err = -EFSCORRUPTED;
 		goto fail;
 	}
@@ -240,6 +245,7 @@ int apfs_remove_cpoint_map(struct super_block *sb, u64 bno)
 			map->cpm_paddr = cpu_to_le64(apfs_data_index_to_bno(sb, curr_off - 1));
 	}
 	if (!bno_map) {
+		apfs_err(sb, "no mapping for bno 0x%llx", bno);
 		err = -EFSCORRUPTED;
 		goto fail;
 	}
@@ -269,8 +275,10 @@ struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb, u64 oid)
 	u32 desc_len = le32_to_cpu(raw_sb->nx_xp_desc_len);
 	u32 i;
 
-	if (!desc_blks || !desc_len)
+	if (!desc_blks || !desc_len) {
+		apfs_err(sb, "no blocks in checkpoint descriptor area");
 		return ERR_PTR(-EFSCORRUPTED);
+	}
 
 	/* Last block in the area is superblock; the rest are mapping blocks */
 	for (i = 0; i < desc_len - 1; ++i) {
@@ -281,8 +289,10 @@ struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb, u64 oid)
 		int err;
 
 		bh = apfs_sb_bread(sb, cpm_bno);
-		if (!bh)
+		if (!bh) {
+			apfs_err(sb, "failed to read cpm block");
 			return ERR_PTR(-EIO);
+		}
 		cpm = (struct apfs_checkpoint_map_phys *)bh->b_data;
 
 		err = apfs_cpm_lookup_oid(sb, cpm, oid, &obj_bno);
@@ -290,15 +300,20 @@ struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb, u64 oid)
 		cpm = NULL;
 		if (err == -EAGAIN) /* Search the next mapping block */
 			continue;
-		if (err)
+		if (err) {
+			apfs_err(sb, "cpm lookup failed for oid 0x%llx", oid);
 			return ERR_PTR(err);
+		}
 
 		bh = apfs_sb_bread(sb, obj_bno);
-		if (!bh)
+		if (!bh) {
+			apfs_err(sb, "failed to read ephemeral block");
 			return ERR_PTR(-EIO);
+		}
 		return bh;
 	}
-	return ERR_PTR(-EFSCORRUPTED); /* The mapping is missing */
+	apfs_err(sb, "no mapping for oid 0x%llx", oid);
+	return ERR_PTR(-EFSCORRUPTED);
 }
 
 /**
@@ -325,13 +340,16 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool
 	ASSERT(write || !preserve);
 
 	bh = apfs_sb_bread(sb, bno);
-	if (!bh)
+	if (!bh) {
+		apfs_err(sb, "failed to read object block 0x%llx", bno);
 		return ERR_PTR(-EIO);
+	}
 
 	obj = (struct apfs_obj_phys *)bh->b_data;
 	type = le32_to_cpu(obj->o_type);
 	ASSERT(!(type & APFS_OBJ_EPHEMERAL));
 	if (nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, bh)) {
+		apfs_err(sb, "bad checksum for object in block 0x%llx", bno);
 		err = -EFSBADCRC;
 		goto fail;
 	}
@@ -345,10 +363,13 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool
 		return bh;
 
 	err = apfs_spaceman_allocate_block(sb, &new_bno, true /* backwards */);
-	if (err)
+	if (err) {
+		apfs_err(sb, "block allocation failed");
 		goto fail;
+	}
 	new_bh = apfs_getblk(sb, new_bno);
 	if (!new_bh) {
+		apfs_err(sb, "failed to map block for CoW (0x%llx)", new_bno);
 		err = -EIO;
 		goto fail;
 	}
@@ -361,6 +382,8 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool
 	 */
 	if (!preserve) {
 		err = apfs_free_queue_insert(sb, bh->b_blocknr, 1);
+		if (err)
+			apfs_err(sb, "free queue insertion failed for 0x%llx", bh->b_blocknr);
 	} else if ((type & APFS_OBJECT_TYPE_MASK) != APFS_OBJECT_TYPE_FS) {
 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);

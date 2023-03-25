@@ -24,11 +24,14 @@ static int apfs_create_superblock_snapshot(struct super_block *sb, u64 *bno)
 	int err;
 
 	err = apfs_spaceman_allocate_block(sb, bno, true /* backwards */);
-	if (err)
+	if (err) {
+		apfs_err(sb, "block allocation failed");
 		goto fail;
+	}
 
 	snap_bh = apfs_getblk(sb, *bno);
 	if (!snap_bh) {
+		apfs_err(sb, "failed to map block for volume snap (0x%llx)", *bno);
 		err = -EIO;
 		goto fail;
 	}
@@ -88,11 +91,14 @@ static int apfs_create_snap_metadata_rec(struct inode *mntpoint, struct apfs_nod
 
 	err = apfs_btree_query(sb, &query);
 	if (err == 0) {
+		apfs_err(sb, "record exists for xid 0x%llx", xid);
 		err = -EFSCORRUPTED;
 		goto fail;
 	}
-	if (err != -ENODATA)
+	if (err != -ENODATA) {
+		apfs_err(sb, "query failed for xid 0x%llx", xid);
 		goto fail;
+	}
 
 	apfs_key_set_hdr(APFS_TYPE_SNAP_METADATA, xid, &raw_key);
 
@@ -117,6 +123,8 @@ static int apfs_create_snap_metadata_rec(struct inode *mntpoint, struct apfs_nod
 	le64_add_cpu(&vsb_raw->apfs_next_obj_id, 1);
 
 	err = apfs_btree_insert(query, &raw_key, sizeof(raw_key), raw_val, val_len);
+	if (err)
+		apfs_err(sb, "insertion failed for xid 0x%llx", xid);
 fail:
 	kfree(raw_val);
 	raw_val = NULL;
@@ -152,8 +160,10 @@ static int apfs_create_snap_name_rec(struct apfs_node *snap_root, const char *na
 		err = -EEXIST;
 		goto fail;
 	}
-	if (err != -ENODATA)
+	if (err != -ENODATA) {
+		apfs_err(sb, "query failed (%s)", name);
 		goto fail;
+	}
 
 	key_len = sizeof(*raw_key) + name_len + 1;
 	raw_key = kzalloc(key_len, GFP_KERNEL);
@@ -168,6 +178,8 @@ static int apfs_create_snap_name_rec(struct apfs_node *snap_root, const char *na
 	raw_val.snap_xid = cpu_to_le64(APFS_NXI(sb)->nx_xid);
 
 	err = apfs_btree_insert(query, raw_key, key_len, &raw_val, sizeof(raw_val));
+	if (err)
+		apfs_err(sb, "insertion failed (%s)", name);
 fail:
 	kfree(raw_key);
 	raw_key = NULL;
@@ -185,21 +197,29 @@ static int apfs_create_snap_meta_records(struct inode *mntpoint, const char *nam
 	int err;
 
 	snap_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_snap_meta_tree_oid), APFS_OBJ_PHYSICAL, true /* write */);
-	if (IS_ERR(snap_root))
+	if (IS_ERR(snap_root)) {
+		apfs_err(sb, "failed to read snap meta root 0x%llx", le64_to_cpu(vsb_raw->apfs_snap_meta_tree_oid));
 		return PTR_ERR(snap_root);
+	}
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	vsb_raw->apfs_snap_meta_tree_oid = cpu_to_le64(snap_root->object.oid);
 
 	name_len = strlen(name);
 	if (name_len > APFS_SNAP_MAX_NAMELEN) {
+		/* TODO: this check is unsafe! Also, this isn't corruption? */
+		apfs_warn(sb, "snapshot name is too long (%d)", (int)name_len);
 		err = -EFSCORRUPTED;
 		goto fail;
 	}
 
 	err = apfs_create_snap_metadata_rec(mntpoint, snap_root, name, name_len, sblock_oid);
-	if (err)
+	if (err) {
+		apfs_err(sb, "meta rec creation failed");
 		goto fail;
+	}
 	err = apfs_create_snap_name_rec(snap_root, name, name_len);
+	if (err)
+		apfs_err(sb, "name rec creation failed");
 
 fail:
 	apfs_node_free(snap_root);
@@ -213,8 +233,10 @@ static int apfs_create_new_extentref_tree(struct super_block *sb)
 	int err;
 
 	err = apfs_make_empty_btree_root(sb, APFS_OBJECT_TYPE_BLOCKREFTREE, &oid);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to make empty root");
 		return err;
+	}
 
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	vsb_raw->apfs_extentref_tree_oid = cpu_to_le64(oid);
@@ -242,13 +264,17 @@ static int apfs_update_omap_snap_tree(struct super_block *sb, __le64 *oid_p)
 	/* An empty snapshots tree may not even have a root yet */
 	if (!oid) {
 		err = apfs_make_empty_btree_root(sb, APFS_OBJECT_TYPE_OMAP_SNAPSHOT, &oid);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to make empty root");
 			return err;
+		}
 	}
 
 	root = apfs_read_node(sb, oid, APFS_OBJ_PHYSICAL, true /* write */);
-	if (IS_ERR(root))
+	if (IS_ERR(root)) {
+		apfs_err(sb, "failed to read omap snap root 0x%llx", oid);
 		return PTR_ERR(root);
+	}
 	oid = 0;
 
 	apfs_init_omap_snap_key(nxi->nx_xid, &key);
@@ -263,14 +289,19 @@ static int apfs_update_omap_snap_tree(struct super_block *sb, __le64 *oid_p)
 
 	err = apfs_btree_query(sb, &query);
 	if (err == 0) {
+		apfs_err(sb, "record exists for xid 0x%llx", nxi->nx_xid);
 		err = -EFSCORRUPTED;
 		goto fail;
 	}
-	if (err != -ENODATA)
+	if (err != -ENODATA) {
+		apfs_err(sb, "query failed for xid 0x%llx", nxi->nx_xid);
 		goto fail;
+	}
 
 	raw_key = cpu_to_le64(nxi->nx_xid);
 	err = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+	if (err)
+		apfs_err(sb, "insertion failed for xid 0x%llx", nxi->nx_xid);
 	*oid_p = cpu_to_le64(root->object.block_nr);
 
 fail:
@@ -300,14 +331,18 @@ static int apfs_update_omap_snapshots(struct super_block *sb)
 
 	omap_blk = le64_to_cpu(vsb_raw->apfs_omap_oid);
 	bh = apfs_read_object_block(sb, omap_blk, true /* write */, false /* preserve */);
-	if (IS_ERR(bh))
+	if (IS_ERR(bh)) {
+		apfs_err(sb, "CoW failed for bno 0x%llx", omap_blk);
 		return PTR_ERR(bh);
+	}
 	omap = (struct apfs_omap_phys *)bh->b_data;
 
 	apfs_assert_in_transaction(sb, &omap->om_o);
 	le32_add_cpu(&omap->om_snap_count, 1);
 	omap->om_most_recent_snap = cpu_to_le64(xid);
 	err = apfs_update_omap_snap_tree(sb, &omap->om_snapshot_tree_oid);
+	if (err)
+		apfs_err(sb, "omap snap tree update failed");
 
 	omap = NULL;
 	brelse(bh);
@@ -343,24 +378,34 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name)
 	 * changes to the layout after the snapshot is set up.
 	 */
 	err = apfs_transaction_flush_all_inodes(sb);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to flush all inodes");
 		goto fail;
+	}
 
 	err = apfs_create_superblock_snapshot(sb, &sblock_oid);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to snapshot superblock");
 		goto fail;
+	}
 
 	err = apfs_create_snap_meta_records(mntpoint, name, sblock_oid);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to create snap meta records");
 		goto fail;
+	}
 
 	err = apfs_create_new_extentref_tree(sb);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to create new extref tree");
 		goto fail;
+	}
 
 	err = apfs_update_omap_snapshots(sb);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to update omap snapshots");
 		goto fail;
+	}
 
 	/*
 	 * The official reference allows old implementations to ignore extended
@@ -441,8 +486,10 @@ static int apfs_snap_xid_from_query(struct apfs_query *query, u64 *xid)
 	char *raw = query->node->object.data;
 	__le64 *val = NULL;
 
-	if (query->len != sizeof(*val))
+	if (query->len != sizeof(*val)) {
+		apfs_err(query->node->object.sb, "bad value length (%d)", query->len);
 		return -EFSCORRUPTED;
+	}
 	val = (__le64 *)(raw + query->off);
 
 	*xid = le64_to_cpup(val);
@@ -465,10 +512,15 @@ static int apfs_snapshot_name_to_xid(struct apfs_node *snap_root, const char *na
 	query->flags |= APFS_QUERY_SNAP_META | APFS_QUERY_EXACT;
 
 	err = apfs_btree_query(sb, &query);
-	if (err)
+	if (err) {
+		if (err != -ENODATA)
+			apfs_err(sb, "query failed (%s)", name);
 		goto fail;
+	}
 
 	err = apfs_snap_xid_from_query(query, xid);
+	if (err)
+		apfs_err(sb, "bad snap name record (%s)", name);
 fail:
 	apfs_free_query(query);
 	query = NULL;
@@ -480,8 +532,10 @@ static int apfs_snap_sblock_from_query(struct apfs_query *query, u64 *sblock_oid
 	char *raw = query->node->object.data;
 	struct apfs_snap_metadata_val *val = NULL;
 
-	if (query->len < sizeof(*val))
+	if (query->len < sizeof(*val)) {
+		apfs_err(query->node->object.sb, "bad value length (%d)", query->len);
 		return -EFSCORRUPTED;
+	}
 	val = (struct apfs_snap_metadata_val *)(raw + query->off);
 
 	*sblock_oid = le64_to_cpu(val->sblock_oid);
@@ -504,10 +558,14 @@ static int apfs_snapshot_xid_to_sblock(struct apfs_node *snap_root, u64 xid, u64
 	query->flags |= APFS_QUERY_SNAP_META | APFS_QUERY_EXACT;
 
 	err = apfs_btree_query(sb, &query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "query failed for xid 0x%llx", xid);
 		goto fail;
+	}
 
 	err = apfs_snap_sblock_from_query(query, sblock_oid);
+	if (err)
+		apfs_err(sb, "bad snap meta record for xid 0x%llx", xid);
 fail:
 	apfs_free_query(query);
 	query = NULL;
@@ -535,17 +593,24 @@ int apfs_switch_to_snapshot(struct super_block *sb)
 	ASSERT(sb->s_flags & SB_RDONLY);
 
 	name = sbi->s_snap_name;
-	if (strlen(name) > APFS_SNAP_MAX_NAMELEN)
+	if (strlen(name) > APFS_SNAP_MAX_NAMELEN) {
+		apfs_warn(sb, "snapshot name is too long");
 		return -EINVAL;
+	}
 
 	snap_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_snap_meta_tree_oid), APFS_OBJ_PHYSICAL, false /* write */);
-	if (IS_ERR(snap_root))
+	if (IS_ERR(snap_root)) {
+		apfs_err(sb, "failed to read snap meta root 0x%llx", le64_to_cpu(vsb_raw->apfs_snap_meta_tree_oid));
 		return PTR_ERR(snap_root);
+	}
 	vsb_raw = NULL;
 
 	err = apfs_snapshot_name_to_xid(snap_root, name, &xid);
-	if (err)
+	if (err) {
+		if (err == -ENODATA)
+			apfs_info(sb, "no snapshot under that name (%s)", name);
 		goto fail;
+	}
 	sbi->s_snap_xid = xid;
 
 	err = apfs_snapshot_xid_to_sblock(snap_root, xid, &sblock_oid);
@@ -554,6 +619,8 @@ int apfs_switch_to_snapshot(struct super_block *sb)
 
 	apfs_unmap_volume_super(sb);
 	err = apfs_map_volume_super_bno(sb, sblock_oid, nxi->nx_flags & APFS_CHECK_NODES);
+	if (err)
+		apfs_err(sb, "failed to map volume block 0x%llx", sblock_oid);
 
 fail:
 	apfs_node_free(snap_root);

@@ -81,24 +81,32 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 	case APFS_OBJ_VIRTUAL:
 		/* All virtual nodes are inside a volume, at least for now */
 		err = apfs_omap_lookup_block(sb, sbi->s_omap, oid, &bno, write);
-		if (err)
+		if (err) {
+			apfs_err(sb, "omap lookup failed for oid 0x%llx", oid);
 			return ERR_PTR(err);
+		}
 		/* CoW has already been done, don't worry about snapshots */
 		bh = apfs_read_object_block(sb, bno, write, false /* preserve */);
-		if (IS_ERR(bh))
+		if (IS_ERR(bh)) {
+			apfs_err(sb, "object read failed for bno 0x%llx", bno);
 			return (void *)bh;
+		}
 		break;
 	case APFS_OBJ_PHYSICAL:
 		bh = apfs_read_object_block(sb, oid, write, false /* preserve */);
-		if (IS_ERR(bh))
+		if (IS_ERR(bh)) {
+			apfs_err(sb, "object read failed for bno 0x%llx", oid);
 			return (void *)bh;
+		}
 		oid = bh->b_blocknr;
 		break;
 	case APFS_OBJ_EPHEMERAL:
 		/* Ephemeral objects are checkpoint data, so ignore 'write' */
 		bh = apfs_read_ephemeral_object(sb, oid);
-		if (IS_ERR(bh))
+		if (IS_ERR(bh)) {
+			apfs_err(sb, "ephemeral read failed for oid 0x%llx", oid);
 			return (void *)bh;
+		}
 		break;
 	}
 	raw = (struct apfs_btree_node_phys *) bh->b_data;
@@ -130,12 +138,12 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 
 	if (nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, bh)) {
 		/* TODO: don't check this twice for virtual/physical objects */
-		apfs_alert(sb, "bad checksum for node in block 0x%llx", bh->b_blocknr);
+		apfs_err(sb, "bad checksum for node in block 0x%llx", bh->b_blocknr);
 		apfs_node_free(node);
 		return ERR_PTR(-EFSBADCRC);
 	}
 	if (!apfs_node_is_valid(sb, node)) {
-		apfs_alert(sb, "bad node in block 0x%llx", bh->b_blocknr);
+		apfs_err(sb, "bad node in block 0x%llx", bh->b_blocknr);
 		apfs_node_free(node);
 		return ERR_PTR(-EFSCORRUPTED);
 	}
@@ -244,8 +252,10 @@ int apfs_make_empty_btree_root(struct super_block *sb, u32 subtype, u64 *oid)
 	ASSERT(subtype == APFS_OBJECT_TYPE_BLOCKREFTREE || subtype == APFS_OBJECT_TYPE_OMAP_SNAPSHOT);
 
 	err = apfs_spaceman_allocate_block(sb, &bno, true /* backwards */);
-	if (err)
+	if (err) {
+		apfs_err(sb, "block allocation failed");
 		return err;
+	}
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
 	le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
@@ -324,8 +334,10 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 	switch (storage) {
 	case APFS_OBJ_VIRTUAL:
 		err = apfs_spaceman_allocate_block(sb, &bno, true /* backwards */);
-		if (err)
+		if (err) {
+			apfs_err(sb, "block allocation failed");
 			return ERR_PTR(err);
+		}
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
 		le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
@@ -333,13 +345,17 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 		oid = le64_to_cpu(msb_raw->nx_next_oid);
 		le64_add_cpu(&msb_raw->nx_next_oid, 1);
 		err = apfs_create_omap_rec(sb, oid, bno);
-		if (err)
+		if (err) {
+			apfs_err(sb, "omap rec creation failed (0x%llx-0x%llx)", oid, bno);
 			return ERR_PTR(err);
+		}
 		break;
 	case APFS_OBJ_PHYSICAL:
 		err = apfs_spaceman_allocate_block(sb, &bno, true /* backwards */);
-		if (err)
+		if (err) {
+			apfs_err(sb, "block allocation failed");
 			return ERR_PTR(err);
+		}
 		/* We don't write to the container's omap */
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
@@ -352,8 +368,10 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 		le64_add_cpu(&msb_raw->nx_next_oid, 1);
 
 		err = apfs_create_cpoint_map(sb, oid, bno);
-		if (err)
+		if (err) {
+			apfs_err(sb, "checkpoint map creation failed (0x%llx-0x%llx)", oid, bno);
 			return ERR_PTR(err);
+		}
 		break;
 	default:
 		ASSERT(false);
@@ -429,17 +447,23 @@ int apfs_delete_node(struct apfs_query *query)
 	 * deleting the node, because that involves moving blocks around.
 	 */
 	err = apfs_btree_remove(query->parent);
-	if (err)
+	if (err) {
+		apfs_err(sb, "parent index removal failed for oid x%llx", oid);
 		return err;
+	}
 
 	switch (query->flags & APFS_QUERY_TREE_MASK) {
 	case APFS_QUERY_CAT:
 		err = apfs_free_queue_insert(sb, bno, 1);
-		if (err)
+		if (err) {
+			apfs_err(sb, "free queue insertion failed for 0x%llx", bno);
 			return err;
+		}
 		err = apfs_delete_omap_rec(sb, oid);
-		if (err)
+		if (err) {
+			apfs_err(sb, "omap rec deletion failed (0x%llx)", oid);
 			return err;
+		}
 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
@@ -449,8 +473,10 @@ int apfs_delete_node(struct apfs_query *query)
 	case APFS_QUERY_EXTENTREF:
 	case APFS_QUERY_SNAP_META:
 		err = apfs_free_queue_insert(sb, bno, 1);
-		if (err)
+		if (err) {
+			apfs_err(sb, "free queue insertion failed for 0x%llx", bno);
 			return err;
+		}
 		/* We don't write to the container's omap */
 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
@@ -459,14 +485,18 @@ int apfs_delete_node(struct apfs_query *query)
 		return 0;
 	case APFS_QUERY_FREE_QUEUE:
 		err = apfs_cpoint_data_free(sb, bno);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to free checkpoint block 0x%llx", bno);
 			return err;
+		}
 		err = apfs_remove_cpoint_map(sb, bno);
-		if (err)
+		if (err) {
+			apfs_err(sb, "checkpoint map removal failed (0x%llx)", bno);
 			return err;
+		}
 		return 0;
 	default:
-		apfs_debug(sb, "new query type must implement node deletion");
+		apfs_alert(sb, "new query type must implement node deletion (%d)", query->flags & APFS_QUERY_TREE_MASK);
 		return -EOPNOTSUPP;
 	}
 }
@@ -534,8 +564,10 @@ int apfs_node_locate_key(struct apfs_node *node, int index, int *off)
 	struct apfs_btree_node_phys *raw;
 	int len;
 
-	if (index >= node->records)
+	if (index >= node->records) {
+		apfs_err(sb, "index out of bounds (%d of %d)", index, node->records);
 		return 0;
+	}
 
 	raw = (struct apfs_btree_node_phys *)node->object.data;
 	if (apfs_node_has_fixed_kv_size(node)) {
@@ -562,7 +594,7 @@ int apfs_node_locate_key(struct apfs_node *node, int index, int *off)
 	}
 
 	if (*off + len > sb->s_blocksize) {
-		/* Avoid out-of-bounds read if corrupted */
+		apfs_err(sb, "key out of bounds (%d-%d)", *off, len);
 		return 0;
 	}
 	return len;
@@ -585,8 +617,10 @@ static int apfs_node_locate_data(struct apfs_node *node, int index, int *off)
 	struct apfs_btree_node_phys *raw;
 	int len;
 
-	if (index >= node->records)
+	if (index >= node->records) {
+		apfs_err(sb, "index out of bounds (%d of %d)", index, node->records);
 		return 0;
+	}
 
 	raw = (struct apfs_btree_node_phys *)node->object.data;
 	if (apfs_node_has_fixed_kv_size(node)) {
@@ -630,7 +664,7 @@ static int apfs_node_locate_data(struct apfs_node *node, int index, int *off)
 	}
 
 	if (*off < 0 || *off + len > sb->s_blocksize) {
-		/* Avoid out-of-bounds read if corrupted */
+		apfs_err(sb, "value out of bounds (%d-%d)", *off, len);
 		return 0;
 	}
 	return len;
@@ -722,14 +756,12 @@ static int apfs_key_from_query(struct apfs_query *query, struct apfs_key *key)
 		err = apfs_read_omap_snap_key(raw_key, query->key_len, key);
 		break;
 	default:
-		/* Not implemented yet */
-		err = -EINVAL;
+		apfs_alert(sb, "new query type must implement key reads (%d)", query->flags & APFS_QUERY_TREE_MASK);
+		err = -EOPNOTSUPP;
 		break;
 	}
-	if (err) {
-		apfs_alert(sb, "bad node key in block 0x%llx",
-			   query->node->object.block_nr);
-	}
+	if (err)
+		apfs_err(sb, "bad node key in block 0x%llx", query->node->object.block_nr);
 
 	/* A multiple query must ignore some of these fields */
 	if (query->flags & APFS_QUERY_ANY_NAME)
@@ -766,21 +798,27 @@ static int apfs_node_next(struct super_block *sb, struct apfs_query *query)
 	query->key_len = apfs_node_locate_key(node, query->index,
 					      &query->key_off);
 	err = apfs_key_from_query(query, &curr_key);
-	if (err)
+	if (err) {
+		apfs_err(sb, "bad key for index %d", query->index);
 		return err;
+	}
 
 	cmp = apfs_keycmp(&curr_key, query->key);
 
-	if (cmp > 0) /* Records are out of order */
+	if (cmp > 0) {
+		apfs_err(sb, "records are out of order");
 		return -EFSCORRUPTED;
+	}
 
 	if (cmp != 0 && apfs_node_is_leaf(node) &&
 	    query->flags & APFS_QUERY_EXACT)
 		return -ENODATA;
 
 	query->len = apfs_node_locate_data(node, query->index, &query->off);
-	if (query->len == 0)
+	if (query->len == 0) {
+		apfs_err(sb, "bad value for index %d", query->index);
 		return -EFSCORRUPTED;
+	}
 
 	if (cmp != 0) {
 		/*
@@ -846,8 +884,10 @@ int apfs_node_query(struct super_block *sb, struct apfs_query *query)
 		query->key_len = apfs_node_locate_key(node, query->index,
 						      &query->key_off);
 		err = apfs_key_from_query(query, &curr_key);
-		if (err)
+		if (err) {
+			apfs_err(sb, "bad key for index %d", query->index);
 			return err;
+		}
 
 		cmp = apfs_keycmp(&curr_key, query->key);
 		if (cmp == 0 && !(query->flags & APFS_QUERY_MULTIPLE))
@@ -902,8 +942,10 @@ int apfs_omap_map_from_query(struct apfs_query *query, struct apfs_omap_map *map
 	struct apfs_omap_val *val = NULL;
 	char *raw = query->node->object.data;
 
-	if (query->len != sizeof(*val) || query->key_len != sizeof(*key))
+	if (query->len != sizeof(*val) || query->key_len != sizeof(*key)) {
+		apfs_err(sb, "bad length of key (%d) or value (%d)", query->key_len, query->len);
 		return -EFSCORRUPTED;
+	}
 	key = (struct apfs_omap_key *)(raw + query->key_off);
 	val = (struct apfs_omap_val *)(raw + query->off);
 
@@ -941,13 +983,17 @@ static int apfs_btree_inc_height(struct apfs_query *query)
 	root_raw = (void *)root->object.data;
 	apfs_assert_in_transaction(sb, &root_raw->btn_o);
 
-	if (query->parent || query->depth)
+	if (query->parent || query->depth) {
+		apfs_err(sb, "invalid root query");
 		return -EFSCORRUPTED;
+	}
 
 	/* Create a new child node */
 	new_node = apfs_create_node(sb, storage);
-	if (IS_ERR(new_node))
+	if (IS_ERR(new_node)) {
+		apfs_err(sb, "node creation failed");
 		return PTR_ERR(new_node);
+	}
 	new_node->flags = root->flags & ~APFS_BTNODE_ROOT;
 	new_node->tree_type = root->tree_type;
 
@@ -983,8 +1029,10 @@ static int apfs_btree_inc_height(struct apfs_query *query)
 	/* Now assemble the new root with only the first key */
 	root_query->key_len = apfs_node_locate_key(root, 0 /* index */,
 						   &root_query->key_off);
-	if (!root_query->key_len)
+	if (!root_query->key_len) {
+		apfs_err(sb, "bad key for index %d", 0);
 		return -EFSCORRUPTED;
+	}
 	root->key = sizeof(*root_raw) +
 		    apfs_node_min_table_size(sb, root->tree_type, root->flags & ~APFS_BTNODE_LEAF);
 	memmove((void *)root_raw + root->key,
@@ -1069,8 +1117,10 @@ static int apfs_copy_record_range(struct apfs_node *dest_node,
 		int len, off;
 
 		len = apfs_node_locate_key(src_node, i, &off);
-		if (dest_node->free + len > sb->s_blocksize)
+		if (dest_node->free + len > sb->s_blocksize) {
+			apfs_err(sb, "key of length %d doesn't fit", len);
 			goto fail;
+		}
 		memcpy((char *)dest_raw + dest_node->free,
 		       (char *)src_raw + off, len);
 		query->key_off = dest_node->free;
@@ -1079,8 +1129,10 @@ static int apfs_copy_record_range(struct apfs_node *dest_node,
 
 		len = apfs_node_locate_data(src_node, i, &off);
 		dest_node->data -= len;
-		if (dest_node->data < 0)
+		if (dest_node->data < 0) {
+			apfs_err(sb, "value of length %d doesn't fit", len);
 			goto fail;
+		}
 		memcpy((char *)dest_raw + dest_node->data,
 		       (char *)src_raw + off, len);
 		query->off = dest_node->data;
@@ -1112,8 +1164,11 @@ static int apfs_attach_child(struct apfs_query *query, struct apfs_node *child)
 	__le64 raw_oid = cpu_to_le64(object->oid);
 
 	key_len = apfs_node_locate_key(child, 0, &key_off);
-	if (!key_len) /* This should never happen: @child was made by us */
+	if (!key_len) {
+		/* This should never happen: @child was made by us */
+		apfs_alert(object->sb, "bad key for index %d", 0);
 		return -EFSCORRUPTED;
+	}
 
 	return apfs_btree_insert(query, (void *)raw + key_off, key_len,
 				 &raw_oid, sizeof(raw_oid));
@@ -1171,9 +1226,12 @@ int apfs_node_split(struct apfs_query *query)
 
 	if (apfs_node_is_root(query->node)) {
 		err = apfs_btree_inc_height(query);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to increase tree height");
 			return err;
+		}
 	} else if (!query->parent) {
+		apfs_err(sb, "nonroot node with no parent");
 		return -EFSCORRUPTED;
 	}
 	old_node = query->node;
@@ -1200,8 +1258,10 @@ int apfs_node_split(struct apfs_query *query)
 	old_node->key_free_list_len = 0;
 	old_node->val_free_list_len = 0;
 	err = apfs_copy_record_range(old_node, tmp_node, 0, old_rec_count);
-	if (err)
+	if (err) {
+		apfs_err(sb, "record copy failed");
 		goto out;
+	}
 	apfs_update_node(old_node);
 
 	/* The second half is copied to a new node */
@@ -1213,6 +1273,7 @@ int apfs_node_split(struct apfs_query *query)
 
 		new_node = apfs_create_node(sb, storage);
 		if (IS_ERR(new_node)) {
+			apfs_err(sb, "node creation failed");
 			err = PTR_ERR(new_node);
 			goto out;
 		}
@@ -1223,6 +1284,7 @@ int apfs_node_split(struct apfs_query *query)
 		new_node->val_free_list_len = 0;
 		err = apfs_copy_record_range(new_node, tmp_node, old_rec_count, record_count);
 		if (err) {
+			apfs_err(sb, "record copy failed");
 			apfs_node_free(new_node);
 			goto out;
 		}
@@ -1233,6 +1295,7 @@ int apfs_node_split(struct apfs_query *query)
 
 		err = apfs_attach_child(query->parent, new_node);
 		if (err) {
+			apfs_err(sb, "child attachment failed");
 			apfs_node_free(new_node);
 			goto out;
 		}
@@ -1424,14 +1487,18 @@ static int apfs_node_free_list_alloc(struct apfs_node *node, u16 len, bool value
 
 		if (curr_off == APFS_BTOFF_INVALID)
 			return -ENOSPC;
-		if (abs_off + sizeof(*curr) > sb->s_blocksize)
+		if (abs_off + sizeof(*curr) > sb->s_blocksize) {
+			apfs_err(sb, "nloc out of bounds (%d-%d)", abs_off, (int)sizeof(*curr));
 			return -EFSCORRUPTED;
+		}
 		curr = (void *)node_raw + abs_off;
 
 		curr_len = le16_to_cpu(curr->len);
 		if (curr_len >= len) {
-			if (abs_off + curr_len > sb->s_blocksize)
+			if (abs_off + curr_len > sb->s_blocksize) {
+				apfs_err(sb, "entry out of bounds (%d-%d)", abs_off, curr_len);
 				return -EFSCORRUPTED;
+			}
 			*list_len -= curr_len;
 			apfs_node_free_list_unlink(prev, curr);
 			apfs_node_free_list_add(node, abs_off + len, curr_len - len);
@@ -1442,6 +1509,7 @@ static int apfs_node_free_list_alloc(struct apfs_node *node, u16 len, bool value
 	}
 
 	/* Don't loop forever if the free list is corrupted and doesn't end */
+	apfs_err(sb, "free list never ends");
 	return -EFSCORRUPTED;
 }
 
@@ -1712,15 +1780,17 @@ int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len
 
 	/* This function should only be needed for huge catalog records */
 	if (prev_node->tree_type != APFS_OBJECT_TYPE_FSTREE) {
-		apfs_warn(sb, "huge node records in the wrong tree");
+		apfs_err(sb, "huge node records in the wrong tree");
 		return -EFSCORRUPTED;
 	}
 
 	apfs_btree_change_node_count(query->parent, 1 /* change */);
 
 	new_node = apfs_create_node(sb, apfs_query_storage(query));
-	if (IS_ERR(new_node))
+	if (IS_ERR(new_node)) {
+		apfs_err(sb, "node creation failed");
 		return PTR_ERR(new_node);
+	}
 	new_node->tree_type = prev_node->tree_type;
 	new_node->flags = prev_node->flags;
 	new_node->records = 0;
@@ -1742,7 +1812,12 @@ int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len
 	query->node = new_node;
 	query->index = -1;
 	err = apfs_node_insert(query, key, key_len, val, val_len);
-	if (err)
+	if (err) {
+		apfs_err(sb, "node record insertion failed");
 		return err;
-	return apfs_attach_child(query->parent, new_node);
+	}
+	err = apfs_attach_child(query->parent, new_node);
+	if (err)
+		apfs_err(sb, "child attachment failed");
+	return err;
 }

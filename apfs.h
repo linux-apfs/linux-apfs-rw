@@ -497,7 +497,7 @@ static inline void apfs_init_sibling_link_key(u64 ino, u64 id,
 {
 	key->id = ino;
 	key->type = APFS_TYPE_SIBLING_LINK;
-	key->number = id; /* Only guessing */
+	key->number = id; /* Only guessing (TODO) */
 	key->name = NULL;
 }
 
@@ -774,17 +774,22 @@ struct apfs_xattr {
 	bool has_dstream;
 };
 
-#define apfs_emerg(sb, fmt, ...) apfs_msg(sb, KERN_EMERG, fmt, ##__VA_ARGS__)
-#define apfs_alert(sb, fmt, ...) apfs_msg(sb, KERN_ALERT, fmt, ##__VA_ARGS__)
-#define apfs_crit(sb, fmt, ...) apfs_msg(sb, KERN_CRIT, fmt, ##__VA_ARGS__)
-#define apfs_err(sb, fmt, ...) apfs_msg(sb, KERN_ERR, fmt, ##__VA_ARGS__)
-#define apfs_warn(sb, fmt, ...) apfs_msg(sb, KERN_WARNING, fmt, ##__VA_ARGS__)
-#define apfs_notice(sb, fmt, ...) apfs_msg(sb, KERN_NOTICE, fmt, ##__VA_ARGS__)
-#define apfs_info(sb, fmt, ...) apfs_msg(sb, KERN_INFO, fmt, ##__VA_ARGS__)
+/*
+ * Report function name and line number for the message types that are likely
+ * to signal a bug, to make things easier for reporters. Don't do this for the
+ * common messages, there is no point and it makes the console look too busy.
+ */
+#define apfs_emerg(sb, fmt, ...) apfs_msg(sb, KERN_EMERG, __func__, __LINE__, fmt, ##__VA_ARGS__)
+#define apfs_alert(sb, fmt, ...) apfs_msg(sb, KERN_ALERT, __func__, __LINE__, fmt, ##__VA_ARGS__)
+#define apfs_crit(sb, fmt, ...) apfs_msg(sb, KERN_CRIT, __func__, __LINE__, fmt, ##__VA_ARGS__)
+#define apfs_err(sb, fmt, ...) apfs_msg(sb, KERN_ERR, __func__, __LINE__, fmt, ##__VA_ARGS__)
+#define apfs_warn(sb, fmt, ...) apfs_msg(sb, KERN_WARNING, NULL, 0, fmt, ##__VA_ARGS__)
+#define apfs_notice(sb, fmt, ...) apfs_msg(sb, KERN_NOTICE, NULL, 0, fmt, ##__VA_ARGS__)
+#define apfs_info(sb, fmt, ...) apfs_msg(sb, KERN_INFO, NULL, 0, fmt, ##__VA_ARGS__)
 
 #ifdef CONFIG_APFS_DEBUG
 #define ASSERT(expr)	BUG_ON(!(expr))
-#define apfs_debug(sb, fmt, ...) apfs_msg(sb, KERN_DEBUG, fmt, ##__VA_ARGS__)
+#define apfs_debug(sb, fmt, ...) apfs_msg(sb, KERN_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #else
 #define ASSERT(expr)	((void)0)
 #define apfs_debug(sb, fmt, ...) no_printk(fmt, ##__VA_ARGS__)
@@ -807,7 +812,6 @@ extern struct apfs_query *apfs_alloc_query(struct apfs_node *node,
 					   struct apfs_query *parent);
 extern void apfs_free_query(struct apfs_query *query);
 extern int apfs_btree_query(struct super_block *sb, struct apfs_query **query);
-extern struct apfs_node *apfs_omap_read_node(struct super_block *sb, u64 id);
 extern int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap,
 				  u64 id, u64 *block, bool write);
 extern int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno);
@@ -955,8 +959,7 @@ extern int apfs_read_snap_meta_key(void *raw, int size, struct apfs_key *key);
 extern int apfs_read_omap_snap_key(void *raw, int size, struct apfs_key *key);
 
 /* message.c */
-extern __printf(3, 4)
-void apfs_msg(struct super_block *sb, const char *prefix, const char *fmt, ...);
+extern __printf(5, 6) void apfs_msg(struct super_block *sb, const char *prefix, const char *func, int line, const char *fmt, ...);
 
 /* node.c */
 extern struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid,

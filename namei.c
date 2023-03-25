@@ -18,13 +18,17 @@ static struct dentry *apfs_lookup(struct inode *dir, struct dentry *dentry,
 		return ERR_PTR(-ENAMETOOLONG);
 
 	err = apfs_inode_by_name(dir, &dentry->d_name, &ino);
-	if (err && err != -ENODATA)
+	if (err && err != -ENODATA) {
+		apfs_err(dir->i_sb, "inode lookup by name failed");
 		return ERR_PTR(err);
+	}
 
 	if (!err) {
 		inode = apfs_iget(dir->i_sb, ino);
-		if (IS_ERR(inode))
+		if (IS_ERR(inode)) {
+			apfs_err(dir->i_sb, "iget failed");
 			return ERR_CAST(inode);
+		}
 	}
 
 	return d_splice_alias(inode, dentry);

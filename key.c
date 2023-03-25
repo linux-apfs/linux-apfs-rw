@@ -81,8 +81,10 @@ int apfs_keycmp(struct apfs_key *k1, struct apfs_key *k2)
  */
 int apfs_read_cat_key(void *raw, int size, struct apfs_key *key, bool hashed)
 {
-	if (size < sizeof(struct apfs_key_header))
+	if (size < sizeof(struct apfs_key_header)) {
+		apfs_err(NULL, "bad key length (%d)", size);
 		return -EFSCORRUPTED;
+	}
 	key->id = apfs_cat_cnid((struct apfs_key_header *)raw);
 	key->type = apfs_cat_type((struct apfs_key_header *)raw);
 
@@ -92,6 +94,7 @@ int apfs_read_cat_key(void *raw, int size, struct apfs_key *key, bool hashed)
 			if (size < sizeof(struct apfs_drec_hashed_key) + 1 ||
 			    *((char *)raw + size - 1) != 0) {
 				/* Filename must have NULL-termination */
+				apfs_err(NULL, "invalid drec key (%d)", size);
 				return -EFSCORRUPTED;
 			}
 			/* Name length is not used in key comparisons, only the hash */
@@ -103,6 +106,7 @@ int apfs_read_cat_key(void *raw, int size, struct apfs_key *key, bool hashed)
 			if (size < sizeof(struct apfs_drec_key) + 1 ||
 			    *((char *)raw + size - 1) != 0) {
 				/* Filename must have NULL-termination */
+				apfs_err(NULL, "invalid drec key (%d)", size);
 				return -EFSCORRUPTED;
 			}
 			/* There's no hash */
@@ -114,21 +118,26 @@ int apfs_read_cat_key(void *raw, int size, struct apfs_key *key, bool hashed)
 		if (size < sizeof(struct apfs_xattr_key) + 1 ||
 		    *((char *)raw + size - 1) != 0) {
 			/* xattr name must have NULL-termination */
+			apfs_err(NULL, "invalid xattr key (%d)", size);
 			return -EFSCORRUPTED;
 		}
 		key->number = 0;
 		key->name = ((struct apfs_xattr_key *)raw)->name;
 		break;
 	case APFS_TYPE_FILE_EXTENT:
-		if (size != sizeof(struct apfs_file_extent_key))
+		if (size != sizeof(struct apfs_file_extent_key)) {
+			apfs_err(NULL, "bad key length (%d)", size);
 			return -EFSCORRUPTED;
+		}
 		key->number = le64_to_cpu(
 			((struct apfs_file_extent_key *)raw)->logical_addr);
 		key->name = NULL;
 		break;
 	case APFS_TYPE_SIBLING_LINK:
-		if (size != sizeof(struct apfs_sibling_link_key))
+		if (size != sizeof(struct apfs_sibling_link_key)) {
+			apfs_err(NULL, "bad key length (%d)", size);
 			return -EFSCORRUPTED;
+		}
 		key->number = le64_to_cpu(
 			((struct apfs_sibling_link_key *)raw)->sibling_id);
 		key->name = NULL;
@@ -146,8 +155,10 @@ int apfs_read_fext_key(void *raw, int size, struct apfs_key *key)
 {
 	struct apfs_fext_tree_key *raw_key;
 
-	if (size != sizeof(*raw_key))
+	if (size != sizeof(*raw_key)) {
+		apfs_err(NULL, "bad key length (%d)", size);
 		return -EFSCORRUPTED;
+	}
 	raw_key = raw;
 
 	key->id = le64_to_cpu(raw_key->private_id);
@@ -169,8 +180,10 @@ int apfs_read_free_queue_key(void *raw, int size, struct apfs_key *key)
 {
 	struct apfs_spaceman_free_queue_key *raw_key;
 
-	if (size < sizeof(struct apfs_spaceman_free_queue_key))
+	if (size < sizeof(struct apfs_spaceman_free_queue_key)) {
+		apfs_err(NULL, "bad key length (%d)", size);
 		return -EFSCORRUPTED;
+	}
 	raw_key = raw;
 
 	key->id = le64_to_cpu(raw_key->sfqk_xid);
@@ -191,8 +204,10 @@ int apfs_read_free_queue_key(void *raw, int size, struct apfs_key *key)
  */
 int apfs_read_omap_key(void *raw, int size, struct apfs_key *key)
 {
-	if (size < sizeof(struct apfs_omap_key))
+	if (size < sizeof(struct apfs_omap_key)) {
+		apfs_err(NULL, "bad key length (%d)", size);
 		return -EFSCORRUPTED;
+	}
 
 	key->id = le64_to_cpu(((struct apfs_omap_key *)raw)->ok_oid);
 	key->type = 0;
@@ -212,8 +227,10 @@ int apfs_read_omap_key(void *raw, int size, struct apfs_key *key)
  */
 int apfs_read_extentref_key(void *raw, int size, struct apfs_key *key)
 {
-	if (size != sizeof(struct apfs_phys_ext_key))
+	if (size != sizeof(struct apfs_phys_ext_key)) {
+		apfs_err(NULL, "bad key length (%d)", size);
 		return -EFSCORRUPTED;
+	}
 	key->id = apfs_cat_cnid((struct apfs_key_header *)raw);
 	key->type = apfs_cat_type((struct apfs_key_header *)raw);
 	key->number = 0;
@@ -223,21 +240,26 @@ int apfs_read_extentref_key(void *raw, int size, struct apfs_key *key)
 
 int apfs_read_snap_meta_key(void *raw, int size, struct apfs_key *key)
 {
-	if (size < sizeof(struct apfs_key_header))
+	if (size < sizeof(struct apfs_key_header)) {
+		apfs_err(NULL, "bad key length (%d)", size);
 		return -EFSCORRUPTED;
+	}
 	key->id = apfs_cat_cnid((struct apfs_key_header *)raw);
 	key->type = apfs_cat_type((struct apfs_key_header *)raw);
 	key->number = 0;
 
 	switch (key->type) {
 	case APFS_TYPE_SNAP_METADATA:
-		if (size != sizeof(struct apfs_snap_metadata_key))
+		if (size != sizeof(struct apfs_snap_metadata_key)) {
+			apfs_err(NULL, "bad key length (%d)", size);
 			return -EFSCORRUPTED;
+		}
 		key->name = NULL;
 		return 0;
 	case APFS_TYPE_SNAP_NAME:
 		if (size < sizeof(struct apfs_snap_name_key) + 1 || *((char *)raw + size - 1) != 0) {
 			/* snapshot name must have NULL-termination */
+			apfs_err(NULL, "invalid snap name key (%d)", size);
 			return -EFSCORRUPTED;
 		}
 		key->name = ((struct apfs_snap_name_key *)raw)->name;
@@ -251,8 +273,10 @@ int apfs_read_omap_snap_key(void *raw, int size, struct apfs_key *key)
 {
 	__le64 *xid = NULL;
 
-	if (size != sizeof(*xid))
+	if (size != sizeof(*xid)) {
+		apfs_err(NULL, "bad key length (%d)", size);
 		return -EFSCORRUPTED;
+	}
 	xid = raw;
 
 	key->id = le64_to_cpup(xid);

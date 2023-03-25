@@ -23,32 +23,43 @@
 static int apfs_xattr_from_query(struct apfs_query *query,
 				 struct apfs_xattr *xattr)
 {
+	struct super_block *sb = query->node->object.sb;
 	struct apfs_xattr_val *xattr_val;
 	struct apfs_xattr_key *xattr_key;
 	char *raw = query->node->object.data;
 	int datalen = query->len - sizeof(*xattr_val);
 	int namelen = query->key_len - sizeof(*xattr_key);
 
-	if (namelen < 1 || datalen < 0)
+	if (namelen < 1 || datalen < 0) {
+		apfs_err(sb, "bad length of name (%d) or data (%d)", namelen, datalen);
 		return -EFSCORRUPTED;
+	}
 
 	xattr_val = (struct apfs_xattr_val *)(raw + query->off);
 	xattr_key = (struct apfs_xattr_key *)(raw + query->key_off);
 
-	if (namelen != le16_to_cpu(xattr_key->name_len))
+	if (namelen != le16_to_cpu(xattr_key->name_len)) {
+		apfs_err(sb, "inconsistent name length (%d vs %d)", namelen, le16_to_cpu(xattr_key->name_len));
 		return -EFSCORRUPTED;
+	}
 
 	/* The xattr name must be NULL-terminated */
-	if (xattr_key->name[namelen - 1] != 0)
+	if (xattr_key->name[namelen - 1] != 0) {
+		apfs_err(sb, "null termination missing");
 		return -EFSCORRUPTED;
+	}
 
 	xattr->has_dstream = le16_to_cpu(xattr_val->flags) &
 			     APFS_XATTR_DATA_STREAM;
 
-	if (xattr->has_dstream && datalen != sizeof(struct apfs_xattr_dstream))
+	if (xattr->has_dstream && datalen != sizeof(struct apfs_xattr_dstream)) {
+		apfs_err(sb, "bad data length (%d)", datalen);
 		return -EFSCORRUPTED;
-	if (!xattr->has_dstream && datalen != le16_to_cpu(xattr_val->xdata_len))
+	}
+	if (!xattr->has_dstream && datalen != le16_to_cpu(xattr_val->xdata_len)) {
+		apfs_err(sb, "inconsistent data length (%d vs %d)", datalen, le16_to_cpu(xattr_val->xdata_len));
 		return -EFSCORRUPTED;
+	}
 
 	xattr->name = xattr_key->name;
 	xattr->name_len = namelen - 1; /* Don't count the NULL termination */
@@ -113,6 +124,8 @@ static int apfs_xattr_extents_read(struct inode *parent,
 	length = dstream->ds_size;
 	if (length < 0 || length < dstream->ds_size) {
 		/* TODO: avoid overflow here for huge compressed files */
+		/* TODO: fix leak here... */
+		apfs_warn(sb, "xattr is too big to read on linux (0x%llx)", dstream->ds_size);
 		return -E2BIG;
 	}
 
@@ -144,12 +157,14 @@ static int apfs_xattr_extents_read(struct inode *parent,
 			goto out;
 		if (bno == 0) {
 			/* No holes in xattr dstreams, I believe */
+			apfs_err(sb, "xattr dstream has a hole");
 			ret = -EFSCORRUPTED;
 			goto out;
 		}
 
 		bhs[i] = __getblk_gfp(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
 		if (!bhs[i]) {
+			apfs_err(sb, "failed to map block 0x%llx", bno);
 			ret = -EIO;
 			goto out;
 		}
@@ -167,6 +182,7 @@ static int apfs_xattr_extents_read(struct inode *parent,
 
 		wait_on_buffer(bhs[i]);
 		if (!buffer_uptodate(bhs[i])) {
+			apfs_err(sb, "failed to read a block");
 			ret = -EIO;
 			goto out;
 		}
@@ -260,12 +276,15 @@ int ____apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret)
+	if (ret) {
+		if (ret != -ENODATA)
+			apfs_err(sb, "query failed for id 0x%llx (%s)", cnid, name);
 		goto done;
+	}
 
 	ret = apfs_xattr_from_query(query, &xattr);
 	if (ret) {
-		apfs_alert(sb, "bad xattr record in inode 0x%llx", cnid);
+		apfs_err(sb, "bad xattr record in inode 0x%llx", cnid);
 		goto done;
 	}
 
@@ -300,8 +319,10 @@ static int apfs_xattr_get(struct inode *inode, const char *name, void *buffer, s
 	down_read(&nxi->nx_big_sem);
 	ret = __apfs_xattr_get(inode, name, buffer, size);
 	up_read(&nxi->nx_big_sem);
-	if (ret > XATTR_SIZE_MAX)
+	if (ret > XATTR_SIZE_MAX) {
+		apfs_warn(inode->i_sb, "xattr is too big to read on linux (%d)", ret);
 		return -E2BIG;
+	}
 	return ret;
 }
 
@@ -327,8 +348,10 @@ static int apfs_delete_xattr(struct apfs_query *query)
 	int err;
 
 	err = apfs_xattr_from_query(query, &xattr);
-	if (err)
+	if (err) {
+		apfs_err(sb, "bad xattr record");
 		return err;
+	}
 
 	if (!xattr.has_dstream)
 		return apfs_btree_remove(query);
@@ -344,9 +367,13 @@ static int apfs_delete_xattr(struct apfs_query *query)
 	 * really need to add some assertions (TODO).
 	 */
 	err = apfs_btree_remove(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "removal failed");
 		goto fail;
+	}
 	err = apfs_truncate(dstream, 0);
+	if (err)
+		apfs_err(sb, "truncation failed for dstream 0x%llx", dstream->ds_id);
 
 fail:
 	kfree(dstream);
@@ -381,12 +408,16 @@ static int apfs_delete_any_xattr(struct inode *inode)
 	if (ret) {
 		if (ret == -ENODATA)
 			ret = 0; /* No more xattrs, we are done */
+		else
+			apfs_err(sb, "query failed for ino 0x%llx", apfs_ino(inode));
 		goto out;
 	}
 
 	ret = apfs_delete_xattr(query);
 	if (!ret)
 		ret = -EAGAIN;
+	else
+		apfs_err(sb, "xattr deletion failed");
 
 out:
 	apfs_free_query(query);
@@ -531,10 +562,13 @@ static struct apfs_dstream_info *apfs_create_xattr_dstream(struct super_block *s
 		u64 bno;
 
 		err = apfs_dstream_get_new_bno(dstream, i, &bno);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to get new block in dstream 0x%llx", dstream->ds_id);
 			goto fail;
+		}
 		bh = apfs_sb_bread(sb, bno);
 		if (!bh) {
+			apfs_err(sb, "failed to read new block");
 			err = -EIO;
 			goto fail;
 		}
@@ -556,8 +590,10 @@ static struct apfs_dstream_info *apfs_create_xattr_dstream(struct super_block *s
 	}
 
 	err = apfs_flush_extent_cache(dstream);
-	if (err)
+	if (err) {
+		apfs_err(sb, "extent cache flush failed for dstream 0x%llx", dstream->ds_id);
 		goto fail;
+	}
 	return dstream;
 
 fail:
@@ -580,8 +616,10 @@ static int apfs_xattr_dstream_from_query(struct apfs_query *query, struct apfs_d
 	int err;
 
 	err = apfs_xattr_from_query(query, &xattr);
-	if (err)
+	if (err) {
+		apfs_err(sb, "bad xattr record");
 		return err;
+	}
 
 	if (xattr.has_dstream) {
 		dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
@@ -620,8 +658,10 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 
 	if (size > APFS_XATTR_MAX_EMBEDDED_SIZE) {
 		dstream = apfs_create_xattr_dstream(sb, value, size);
-		if (IS_ERR(dstream))
+		if (IS_ERR(dstream)) {
+			apfs_err(sb, "failed to set xattr dstream for ino 0x%llx", apfs_ino(inode));
 			return PTR_ERR(dstream);
+		}
 	}
 
 	apfs_init_xattr_key(cnid, name, &key);
@@ -636,21 +676,27 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 
 	ret = apfs_btree_query(sb, &query);
 	if (ret) {
-		if (ret != -ENODATA)
+		if (ret != -ENODATA) {
+			apfs_err(sb, "query failed for id 0x%llx (%s)", cnid, name);
 			goto done;
-		else if (flags & XATTR_REPLACE)
+		} else if (flags & XATTR_REPLACE) {
 			goto done;
+		}
 	} else if (flags & XATTR_CREATE) {
 		ret = -EEXIST;
 		goto done;
 	} else if (!value) {
 		ret = apfs_delete_xattr(query);
+		if (ret)
+			apfs_err(sb, "xattr deletion failed");
 		goto done;
 	} else {
 		/* Remember the old dstream to clean it up later */
 		ret = apfs_xattr_dstream_from_query(query, &old_dstream);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "failed to get the old dstream");
 			goto done;
+		}
 	}
 
 	key_len = apfs_build_xattr_key(name, cnid, &raw_key);
@@ -676,11 +722,16 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 		ret = apfs_btree_insert(query, raw_key, key_len, raw_val, val_len);
 	else
 		ret = apfs_btree_replace(query, raw_key, key_len, raw_val, val_len);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "insertion/update failed for id 0x%llx (%s)", cnid, name);
 		goto done;
+	}
 
-	if (old_dstream)
+	if (old_dstream) {
 		ret = apfs_truncate(old_dstream, 0);
+		if (ret)
+			apfs_err(sb, "truncation failed for dstream 0x%llx", old_dstream->ds_id);
+	}
 
 done:
 	kfree(dstream);
@@ -781,12 +832,14 @@ ssize_t apfs_listxattr(struct dentry *dentry, char *buffer, size_t size)
 			ret = size - free;
 			break;
 		}
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "query failed for id 0x%llx", cnid);
 			break;
+		}
 
 		ret = apfs_xattr_from_query(query, &xattr);
 		if (ret) {
-			apfs_alert(sb, "bad xattr key in inode %llx", cnid);
+			apfs_err(sb, "bad xattr key in inode %llx", cnid);
 			break;
 		}
 
