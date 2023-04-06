@@ -188,12 +188,11 @@ fail:
 	return err;
 }
 
-static int apfs_create_snap_meta_records(struct inode *mntpoint, const char *name, u64 sblock_oid)
+static int apfs_create_snap_meta_records(struct inode *mntpoint, const char *name, int name_len, u64 sblock_oid)
 {
 	struct super_block *sb = mntpoint->i_sb;
 	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
 	struct apfs_node *snap_root = NULL;
-	size_t name_len;
 	int err;
 
 	snap_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_snap_meta_tree_oid), APFS_OBJ_PHYSICAL, true /* write */);
@@ -203,14 +202,6 @@ static int apfs_create_snap_meta_records(struct inode *mntpoint, const char *nam
 	}
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	vsb_raw->apfs_snap_meta_tree_oid = cpu_to_le64(snap_root->object.oid);
-
-	name_len = strlen(name);
-	if (name_len > APFS_SNAP_MAX_NAMELEN) {
-		/* TODO: this check is unsafe! Also, this isn't corruption? */
-		apfs_warn(sb, "snapshot name is too long (%d)", (int)name_len);
-		err = -EFSCORRUPTED;
-		goto fail;
-	}
 
 	err = apfs_create_snap_metadata_rec(mntpoint, snap_root, name, name_len, sblock_oid);
 	if (err) {
@@ -357,7 +348,7 @@ static int apfs_update_omap_snapshots(struct super_block *sb)
  *
  * Returns 0 on success, or a negative error code in case of failure.
  */
-static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name)
+static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name, int name_len)
 {
 	struct super_block *sb = mntpoint->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
@@ -389,7 +380,7 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name)
 		goto fail;
 	}
 
-	err = apfs_create_snap_meta_records(mntpoint, name, sblock_oid);
+	err = apfs_create_snap_meta_records(mntpoint, name, name_len, sblock_oid);
 	if (err) {
 		apfs_err(sb, "failed to create snap meta records");
 		goto fail;
@@ -442,6 +433,7 @@ int apfs_ioc_take_snapshot(struct file *file, void __user *user_arg)
 	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
 	struct apfs_ioctl_snap_name *arg = NULL;
+	size_t name_len;
 	int err;
 
 	if (apfs_ino(inode) != APFS_ROOT_DIR_INO_NUM) {
@@ -473,7 +465,14 @@ int apfs_ioc_take_snapshot(struct file *file, void __user *user_arg)
 		goto fail;
 	}
 
-	err = apfs_do_ioc_take_snapshot(inode, arg->name);
+	name_len = strnlen(arg->name, sizeof(arg->name));
+	if (name_len == sizeof(arg->name)) {
+		apfs_warn(sb, "snapshot name is too long (%d)", (int)name_len);
+		err = -EINVAL;
+		goto fail;
+	}
+
+	err = apfs_do_ioc_take_snapshot(inode, arg->name, name_len);
 fail:
 	kfree(arg);
 	arg = NULL;
