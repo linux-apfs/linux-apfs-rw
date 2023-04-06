@@ -124,9 +124,9 @@ static int apfs_xattr_extents_read(struct inode *parent,
 	length = dstream->ds_size;
 	if (length < 0 || length < dstream->ds_size) {
 		/* TODO: avoid overflow here for huge compressed files */
-		/* TODO: fix leak here... */
 		apfs_warn(sb, "xattr is too big to read on linux (0x%llx)", dstream->ds_size);
-		return -E2BIG;
+		ret = -E2BIG;
+		goto out;
 	}
 
 	if (!buffer) {
