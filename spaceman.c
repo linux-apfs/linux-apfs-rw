@@ -664,11 +664,14 @@ int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count)
 	struct apfs_spaceman *sm = APFS_SM(sb);
 	struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
 	struct apfs_spaceman_free_queue *fq;
-	struct apfs_node *fq_root;
+	struct apfs_node *fq_root = NULL;
+	struct apfs_btree_info *fq_info = NULL;
 	struct apfs_query *query = NULL;
 	struct apfs_spaceman_free_queue_key raw_key;
 	__le64 raw_val;
 	struct apfs_key key;
+	u64 node_count;
+	u16 node_limit;
 	int err;
 
 	if (apfs_block_in_ip(sm, bno))
@@ -710,6 +713,20 @@ int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count)
 	}
 	if (err) {
 		apfs_err(sb, "insertion failed for xid 0x%llx, paddr 0x%llx", nxi->nx_xid, bno);
+		goto fail;
+	}
+
+	fq_info = (void *)fq_root->object.data + sb->s_blocksize - sizeof(*fq_info);
+	node_count = le64_to_cpu(fq_info->bt_node_count);
+	node_limit = le16_to_cpu(fq->sfq_tree_node_limit);
+	if (node_count > node_limit) {
+		/*
+		 * This should never happen if we kept the tree well packed, but
+		 * right now it does happen very rarely (TODO). It's best to
+		 * abort and avoid corruption.
+		 */
+		apfs_alert(sb, "free queue has too many nodes (%llu > %u)", node_count, node_limit);
+		err = -EFSCORRUPTED;
 		goto fail;
 	}
 
