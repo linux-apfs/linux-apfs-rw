@@ -365,8 +365,10 @@ static int apfs_flush_fq_rec(struct apfs_node *root, u64 xid, u64 *len)
 			err = apfs_ip_mark_free(sb, bno);
 		else
 			err = apfs_main_free(sb, bno);
-		if(err)
+		if (err) {
 			apfs_err(sb, "freeing block 0x%llx failed (%d)", (unsigned long long)bno, err);
+			goto fail;
+		}
 	}
 	err = apfs_btree_remove(query);
 	if (err) {
