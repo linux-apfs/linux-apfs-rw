@@ -723,8 +723,8 @@ int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count)
 	node_limit = le16_to_cpu(fq->sfq_tree_node_limit);
 	if (node_count > node_limit) {
 		/*
-		 * This should never happen if we kept the tree well packed, but
-		 * right now it does happen very rarely (TODO). It's best to
+		 * Ideally this should never happen, but at this point I can't
+		 * be certain of that (TODO). If it does happen, it's best to
 		 * abort and avoid corruption.
 		 */
 		apfs_alert(sb, "free queue has too many nodes (%llu > %u)", node_count, node_limit);

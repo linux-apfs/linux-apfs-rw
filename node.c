@@ -1066,13 +1066,14 @@ static int apfs_btree_inc_height(struct apfs_query *query)
 }
 
 /**
- * apfs_copy_record_range - Copy a range of records to an empty nonroot node
+ * apfs_copy_record_range - Copy a range of records to an empty node
  * @dest_node:	destination node
  * @src_node:	source node
  * @start:	index of first record in range
  * @end:	index of first record after the range
  *
- * Returns 0 on success or a negative error code in case of failure.
+ * Doesn't modify the info footer of root nodes. Returns 0 on success or a
+ * negative error code in case of failure.
  */
 static int apfs_copy_record_range(struct apfs_node *dest_node,
 				  struct apfs_node *src_node,
@@ -1090,7 +1091,6 @@ static int apfs_copy_record_range(struct apfs_node *dest_node,
 	src_raw = (void *)src_node->object.data;
 
 	ASSERT(!dest_node->records);
-	ASSERT(!apfs_node_is_root(dest_node));
 	apfs_assert_in_transaction(sb, &dest_raw->btn_o);
 
 	/* Resize the table of contents so that all the records fit */
@@ -1103,7 +1103,9 @@ static int apfs_copy_record_range(struct apfs_node *dest_node,
 		toc_size = toc_entry_size * round_up(end - start, APFS_BTREE_TOC_ENTRY_INCREMENT);
 	dest_node->key = sizeof(*dest_raw) + toc_size;
 	dest_node->free = dest_node->key;
-	dest_node->data = sb->s_blocksize; /* Nonroot */
+	dest_node->data = sb->s_blocksize;
+	if (apfs_node_is_root(dest_node))
+		dest_node->data -= sizeof(struct apfs_btree_info);
 
 	/* We'll use a temporary query structure to move the records around */
 	query = apfs_alloc_query(dest_node, NULL /* parent */);
@@ -1656,6 +1658,49 @@ fail:
 }
 
 /**
+ * apfs_node_total_room - Total free space in a node
+ * @node: the node
+ */
+static int apfs_node_total_room(struct apfs_node *node)
+{
+	return node->data - node->free + node->key_free_list_len + node->val_free_list_len;
+}
+
+/**
+ * apfs_defragment_node - Make all free space in a node contiguous
+ * @node: node to defragment
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_defragment_node(struct apfs_node *node)
+{
+	struct super_block *sb = node->object.sb;
+	struct apfs_btree_node_phys *node_raw = (void *)node->object.data;
+	struct apfs_node *tmp_node = NULL;
+	int record_count, err;
+
+	apfs_assert_in_transaction(sb, &node_raw->btn_o);
+
+	/* Put all records in a temporary in-memory node and deal them out */
+	err = apfs_node_temp_dup(node, &tmp_node);
+	if (err)
+		return err;
+	record_count = node->records;
+	node->records = 0;
+	node->key_free_list_len = 0;
+	node->val_free_list_len = 0;
+	err = apfs_copy_record_range(node, tmp_node, 0, record_count);
+	if (err) {
+		apfs_err(sb, "record copy failed");
+		goto fail;
+	}
+	apfs_update_node(node);
+fail:
+	apfs_node_free(tmp_node);
+	return err;
+}
+
+/**
  * apfs_node_insert - Insert a new record in a node
  * @query:	query run to search for the record
  * @key:	on-disk record key
@@ -1671,12 +1716,19 @@ fail:
 int apfs_node_insert(struct apfs_query *query, void *key, int key_len, void *val, int val_len)
 {
 	struct apfs_node *node = query->node;
+	struct super_block *sb = node->object.sb;
 	struct apfs_btree_node_phys *node_raw = (void *)node->object.data;
 	int toc_entry_size;
 	int old_free, old_data, old_key_free_len, old_val_free_len;
-	int key_off, val_off, err = 0;
+	int key_off, val_off, err;
+	int needed_room;
+	bool defragged = false;
 
-	apfs_assert_in_transaction(node->object.sb, &node_raw->btn_o);
+	apfs_assert_in_transaction(sb, &node_raw->btn_o);
+
+retry:
+	needed_room = key_len + val_len;
+	err = 0;
 
 	if (apfs_node_has_fixed_kv_size(node))
 		toc_entry_size = sizeof(struct apfs_kvoff);
@@ -1694,8 +1746,11 @@ int apfs_node_insert(struct apfs_query *query, void *key, int key_len, void *val
 
 		new_key_base += inc;
 		new_free_base += inc;
-		if (new_free_base > node->data)
-			return -ENOSPC;
+		if (new_free_base > node->data) {
+			needed_room += inc;
+			err = -ENOSPC;
+			goto fail_defrag;
+		}
 		memmove((void *)node_raw + new_key_base,
 			(void *)node_raw + node->key, node->free - node->key);
 
@@ -1712,14 +1767,14 @@ int apfs_node_insert(struct apfs_query *query, void *key, int key_len, void *val
 	key_off = apfs_node_alloc_key(node, key_len);
 	if (key_off < 0) {
 		err = key_off;
-		goto fail;
+		goto fail_update;
 	}
 
 	if (val) {
 		val_off = apfs_node_alloc_val(node, val_len);
 		if (val_off < 0) {
 			err = val_off;
-			goto fail;
+			goto fail_update;
 		}
 	}
 
@@ -1738,7 +1793,7 @@ int apfs_node_insert(struct apfs_query *query, void *key, int key_len, void *val
 	/* Add the new entry to the table of contents */
 	apfs_create_toc_entry(query);
 
-fail:
+fail_update:
 	/*
 	 * We must update the on-disk node even on failure, because we did
 	 * expand the table of contents.
@@ -1750,6 +1805,26 @@ fail:
 		node->val_free_list_len = old_val_free_len;
 	}
 	apfs_update_node(node);
+fail_defrag:
+	if (err == -ENOSPC && !defragged && needed_room <= apfs_node_total_room(node)) {
+		/*
+		 * If we know we should have enough room, defragment the node
+		 * and retry the insertion to avoid a split. This is especially
+		 * important for the ip free queue, because it has a very low
+		 * hard limit in the number of nodes allowed.
+		 */
+		err = apfs_defragment_node(node);
+		if (err) {
+			apfs_err(sb, "failed to defragment node");
+			return err;
+		}
+		defragged = true;
+		goto retry;
+	}
+	if (err == -ENOSPC && defragged) {
+		apfs_err(sb, "node reports incorrect free space");
+		err = -EFSCORRUPTED;
+	}
 	return err;
 }
 
