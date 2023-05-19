@@ -885,7 +885,11 @@ extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			      struct buffer_head *bh_result, int create);
 extern int APFS_GET_NEW_BLOCK_MAXOPS(void);
 extern int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 extern loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags);
+#else
+extern int apfs_clone_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, u64 len);
+#endif
 extern int apfs_clone_extents(struct apfs_dstream_info *dstream, u64 new_id);
 
 /* file.c */

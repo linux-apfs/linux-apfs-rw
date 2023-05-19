@@ -1636,7 +1636,11 @@ int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size)
 	return apfs_create_hole(dstream, old_blks, new_blks);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags)
+#else
+int apfs_clone_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, u64 len)
+#endif
 {
 	struct inode *src_inode = file_inode(src_file);
 	struct inode *dst_inode = file_inode(dst_file);
@@ -1651,8 +1655,10 @@ loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst
 	const u64 xfield_flags = APFS_INODE_MAINTAIN_DIR_STATS | APFS_INODE_IS_SPARSE | APFS_INODE_HAS_PURGEABLE_FLAGS;
 	int err;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 	if (remap_flags & ~(REMAP_FILE_ADVISORY))
 		return -EINVAL;
+#endif
 	if (src_inode == dst_inode)
 		return -EINVAL;
 
