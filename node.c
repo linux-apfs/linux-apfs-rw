@@ -138,12 +138,12 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 
 	if (nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, bh)) {
 		/* TODO: don't check this twice for virtual/physical objects */
-		apfs_err(sb, "bad checksum for node in block 0x%llx", bh->b_blocknr);
+		apfs_err(sb, "bad checksum for node in block 0x%llx", (unsigned long long)bh->b_blocknr);
 		apfs_node_free(node);
 		return ERR_PTR(-EFSBADCRC);
 	}
 	if (!apfs_node_is_valid(sb, node)) {
-		apfs_err(sb, "bad node in block 0x%llx", bh->b_blocknr);
+		apfs_err(sb, "bad node in block 0x%llx", (unsigned long long)bh->b_blocknr);
 		apfs_node_free(node);
 		return ERR_PTR(-EFSCORRUPTED);
 	}

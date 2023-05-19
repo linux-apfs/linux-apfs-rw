@@ -383,7 +383,7 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool
 	if (!preserve) {
 		err = apfs_free_queue_insert(sb, bh->b_blocknr, 1);
 		if (err)
-			apfs_err(sb, "free queue insertion failed for 0x%llx", bh->b_blocknr);
+			apfs_err(sb, "free queue insertion failed for 0x%llx", (unsigned long long)bh->b_blocknr);
 	} else if ((type & APFS_OBJECT_TYPE_MASK) != APFS_OBJECT_TYPE_FS) {
 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
