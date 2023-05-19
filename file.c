@@ -145,7 +145,11 @@ const struct file_operations apfs_file_operations = {
 	.open			= generic_file_open,
 	.fsync			= apfs_fsync,
 	.unlocked_ioctl		= apfs_file_ioctl,
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)
 	.copy_file_range	= generic_copy_file_range,
+#endif
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 	.remap_file_range	= apfs_remap_file_range,
 #else
