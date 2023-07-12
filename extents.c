@@ -50,8 +50,10 @@ int apfs_extent_from_query(struct apfs_query *query,
 		struct apfs_file_extent_val *ext = NULL;
 		struct apfs_file_extent_key *ext_key = NULL;
 
-		if (query->len != sizeof(*ext) || query->key_len != sizeof(*ext_key))
+		if (query->len != sizeof(*ext) || query->key_len != sizeof(*ext_key)) {
+			apfs_err(sb, "bad length of key (%d) or value (%d)", query->key_len, query->len);
 			return -EFSCORRUPTED;
+		}
 
 		ext = (struct apfs_file_extent_val *)(raw + query->off);
 		ext_key = (struct apfs_file_extent_key *)(raw + query->key_off);
@@ -64,8 +66,10 @@ int apfs_extent_from_query(struct apfs_query *query,
 		struct apfs_fext_tree_val *fext_val = NULL;
 		struct apfs_fext_tree_key *fext_key = NULL;
 
-		if (query->len != sizeof(*fext_val) || query->key_len != sizeof(*fext_key))
+		if (query->len != sizeof(*fext_val) || query->key_len != sizeof(*fext_key)) {
+			apfs_err(sb, "bad length of sealed key (%d) or value (%d)", query->key_len, query->len);
 			return -EFSCORRUPTED;
+		}
 
 		fext_val = (struct apfs_fext_tree_val *)(raw + query->off);
 		fext_key = (struct apfs_fext_tree_key *)(raw + query->key_off);
@@ -77,8 +81,10 @@ int apfs_extent_from_query(struct apfs_query *query,
 	}
 
 	/* Extent length must be a multiple of the block size */
-	if (ext_len & (sb->s_blocksize - 1))
+	if (ext_len & (sb->s_blocksize - 1)) {
+		apfs_err(sb, "invalid length (0x%llx)", ext_len);
 		return -EFSCORRUPTED;
+	}
 	extent->len = ext_len;
 	return 0;
 }
@@ -121,8 +127,10 @@ static int apfs_extent_read(struct apfs_dstream_info *dstream, sector_t dsblock,
 	} else {
 		apfs_init_fext_key(dstream->ds_id, iaddr, &key);
 		root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_fext_tree_oid), APFS_OBJ_PHYSICAL, false /* write */);
-		if (IS_ERR(root))
+		if (IS_ERR(root)) {
+			apfs_err(sb, "failed to read fext root 0x%llx", le64_to_cpu(vsb_raw->apfs_fext_tree_oid));
 			return PTR_ERR(root);
+		}
 	}
 
 	query = apfs_alloc_query(root, NULL /* parent */);
@@ -135,6 +143,7 @@ static int apfs_extent_read(struct apfs_dstream_info *dstream, sector_t dsblock,
 
 	ret = apfs_btree_query(sb, &query);
 	if (ret) {
+		apfs_err(sb, "query failed for id 0x%llx, addr 0x%llx", dstream->ds_id, iaddr);
 		if (ret == -ENODATA)
 			ret = -EFSCORRUPTED;
 		goto done;
@@ -142,11 +151,11 @@ static int apfs_extent_read(struct apfs_dstream_info *dstream, sector_t dsblock,
 
 	ret = apfs_extent_from_query(query, extent);
 	if (ret) {
-		apfs_alert(sb, "bad extent record for dstream 0x%llx", dstream->ds_id);
+		apfs_err(sb, "bad extent record for dstream 0x%llx", dstream->ds_id);
 		goto done;
 	}
 	if (iaddr < extent->logical_addr || iaddr >= extent->logical_addr + extent->len) {
-		apfs_alert(sb, "no extent for addr 0x%llx in dstream 0x%llx", iaddr, dstream->ds_id);
+		apfs_err(sb, "no extent for addr 0x%llx in dstream 0x%llx", iaddr, dstream->ds_id);
 		ret = -EFSCORRUPTED;
 		goto done;
 	}
@@ -213,8 +222,10 @@ int __apfs_get_block(struct apfs_dstream_info *dstream, sector_t dsblock,
 		return 0;
 
 	ret = apfs_extent_read(dstream, dsblock, &ext);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "extent read failed");
 		return ret;
+	}
 
 	/* Find the block offset of iblock within the extent */
 	blk_off = dsblock - (ext.logical_addr >> sb->s_blocksize_bits);
@@ -290,8 +301,10 @@ static int apfs_shrink_extent_head(struct apfs_query *query, struct apfs_dstream
 	int err = 0;
 
 	err = apfs_extent_from_query(query, &extent);
-	if (err)
+	if (err) {
+		apfs_err(sb, "bad extent record for dstream 0x%llx", dstream->ds_id);
 		return err;
+	}
 	raw = query->node->object.data;
 	key = *(struct apfs_file_extent_key *)(raw + query->key_off);
 	val = *(struct apfs_file_extent_val *)(raw + query->off);
@@ -302,8 +315,10 @@ static int apfs_shrink_extent_head(struct apfs_query *query, struct apfs_dstream
 	/* Delete the physical records for the blocks lost in the shrinkage */
 	if (!apfs_ext_is_hole(&extent)) {
 		err = apfs_range_put_reference(sb, extent.phys_block_num, head_len);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to put range 0x%llx-0x%llx", extent.phys_block_num, head_len);
 			return err;
+		}
 	} else {
 		dstream->ds_sparse_bytes -= head_len;
 	}
@@ -337,13 +352,17 @@ static int apfs_shrink_extent_tail(struct apfs_query *query, struct apfs_dstream
 	ASSERT((end & (sb->s_blocksize - 1)) == 0);
 
 	err = apfs_query_join_transaction(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "query join failed");
 		return err;
+	}
 	raw = query->node->object.data;
 
 	err = apfs_extent_from_query(query, &extent);
-	if (err)
+	if (err) {
+		apfs_err(sb, "bad extent record for dstream 0x%llx", dstream->ds_id);
 		return err;
+	}
 	val = raw + query->off;
 
 	new_len = end - extent.logical_addr;
@@ -353,8 +372,10 @@ static int apfs_shrink_extent_tail(struct apfs_query *query, struct apfs_dstream
 	/* Delete the physical records for the blocks lost in the shrinkage */
 	if (!apfs_ext_is_hole(&extent)) {
 		err = apfs_range_put_reference(sb, extent.phys_block_num + new_blkcount, tail_len);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to put range 0x%llx-0x%llx", extent.phys_block_num + new_blkcount, tail_len);
 			return err;
+		}
 	} else {
 		dstream->ds_sparse_bytes -= tail_len;
 	}
@@ -419,40 +440,53 @@ static int apfs_update_tail_extent(struct apfs_dstream_info *dstream, const stru
 	query->flags = APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for last extent of id 0x%llx", extent_id);
 		goto out;
+	}
 
 	if (ret == -ENODATA || !apfs_query_found_extent(query)) {
 		/* We are creating the first extent for the file */
 		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "insertion failed for id 0x%llx, addr 0x%llx", extent_id, extent->logical_addr);
 			goto out;
+		}
 	} else {
 		struct apfs_file_extent tail;
 
 		ret = apfs_extent_from_query(query, &tail);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "bad extent record for dstream 0x%llx", dstream->ds_id);
 			goto out;
+		}
 
 		if (tail.logical_addr > extent->logical_addr) {
+			apfs_alert(sb, "extent is not tail - bug!");
 			ret = -EOPNOTSUPP;
 			goto out;
 		} else if (tail.logical_addr == extent->logical_addr) {
 			ret = apfs_btree_replace(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
-			if (ret)
+			if (ret) {
+				apfs_err(sb, "update failed for id 0x%llx, addr 0x%llx", extent_id, extent->logical_addr);
 				goto out;
+			}
 			if (apfs_ext_is_hole(&tail)) {
 				dstream->ds_sparse_bytes -= tail.len;
 			} else if (tail.phys_block_num != extent->phys_block_num) {
 				ret = apfs_range_put_reference(sb, tail.phys_block_num, tail.len);
-				if (ret)
+				if (ret) {
+					apfs_err(sb, "failed to put range 0x%llx-0x%llx", tail.phys_block_num, tail.len);
 					goto out;
+				}
 			}
 			if (new_crypto == tail.crypto_id)
 				goto out;
 			ret = apfs_crypto_adj_refcnt(sb, tail.crypto_id, -1);
-			if (ret)
+			if (ret) {
+				apfs_err(sb, "failed to put crypto id 0x%llx", tail.crypto_id);
 				goto out;
+			}
 		} else {
 			/*
 			 * TODO: we could actually also continue the tail extent
@@ -463,16 +497,22 @@ static int apfs_update_tail_extent(struct apfs_dstream_info *dstream, const stru
 			 */
 			if (extent->logical_addr < tail.logical_addr + tail.len) {
 				ret = apfs_shrink_extent_tail(query, dstream, extent->logical_addr);
-				if (ret)
+				if (ret) {
+					apfs_err(sb, "failed to shrink tail of dstream 0x%llx", extent_id);
 					goto out;
+				}
 			}
 			ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
-			if (ret)
+			if (ret) {
+				apfs_err(sb, "insertion failed for id 0x%llx, addr 0x%llx", extent_id, extent->logical_addr);
 				goto out;
+			}
 		}
 	}
 
 	ret = apfs_crypto_adj_refcnt(sb, new_crypto, 1);
+	if (ret)
+		apfs_err(sb, "failed to take crypto id 0x%llx", new_crypto);
 
 out:
 	apfs_free_query(query);
@@ -498,13 +538,17 @@ static int apfs_split_extent(struct apfs_query *query, u64 div)
 	int err = 0;
 
 	err = apfs_query_join_transaction(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "query join failed");
 		return err;
+	}
 	raw = query->node->object.data;
 
 	err = apfs_extent_from_query(query, &extent);
-	if (err)
+	if (err) {
+		apfs_err(sb, "bad extent record");
 		return err;
+	}
 	val1 = raw + query->off;
 	val2 = *(struct apfs_file_extent_val *)(raw + query->off);
 	key2 = *(struct apfs_file_extent_key *)(raw + query->key_off);
@@ -522,8 +566,10 @@ static int apfs_split_extent(struct apfs_query *query, u64 div)
 		val2.phys_block_num = cpu_to_le64(extent.phys_block_num + blkcount1);
 	apfs_set_extent_length(&val2, len2);
 	err = apfs_btree_insert(query, &key2, sizeof(key2), &val2, sizeof(val2));
-	if (err)
+	if (err) {
+		apfs_err(sb, "insertion failed in division 0x%llx", div);
 		return err;
+	}
 
 	return apfs_crypto_adj_refcnt(sb, extent.crypto_id, 1);
 }
@@ -571,8 +617,10 @@ search_and_insert:
 	query->flags = APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for id 0x%llx, addr 0x%llx", extent_id, extent->logical_addr);
 		goto out;
+	}
 
 	if (ret == -ENODATA || !apfs_query_found_extent(query)) {
 		/*
@@ -580,16 +628,18 @@ search_and_insert:
 		 * beginning of the file.
 		 */
 		if (!second_run) {
-			apfs_alert(sb, "missing extent on dstream 0x%llx", extent_id);
+			apfs_err(sb, "missing extent on dstream 0x%llx", extent_id);
 			ret = -EFSCORRUPTED;
 		} else {
 			ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+			if (ret)
+				apfs_err(sb, "insertion failed for id 0x%llx, addr 0x%llx", extent_id, extent->logical_addr);
 		}
 		goto out;
 	}
 
 	if (apfs_extent_from_query(query, &prev_ext)) {
-		apfs_alert(sb, "bad mid extent record on dstream 0x%llx", extent_id);
+		apfs_err(sb, "bad mid extent record on dstream 0x%llx", extent_id);
 		ret = -EFSCORRUPTED;
 		goto out;
 	}
@@ -600,23 +650,31 @@ search_and_insert:
 	if (prev_end == extent->logical_addr && second_run) {
 		/* The new extent goes in the hole we just made */
 		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "insertion failed for id 0x%llx, addr 0x%llx", extent_id, extent->logical_addr);
 			goto out;
+		}
 	} else if (prev_start == extent->logical_addr && prev_ext.len == extent->len) {
 		/* The old and new extents are the same logical block */
 		ret = apfs_btree_replace(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "update failed for id 0x%llx, addr 0x%llx", extent_id, extent->logical_addr);
 			goto out;
+		}
 		if (apfs_ext_is_hole(&prev_ext)) {
 			dstream->ds_sparse_bytes -= prev_ext.len;
 		} else if (prev_ext.phys_block_num != extent->phys_block_num) {
 			ret = apfs_range_put_reference(sb, prev_ext.phys_block_num, prev_ext.len);
-			if (ret)
+			if (ret) {
+				apfs_err(sb, "failed to put range 0x%llx-0x%llx", prev_ext.phys_block_num, prev_ext.len);
 				goto out;
+			}
 		}
 		ret = apfs_crypto_adj_refcnt(sb, prev_crypto, -1);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "failed to put crypto id 0x%llx", prev_crypto);
 			goto out;
+		}
 	} else if (prev_start == extent->logical_addr) {
 		/* The new extent is the first logical block of the old one */
 		if (second_run) {
@@ -626,8 +684,10 @@ search_and_insert:
 			goto out;
 		}
 		ret = apfs_shrink_extent_head(query, dstream, extent->logical_addr + extent->len);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "failed to shrink extent in dstream 0x%llx", extent_id);
 			goto out;
+		}
 		/* The query should point to the previous record, start again */
 		apfs_free_query(query);
 		second_run = true;
@@ -635,11 +695,15 @@ search_and_insert:
 	} else if (prev_end == extent->logical_addr + extent->len) {
 		/* The new extent is the last logical block of the old one */
 		ret = apfs_shrink_extent_tail(query, dstream, extent->logical_addr);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "failed to shrink extent in dstream 0x%llx", extent_id);
 			goto out;
+		}
 		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "insertion failed for id 0x%llx, addr 0x%llx", extent_id, extent->logical_addr);
 			goto out;
+		}
 	} else if (prev_start < extent->logical_addr && prev_end > extent->logical_addr + extent->len) {
 		/* The new extent is logically in the middle of the old one */
 		if (second_run) {
@@ -649,8 +713,10 @@ search_and_insert:
 			goto out;
 		}
 		ret = apfs_split_extent(query, extent->logical_addr + extent->len);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "failed to split extent in dstream 0x%llx", extent_id);
 			goto out;
+		}
 		/* The split may make the query invalid */
 		apfs_free_query(query);
 		second_run = true;
@@ -663,6 +729,8 @@ search_and_insert:
 	}
 
 	ret = apfs_crypto_adj_refcnt(sb, new_crypto, 1);
+	if (ret)
+		apfs_err(sb, "failed to take crypto id 0x%llx", new_crypto);
 
 out:
 	apfs_free_query(query);
@@ -683,8 +751,10 @@ static int apfs_update_extent(struct apfs_dstream_info *dstream, const struct ap
 
 	if (extent->logical_addr + extent->len >= dstream->ds_size)
 		return apfs_update_tail_extent(dstream, extent);
-	if (extent->len > sb->s_blocksize)
+	if (extent->len > sb->s_blocksize) {
+		apfs_err(sb, "can't create mid extents of length 0x%llx", extent->len);
 		return -EOPNOTSUPP;
+	}
 	return apfs_update_mid_extent(dstream, extent);
 }
 #define APFS_UPDATE_EXTENTS_MAXOPS	(1 + 2 * APFS_CRYPTO_ADJ_REFCNT_MAXOPS())
@@ -740,8 +810,10 @@ static int apfs_insert_phys_extent(struct apfs_dstream_info *dstream, const stru
 	extref_root = apfs_read_node(sb,
 				le64_to_cpu(vsb_raw->apfs_extentref_tree_oid),
 				APFS_OBJ_PHYSICAL, true /* write */);
-	if (IS_ERR(extref_root))
+	if (IS_ERR(extref_root)) {
+		apfs_err(sb, "failed to read extref root 0x%llx", le64_to_cpu(vsb_raw->apfs_extentref_tree_oid));
 		return PTR_ERR(extref_root);
+	}
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	vsb_raw->apfs_extentref_tree_oid = cpu_to_le64(extref_root->object.oid);
 
@@ -762,21 +834,29 @@ static int apfs_insert_phys_extent(struct apfs_dstream_info *dstream, const stru
 	query->flags = APFS_QUERY_EXTENTREF;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for paddr 0x%llx", last_bno);
 		goto out;
+	}
 
 	if (ret == -ENODATA) {
 		/* This is a fresh new physical extent */
 		ret = apfs_insert_new_phys_extent(query, extent->phys_block_num, blkcnt, dstream->ds_id);
+		if (ret)
+			apfs_err(sb, "insertion failed for paddr 0x%llx", extent->phys_block_num);
 		goto out;
 	}
 
 	ret = apfs_phys_ext_from_query(query, &pext);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "bad pext record for bno 0x%llx", last_bno);
 		goto out;
+	}
 	if (pext.bno + pext.blkcount <= extent->phys_block_num) {
 		/* Also a fresh new physical extent */
 		ret = apfs_insert_new_phys_extent(query, extent->phys_block_num, blkcnt, dstream->ds_id);
+		if (ret)
+			apfs_err(sb, "insertion failed for paddr 0x%llx", extent->phys_block_num);
 		goto out;
 	}
 
@@ -793,6 +873,8 @@ static int apfs_insert_phys_extent(struct apfs_dstream_info *dstream, const stru
 		new_base = pext.bno;
 		new_blkcnt = extent->phys_block_num + blkcnt - new_base;
 		ret = apfs_extend_phys_extent(query, new_base, new_blkcnt, dstream->ds_id);
+		if (ret)
+			apfs_err(sb, "update failed for paddr 0x%llx", new_base);
 	} else {
 		/*
 		 * We can't extend this one, because it would extend the other
@@ -801,6 +883,8 @@ static int apfs_insert_phys_extent(struct apfs_dstream_info *dstream, const stru
 		new_base = pext.bno + pext.blkcount;
 		new_blkcnt = extent->phys_block_num + blkcnt - new_base;
 		ret = apfs_insert_new_phys_extent(query, new_base, new_blkcnt, dstream->ds_id);
+		if (ret)
+			apfs_err(sb, "insertion failed for paddr 0x%llx", new_base);
 	}
 
 out:
@@ -825,8 +909,10 @@ static int apfs_phys_ext_from_query(struct apfs_query *query, struct apfs_phys_e
 	struct apfs_phys_ext_val *val;
 	char *raw = query->node->object.data;
 
-	if (query->len != sizeof(*val) || query->key_len != sizeof(*key))
+	if (query->len != sizeof(*val) || query->key_len != sizeof(*key)) {
+		apfs_err(sb, "bad length of key (%d) or value (%d)", query->key_len, query->len);
 		return -EFSCORRUPTED;
+	}
 
 	key = (struct apfs_phys_ext_key *)(raw + query->key_off);
 	val = (struct apfs_phys_ext_val *)(raw + query->off);
@@ -866,22 +952,25 @@ static int apfs_free_phys_ext(struct super_block *sb, struct apfs_phys_extent *p
  */
 static int apfs_put_phys_extent(struct apfs_phys_extent *pext, struct apfs_query *query)
 {
+	struct super_block *sb = query->node->object.sb;
 	struct apfs_phys_ext_val *val;
 	void *raw;
 	int err;
 
 	if (--pext->refcnt == 0) {
-		struct super_block *sb = query->node->object.sb;
-
 		err = apfs_btree_remove(query);
-		if (err)
+		if (err) {
+			apfs_err(sb, "removal failed for paddr 0x%llx", pext->bno);
 			return err;
+		}
 		return pext->kind == APFS_KIND_NEW ? apfs_free_phys_ext(sb, pext) : 0;
 	}
 
 	err = apfs_query_join_transaction(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "query join failed");
 		return err;
+	}
 	raw = query->node->object.data;
 	val = raw + query->off;
 	val->refcnt = cpu_to_le32(pext->refcnt);
@@ -897,6 +986,7 @@ static int apfs_put_phys_extent(struct apfs_phys_extent *pext, struct apfs_query
  */
 static int apfs_take_phys_extent(struct apfs_phys_extent *pext, struct apfs_query *query)
 {
+	struct super_block *sb = query->node->object.sb;
 	struct apfs_phys_ext_val *val;
 	void *raw;
 	int err;
@@ -906,8 +996,10 @@ static int apfs_take_phys_extent(struct apfs_phys_extent *pext, struct apfs_quer
 		return apfs_btree_remove(query);
 
 	err = apfs_query_join_transaction(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "query join failed");
 		return err;
+	}
 	raw = query->node->object.data;
 	val = raw + query->off;
 	val->refcnt = cpu_to_le32(pext->refcnt);
@@ -938,6 +1030,7 @@ static inline void apfs_set_phys_ext_length(struct apfs_phys_ext_val *pext, u64 
  */
 static int apfs_split_phys_ext(struct apfs_query *query, u64 div)
 {
+	struct super_block *sb = query->node->object.sb;
 	struct apfs_phys_ext_val *val1;
 	struct apfs_phys_ext_key key2;
 	struct apfs_phys_ext_val val2;
@@ -947,13 +1040,17 @@ static int apfs_split_phys_ext(struct apfs_query *query, u64 div)
 	int err = 0;
 
 	err = apfs_query_join_transaction(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "query join failed");
 		return err;
+	}
 	raw = query->node->object.data;
 
 	err = apfs_phys_ext_from_query(query, &pextent);
-	if (err)
+	if (err) {
+		apfs_err(sb, "bad pext record over div 0x%llx", div);
 		return err;
+	}
 	val1 = raw + query->off;
 	val2 = *(struct apfs_phys_ext_val *)(raw + query->off);
 	key2 = *(struct apfs_phys_ext_key *)(raw + query->key_off);
@@ -1011,6 +1108,7 @@ static inline bool apfs_dstream_cache_is_tail(struct apfs_dstream_info *dstream)
  */
 int apfs_flush_extent_cache(struct apfs_dstream_info *dstream)
 {
+	struct super_block *sb = dstream->ds_sb;
 	struct apfs_file_extent *ext = &dstream->ds_cached_ext;
 	int err;
 
@@ -1019,11 +1117,15 @@ int apfs_flush_extent_cache(struct apfs_dstream_info *dstream)
 	ASSERT(ext->len > 0);
 
 	err = apfs_update_extent(dstream, ext);
-	if (err)
+	if (err) {
+		apfs_err(sb, "extent update failed");
 		return err;
+	}
 	err = apfs_insert_phys_extent(dstream, ext);
-	if (err)
+	if (err) {
+		apfs_err(sb, "pext insertion failed");
 		return err;
+	}
 
 	/*
 	 * TODO: keep track of the byte and block count through the use of
@@ -1078,10 +1180,14 @@ static int apfs_create_hole(struct apfs_dstream_info *dstream, u64 start, u64 en
 	query->flags = APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for id 0x%llx, addr 0x%llx", extent_id, start);
 		goto out;
+	}
 
 	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+	if (ret)
+		apfs_err(sb, "insertion failed for id 0x%llx, addr 0x%llx", extent_id, start);
 	dstream->ds_sparse_bytes += end - start;
 
 out:
@@ -1169,8 +1275,10 @@ static int apfs_range_in_snap(struct super_block *sb, u64 bno, u64 blkcnt, bool 
 	 * these blocks
 	 */
 	extref_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_extentref_tree_oid), APFS_OBJ_PHYSICAL, false /* write */);
-	if (IS_ERR(extref_root))
+	if (IS_ERR(extref_root)) {
+		apfs_err(sb, "failed to read extref root 0x%llx", le64_to_cpu(vsb_raw->apfs_extentref_tree_oid));
 		return PTR_ERR(extref_root);
+	}
 
 	query = apfs_alloc_query(extref_root, NULL /* parent */);
 	if (!query) {
@@ -1183,8 +1291,10 @@ static int apfs_range_in_snap(struct super_block *sb, u64 bno, u64 blkcnt, bool 
 	query->flags = APFS_QUERY_EXTENTREF;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for paddr 0x%llx", bno);
 		goto out;
+	}
 	if (ret == -ENODATA) {
 		*in_snap = false;
 		ret = 0;
@@ -1192,8 +1302,10 @@ static int apfs_range_in_snap(struct super_block *sb, u64 bno, u64 blkcnt, bool 
 	}
 
 	ret = apfs_phys_ext_from_query(query, &pext);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "bad pext record for paddr 0x%llx", bno);
 		goto out;
+	}
 
 	if (pext.bno <= bno && pext.bno + pext.blkcount >= bno + blkcnt) {
 		if (pext.kind == APFS_KIND_NEW) {
@@ -1259,8 +1371,10 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 	logical_addr = dsblock << sb->s_blocksize_bits;
 
 	err = apfs_spaceman_allocate_block(sb, &phys_bno, false /* backwards */);
-	if (err)
+	if (err) {
+		apfs_err(sb, "block allocation failed");
 		return err;
+	}
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
 	le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
@@ -1295,8 +1409,10 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 		 * the extent cache, so it must happen before flushing it.
 		 */
 		err = apfs_zero_dstream_tail(dstream);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to zero tail for dstream 0x%llx", dstream->ds_id);
 			return err;
+		}
 	}
 
 	err = apfs_dstream_cache_in_snap(dstream, &in_snap);
@@ -1316,8 +1432,10 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 	}
 
 	err = apfs_flush_extent_cache(dstream);
-	if (err)
+	if (err) {
+		apfs_err(sb, "extent cache flush failed for dstream 0x%llx", dstream->ds_id);
 		return err;
+	}
 
 	if (dstream_blks < dsblock) {
 		/*
@@ -1326,8 +1444,10 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 		 * extent operations.
 		 */
 		err = apfs_create_hole(dstream, dstream_blks, dsblock);
-		if (err)
+		if (err) {
+			apfs_err(sb, "hole creation failed for dstream 0x%llx", dstream->ds_id);
 			return err;
+		}
 	}
 
 	cache->logical_addr = logical_addr;
@@ -1394,41 +1514,54 @@ static int apfs_shrink_dstream_last_extent(struct apfs_dstream_info *dstream, lo
 	query->flags = APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for last extent of id 0x%llx", extent_id);
 		goto out;
+	}
 
 	if (!apfs_query_found_extent(query)) {
 		/* No more extents, we deleted the whole file already? */
-		if (new_size)
+		if (new_size) {
+			apfs_err(sb, "missing extent for dstream 0x%llx", extent_id);
 			ret = -EFSCORRUPTED;
-		else
+		} else {
 			ret = 0;
+		}
 		goto out;
 	}
 
 	ret = apfs_extent_from_query(query, &tail);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "bad tail extent record on dstream 0x%llx", extent_id);
 		goto out;
+	}
 
 	if (tail.logical_addr + tail.len < new_size) {
+		apfs_err(sb, "missing extent for dstream 0x%llx", extent_id);
 		ret = -EFSCORRUPTED; /* Tail extent missing */
 	} else if (tail.logical_addr + tail.len == new_size) {
 		ret = 0; /* Nothing more to be done */
 	} else if (tail.logical_addr >= new_size) {
 		/* This whole extent needs to go */
 		ret = apfs_btree_remove(query);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "removal failed for id 0x%llx, addr 0x%llx", dstream->ds_id, tail.logical_addr);
 			goto out;
+		}
 		if (apfs_ext_is_hole(&tail)) {
 			dstream->ds_sparse_bytes -= tail.len;
 		} else {
 			ret = apfs_range_put_reference(sb, tail.phys_block_num, tail.len);
-			if (ret)
+			if (ret) {
+				apfs_err(sb, "failed to put range 0x%llx-0x%llx", tail.phys_block_num, tail.len);
 				goto out;
+			}
 		}
 		ret = apfs_crypto_adj_refcnt(sb, tail.crypto_id, -1);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "failed to take crypto id 0x%llx", tail.crypto_id);
 			goto out;
+		}
 		ret = tail.logical_addr == new_size ? 0 : -EAGAIN;
 	} else {
 		/*
@@ -1437,6 +1570,8 @@ static int apfs_shrink_dstream_last_extent(struct apfs_dstream_info *dstream, lo
 		 */
 		new_size = apfs_size_to_blocks(sb, new_size) << sb->s_blocksize_bits;
 		ret = apfs_shrink_extent_tail(query, dstream, new_size);
+		if (ret)
+			apfs_err(sb, "failed to shrink tail of dstream 0x%llx", extent_id);
 	}
 
 out:
@@ -1478,8 +1613,10 @@ int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size)
 
 	/* TODO: don't write the cached extent if it will be deleted */
 	err = apfs_flush_extent_cache(dstream);
-	if (err)
+	if (err) {
+		apfs_err(sb, "extent cache flush failed for dstream 0x%llx", dstream->ds_id);
 		return err;
+	}
 	dstream->ds_ext_dirty = false;
 
 	/* TODO: keep the cache valid on truncation */
@@ -1490,14 +1627,20 @@ int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size)
 		return apfs_shrink_dstream(dstream, new_size);
 
 	err = apfs_zero_dstream_tail(dstream);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to zero tail for dstream 0x%llx", dstream->ds_id);
 		return err;
+	}
 	new_blks = apfs_size_to_blocks(sb, new_size);
 	old_blks = apfs_size_to_blocks(sb, dstream->ds_size);
 	return apfs_create_hole(dstream, old_blks, new_blks);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags)
+#else
+int apfs_clone_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, u64 len)
+#endif
 {
 	struct inode *src_inode = file_inode(src_file);
 	struct inode *dst_inode = file_inode(dst_file);
@@ -1512,8 +1655,10 @@ loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst
 	const u64 xfield_flags = APFS_INODE_MAINTAIN_DIR_STATS | APFS_INODE_IS_SPARSE | APFS_INODE_HAS_PURGEABLE_FLAGS;
 	int err;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 	if (remap_flags & ~(REMAP_FILE_ADVISORY))
 		return -EINVAL;
+#endif
 	if (src_inode == dst_inode)
 		return -EINVAL;
 
@@ -1527,16 +1672,16 @@ loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst
 	 * a clone. This is not atomic, of course.
 	 */
 	if (dst_ai->i_has_dstream || dst_ai->i_bsd_flags & APFS_INOBSD_COMPRESSED) {
-		apfs_err(sb, "clones can only replace freshly created files");
+		apfs_warn(sb, "clones can only replace freshly created files");
 		return -EOPNOTSUPP;
 	}
 	if (dst_ai->i_int_flags & xfield_flags) {
-		apfs_err(sb, "clone can't replace a file that has xfields");
+		apfs_warn(sb, "clone can't replace a file that has xfields");
 		return -EOPNOTSUPP;
 	}
 
 	if (!src_ai->i_has_dstream) {
-		apfs_err(sb, "can't clone a file with no dstream");
+		apfs_warn(sb, "can't clone a file with no dstream");
 		return -EOPNOTSUPP;
 	}
 
@@ -1547,11 +1692,15 @@ loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst
 	apfs_inode_join_transaction(sb, dst_inode);
 
 	err = apfs_flush_extent_cache(src_ds);
-	if (err)
+	if (err) {
+		apfs_err(sb, "extent cache flush failed for dstream 0x%llx", src_ds->ds_id);
 		goto fail;
+	}
 	err = apfs_dstream_adj_refcnt(src_ds, +1);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to take dstream id 0x%llx", src_ds->ds_id);
 		goto fail;
+	}
 	src_ds->ds_shared = true;
 
 	dst_inode->i_mtime = dst_inode->i_ctime = current_time(dst_inode);
@@ -1621,8 +1770,10 @@ static int apfs_extent_create_record(struct super_block *sb, u64 dstream_id, str
 	query->flags = APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for id 0x%llx, addr 0x%llx", dstream_id, extent->logical_addr);
 		goto out;
+	}
 
 	apfs_key_set_hdr(APFS_TYPE_FILE_EXTENT, dstream_id, &raw_key);
 	raw_key.logical_addr = cpu_to_le64(extent->logical_addr);
@@ -1631,6 +1782,8 @@ static int apfs_extent_create_record(struct super_block *sb, u64 dstream_id, str
 	raw_val.crypto_id = cpu_to_le64(apfs_vol_is_encrypted(sb) ? dstream_id : 0); /* TODO */
 
 	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+	if (ret)
+		apfs_err(sb, "insertion failed for id 0x%llx, addr 0x%llx", dstream_id, extent->logical_addr);
 out:
 	apfs_free_query(query);
 	return ret;
@@ -1662,8 +1815,10 @@ static int apfs_put_single_extent(struct super_block *sb, u64 *paddr_end, u64 pa
 	int ret;
 
 	extref_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_extentref_tree_oid), APFS_OBJ_PHYSICAL, true /* write */);
-	if (IS_ERR(extref_root))
+	if (IS_ERR(extref_root)) {
+		apfs_err(sb, "failed to read extref root 0x%llx", le64_to_cpu(vsb_raw->apfs_extentref_tree_oid));
 		return PTR_ERR(extref_root);
+	}
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	vsb_raw->apfs_extentref_tree_oid = cpu_to_le64(extref_root->object.oid);
 
@@ -1679,8 +1834,10 @@ restart:
 	query->flags = APFS_QUERY_EXTENTREF;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for paddr 0x%llx", *paddr_end - 1);
 		goto out;
+	}
 
 	if (ret == -ENODATA) {
 		/* The whole range to put is part of a snapshot */
@@ -1692,8 +1849,10 @@ restart:
 	}
 
 	ret = apfs_phys_ext_from_query(query, &prev_ext);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "bad pext record over paddr 0x%llx", *paddr_end - 1);
 		goto out;
+	}
 	prev_start = prev_ext.bno;
 	prev_end = prev_ext.bno + prev_ext.blkcount;
 	if (prev_end < *paddr_end) {
@@ -1714,8 +1873,10 @@ restart:
 
 	if (prev_end > *paddr_end) {
 		ret = apfs_split_phys_ext(query, *paddr_end);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "failed to split pext at 0x%llx", *paddr_end);
 			goto out;
+		}
 		/* The split may make the query invalid */
 		apfs_free_query(query);
 		cropped_tail = true;
@@ -1724,8 +1885,10 @@ restart:
 
 	if (prev_start < paddr_min) {
 		ret = apfs_split_phys_ext(query, paddr_min);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "failed to split pext at 0x%llx", paddr_min);
 			goto out;
+		}
 		/* The split may make the query invalid */
 		apfs_free_query(query);
 		cropped_head = true;
@@ -1734,6 +1897,8 @@ restart:
 
 	/* The extent to put already exists */
 	ret = apfs_put_phys_extent(&prev_ext, query);
+	if (ret)
+		apfs_err(sb, "failed to put pext at 0x%llx", prev_ext.bno);
 	*paddr_end = prev_start;
 
 out:
@@ -1790,8 +1955,10 @@ static int apfs_take_single_extent(struct super_block *sb, u64 *paddr_end, u64 p
 	int ret;
 
 	extref_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_extentref_tree_oid), APFS_OBJ_PHYSICAL, true /* write */);
-	if (IS_ERR(extref_root))
+	if (IS_ERR(extref_root)) {
+		apfs_err(sb, "failed to read extref root 0x%llx", le64_to_cpu(vsb_raw->apfs_extentref_tree_oid));
 		return PTR_ERR(extref_root);
+	}
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	vsb_raw->apfs_extentref_tree_oid = cpu_to_le64(extref_root->object.oid);
 
@@ -1807,8 +1974,10 @@ restart:
 	query->flags = APFS_QUERY_EXTENTREF;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for paddr 0x%llx", *paddr_end - 1);
 		goto out;
+	}
 
 	if (ret == -ENODATA) {
 		/* The whole range to take is part of a snapshot */
@@ -1820,8 +1989,10 @@ restart:
 	}
 
 	ret = apfs_phys_ext_from_query(query, &prev_ext);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "bad pext record over paddr 0x%llx", *paddr_end - 1);
 		goto out;
+	}
 	prev_start = prev_ext.bno;
 	prev_end = prev_ext.bno + prev_ext.blkcount;
 	if (prev_end < *paddr_end) {
@@ -1842,8 +2013,10 @@ restart:
 
 	if (prev_end > *paddr_end) {
 		ret = apfs_split_phys_ext(query, *paddr_end);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "failed to split pext at 0x%llx", *paddr_end);
 			goto out;
+		}
 		/* The split may make the query invalid */
 		apfs_free_query(query);
 		cropped_tail = true;
@@ -1852,8 +2025,10 @@ restart:
 
 	if (prev_start < paddr_min) {
 		ret = apfs_split_phys_ext(query, paddr_min);
-		if (ret)
+		if (ret) {
+			apfs_err(sb, "failed to split pext at 0x%llx", paddr_min);
 			goto out;
+		}
 		/* The split may make the query invalid */
 		apfs_free_query(query);
 		cropped_head = true;
@@ -1862,6 +2037,8 @@ restart:
 
 	/* The extent to take already exists */
 	ret = apfs_take_phys_extent(&prev_ext, query);
+	if (ret)
+		apfs_err(sb, "failed to take pext at 0x%llx", prev_ext.bno);
 	*paddr_end = prev_start;
 
 out:
@@ -1925,7 +2102,7 @@ static int apfs_clone_single_extent(struct apfs_dstream_info *dstream, u64 new_i
 	if (!apfs_ext_is_hole(&extent)) {
 		err = apfs_range_take_reference(sb, extent.phys_block_num, extent.len);
 		if (err) {
-			apfs_err(sb, "failed to take a reference to physical range 0x%llx-0x%llx\n", extent.phys_block_num, extent.len);
+			apfs_err(sb, "failed to take a reference to physical range 0x%llx-0x%llx", extent.phys_block_num, extent.len);
 			return err;
 		}
 	}

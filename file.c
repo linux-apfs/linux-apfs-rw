@@ -42,8 +42,10 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 	apfs_inode_join_transaction(sb, inode);
 
 	err = apfs_inode_create_exclusive_dstream(inode);
-	if (err)
+	if (err) {
+		apfs_err(sb, "dstream creation failed for ino 0x%llx", apfs_ino(inode));
 		goto out_abort;
+	}
 
 	lock_page(page);
 	wait_for_stable_page(page);
@@ -77,8 +79,10 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 	unlock_page(page); /* XXX: race? */
 
 	err = block_page_mkwrite(vma, vmf, apfs_get_new_block);
-	if (err)
+	if (err) {
+		apfs_err(sb, "mkwrite failed for ino 0x%llx", apfs_ino(inode));
 		goto out_abort;
+	}
 	set_page_dirty(page);
 
 	/* An immediate commit would leave the page unlocked */
@@ -141,8 +145,16 @@ const struct file_operations apfs_file_operations = {
 	.open			= generic_file_open,
 	.fsync			= apfs_fsync,
 	.unlocked_ioctl		= apfs_file_ioctl,
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)
 	.copy_file_range	= generic_copy_file_range,
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 	.remap_file_range	= apfs_remap_file_range,
+#else
+	.clone_file_range	= apfs_clone_file_range,
+#endif
 };
 
 #if LINUX_VERSION_CODE == KERNEL_VERSION(5, 3, 0)

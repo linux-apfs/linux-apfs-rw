@@ -84,8 +84,10 @@ static int apfs_create_dstream_rec(struct apfs_dstream_info *dstream)
 	apfs_key_set_hdr(APFS_TYPE_DSTREAM_ID, dstream->ds_id, &raw_key);
 	raw_val.refcnt = cpu_to_le32(1);
 	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "insertion failed for id 0x%llx", dstream->ds_id);
 		goto out;
+	}
 out:
 	apfs_free_query(query);
 	return ret;
@@ -120,26 +122,34 @@ int apfs_inode_create_exclusive_dstream(struct inode *inode)
 	 * but I don't know if it makes sense to optimize this (TODO).
 	 */
 	err = apfs_check_dstream_refcnt(inode);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to check refcnt for ino 0x%llx", apfs_ino(inode));
 		return err;
+	}
 	if (!dstream->ds_shared)
 		return 0;
 	err = apfs_put_dstream_rec(dstream);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to put dstream for ino 0x%llx", apfs_ino(inode));
 		return err;
+	}
 
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	new_id = le64_to_cpu(vsb_raw->apfs_next_obj_id);
 	le64_add_cpu(&vsb_raw->apfs_next_obj_id, 1);
 
 	err = apfs_clone_extents(dstream, new_id);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed clone extents for ino 0x%llx", apfs_ino(inode));
 		return err;
+	}
 
 	dstream->ds_id = new_id;
 	err = apfs_create_dstream_rec(dstream);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to create dstream for ino 0x%llx", apfs_ino(inode));
 		return err;
+	}
 
 	dstream->ds_shared = false;
 	return 0;
@@ -198,12 +208,14 @@ int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta)
 
 	ret = apfs_btree_query(sb, &query);
 	if (ret) {
+		apfs_err(sb, "query failed for id 0x%llx", dstream->ds_id);
 		if (ret == -ENODATA)
 			ret = -EFSCORRUPTED;
 		goto out;
 	}
 
 	if (query->len != sizeof(raw_val)) {
+		apfs_err(sb, "bad value length (%d)", query->len);
 		ret = -EFSCORRUPTED;
 		goto out;
 	}
@@ -214,11 +226,15 @@ int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta)
 	refcnt += delta;
 	if (refcnt == 0) {
 		ret = apfs_btree_remove(query);
+		if (ret)
+			apfs_err(sb, "removal failed for id 0x%llx", dstream->ds_id);
 		goto out;
 	}
 
 	raw_val.refcnt = cpu_to_le32(refcnt);
 	ret = apfs_btree_replace(query, NULL /* key */, 0 /* key_len */, &raw_val, sizeof(raw_val));
+	if (ret)
+		apfs_err(sb, "update failed for id 0x%llx", dstream->ds_id);
 out:
 	apfs_free_query(query);
 	return ret;
@@ -275,8 +291,9 @@ static int apfs_create_crypto_rec(struct inode *inode)
 	if(sbi->s_dflt_pfk) {
 		struct apfs_crypto_state_val *raw_val = sbi->s_dflt_pfk;
 		unsigned key_len = le16_to_cpu(raw_val->state.key_len);
-		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
-					raw_val, sizeof(*raw_val) + key_len);
+		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), raw_val, sizeof(*raw_val) + key_len);
+		if (ret)
+			apfs_err(sb, "insertion failed for id 0x%llx", dstream->ds_id);
 	} else {
 		struct apfs_crypto_state_val raw_val;
 		raw_val.refcnt = cpu_to_le32(1);
@@ -287,8 +304,9 @@ static int apfs_create_crypto_rec(struct inode *inode)
 		raw_val.state.key_os_version = 0;
 		raw_val.state.key_revision = cpu_to_le16(1);
 		raw_val.state.key_len = cpu_to_le16(0);
-		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
-					&raw_val, sizeof(raw_val));
+		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), &raw_val, sizeof(raw_val));
+		if (ret)
+			apfs_err(sb, "insertion failed for id 0x%llx", dstream->ds_id);
 	}
 out:
 	apfs_free_query(query);
@@ -340,12 +358,16 @@ int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta)
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "query failed for id 0x%llx", crypto_id);
 		goto out;
+	}
 
 	ret = apfs_query_join_transaction(query);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "query join failed");
 		return ret;
+	}
 	raw = query->node->object.data;
 	raw_val = (void *)raw + query->off;
 
@@ -392,15 +414,18 @@ static int apfs_crypto_set_key(struct super_block *sb, u64 crypto_id, struct apf
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "query failed for id 0x%llx", crypto_id);
 		goto out;
+	}
 	raw = query->node->object.data;
 	raw_val = (void *)raw + query->off;
 
 	new_val->refcnt = raw_val->refcnt;
 
-	ret = apfs_btree_replace(query, NULL /* key */, 0 /* key_len */,
-				 new_val, sizeof(*new_val) + pfk_len);
+	ret = apfs_btree_replace(query, NULL /* key */, 0 /* key_len */, new_val, sizeof(*new_val) + pfk_len);
+	if (ret)
+		apfs_err(sb, "update failed for id 0x%llx", crypto_id);
 
 out:
 	apfs_free_query(query);
@@ -471,13 +496,17 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 	apfs_inode_join_transaction(sb, inode);
 
 	err = apfs_inode_create_dstream_rec(inode);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to create dstream for ino 0x%llx", apfs_ino(inode));
 		return err;
+	}
 
 	if(apfs_vol_is_encrypted(sb)) {
 		err = apfs_create_crypto_rec(inode);
-		if (err)
+		if (err) {
+			apfs_err(sb, "crypto creation failed for ino 0x%llx", apfs_ino(inode));
 			return err;
+		}
 	}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
@@ -514,8 +543,10 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 			if (!buffer_mapped(bh)) {
 				err = __apfs_get_block(dstream, iblock, bh,
 						       false /* create */);
-				if (err)
+				if (err) {
+					apfs_err(sb, "failed to map block for ino 0x%llx", apfs_ino(inode));
 					goto out_put_page;
+				}
 			}
 			if (buffer_mapped(bh) && !buffer_uptodate(bh)) {
 				get_bh(bh);
@@ -524,6 +555,7 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 				apfs_submit_bh(REQ_OP_READ, 0, bh);
 				wait_on_buffer(bh);
 				if (!buffer_uptodate(bh)) {
+					apfs_err(sb, "failed to read block for ino 0x%llx", apfs_ino(inode));
 					err = -EIO;
 					goto out_put_page;
 				}
@@ -533,8 +565,10 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 	}
 
 	err = __block_write_begin(page, pos, len, apfs_get_new_block);
-	if (err)
+	if (err) {
+		apfs_err(sb, "CoW failed in inode 0x%llx", apfs_ino(inode));
 		goto out_put_page;
+	}
 
 	*pagep = page;
 	return 0;
@@ -598,8 +632,10 @@ int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t po
 	if (ret < len && pos + len > inode->i_size) {
 		truncate_pagecache(inode, inode->i_size);
 		err = apfs_truncate(dstream, inode->i_size);
-		if (err)
+		if (err) {
+			apfs_err(inode->i_sb, "truncation failed for ino 0x%llx", apfs_ino(inode));
 			return err;
+		}
 	}
 	return ret;
 }
@@ -803,8 +839,7 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 	return 0;
 
 corrupted:
-	apfs_alert(inode->i_sb,
-		   "bad inode record for inode 0x%llx", apfs_ino(inode));
+	apfs_err(inode->i_sb, "bad inode record for inode 0x%llx", apfs_ino(inode));
 	return -EFSCORRUPTED;
 }
 
@@ -835,6 +870,7 @@ static struct apfs_query *apfs_inode_lookup(const struct inode *inode)
 	if (!ret)
 		return query;
 
+	apfs_err(sb, "query failed for id 0x%llx", apfs_ino(inode));
 	apfs_free_query(query);
 	return ERR_PTR(ret);
 }
@@ -909,6 +945,7 @@ static int apfs_check_dstream_refcnt(struct inode *inode)
 
 	ret = apfs_btree_query(sb, &query);
 	if (ret) {
+		apfs_err(sb, "query failed for id 0x%llx", dstream->ds_id);
 		if (ret == -ENODATA)
 			ret = -EFSCORRUPTED;
 		goto fail;
@@ -954,6 +991,7 @@ struct inode *apfs_iget(struct super_block *sb, u64 cnid)
 	down_read(&nxi->nx_big_sem);
 	query = apfs_inode_lookup(inode);
 	if (IS_ERR(query)) {
+		apfs_err(sb, "lookup failed for ino 0x%llx", cnid);
 		err = PTR_ERR(query);
 		goto fail;
 	}
@@ -962,8 +1000,10 @@ struct inode *apfs_iget(struct super_block *sb, u64 cnid)
 	if (err)
 		goto fail;
 	err = apfs_check_dstream_refcnt(inode);
-	if (err)
+	if (err) {
+		apfs_err(sb, "refcnt check failed for ino 0x%llx", cnid);
 		goto fail;
+	}
 	up_read(&nxi->nx_big_sem);
 
 	/* Allow the user to override the ownership */
@@ -1141,15 +1181,15 @@ static int apfs_inode_rename(struct inode *inode, char *new_name,
 				  &xkey, new_name);
 	if (!xlen) {
 		/* Buffer has enough space, but the metadata claims otherwise */
-		apfs_alert(inode->i_sb, "bad xfields on inode 0x%llx",
-			   apfs_ino(inode));
+		apfs_err(inode->i_sb, "bad xfields on inode 0x%llx", apfs_ino(inode));
 		err = -EFSCORRUPTED;
 		goto fail;
 	}
 
 	/* Just remove the old record and create a new one */
-	err = apfs_btree_replace(query, NULL /* key */, 0 /* key_len */,
-				 new_val, sizeof(*new_val) + xlen);
+	err = apfs_btree_replace(query, NULL /* key */, 0 /* key_len */, new_val, sizeof(*new_val) + xlen);
+	if (err)
+		apfs_err(inode->i_sb, "update failed for ino 0x%llx", apfs_ino(inode));
 
 fail:
 	kfree(new_val);
@@ -1196,15 +1236,15 @@ static int apfs_create_dstream_xfield(struct inode *inode,
 				  &xkey, &dstream_raw);
 	if (!xlen) {
 		/* Buffer has enough space, but the metadata claims otherwise */
-		apfs_alert(inode->i_sb, "bad xfields on inode 0x%llx",
-			   apfs_ino(inode));
+		apfs_err(inode->i_sb, "bad xfields on inode 0x%llx", apfs_ino(inode));
 		err = -EFSCORRUPTED;
 		goto fail;
 	}
 
 	/* Just remove the old record and create a new one */
-	err = apfs_btree_replace(query, NULL /* key */, 0 /* key_len */,
-				 new_val, sizeof(*new_val) + xlen);
+	err = apfs_btree_replace(query, NULL /* key */, 0 /* key_len */, new_val, sizeof(*new_val) + xlen);
+	if (err)
+		apfs_err(inode->i_sb, "update failed for ino 0x%llx", apfs_ino(inode));
 
 fail:
 	kfree(new_val);
@@ -1233,8 +1273,10 @@ static int apfs_inode_resize(struct inode *inode, struct apfs_query *query)
 		return 0;
 
 	err = apfs_query_join_transaction(query);
-	if (err)
+	if (err) {
+		apfs_err(inode->i_sb, "query join failed");
 		return err;
+	}
 	raw = query->node->object.data;
 	inode_raw = (void *)raw + query->off;
 
@@ -1245,8 +1287,10 @@ static int apfs_inode_resize(struct inode *inode, struct apfs_query *query)
 	if (xlen) {
 		struct apfs_dstream *dstream;
 
-		if (xlen != sizeof(*dstream))
+		if (xlen != sizeof(*dstream)) {
+			apfs_err(inode->i_sb, "bad xlen (%d) on inode 0x%llx", xlen, apfs_ino(inode));
 			return -EFSCORRUPTED;
+		}
 		dstream = (struct apfs_dstream *)xval;
 
 		/* TODO: count bytes read and written */
@@ -1293,13 +1337,15 @@ static int apfs_create_sparse_xfield(struct inode *inode, struct apfs_query *que
 	xlen = apfs_insert_xfield(new_val->xfields, buflen - sizeof(*new_val), &xkey, &sparse_bytes);
 	if (!xlen) {
 		/* Buffer has enough space, but the metadata claims otherwise */
-		apfs_alert(inode->i_sb, "bad xfields on inode 0x%llx", apfs_ino(inode));
+		apfs_err(inode->i_sb, "bad xfields on inode 0x%llx", apfs_ino(inode));
 		err = -EFSCORRUPTED;
 		goto fail;
 	}
 
 	/* Just remove the old record and create a new one */
 	err = apfs_btree_replace(query, NULL /* key */, 0 /* key_len */, new_val, sizeof(*new_val) + xlen);
+	if (err)
+		apfs_err(inode->i_sb, "update failed for ino 0x%llx", apfs_ino(inode));
 
 fail:
 	kfree(new_val);
@@ -1326,8 +1372,10 @@ static int apfs_inode_resize_sparse(struct inode *inode, struct apfs_query *quer
 	int err;
 
 	err = apfs_query_join_transaction(query);
-	if (err)
+	if (err) {
+		apfs_err(inode->i_sb, "query join failed");
 		return err;
+	}
 	raw = query->node->object.data;
 	inode_raw = (void *)raw + query->off;
 
@@ -1340,8 +1388,10 @@ static int apfs_inode_resize_sparse(struct inode *inode, struct apfs_query *quer
 	if (xlen) {
 		__le64 *sparse_bytes_p;
 
-		if (xlen != sizeof(*sparse_bytes_p))
+		if (xlen != sizeof(*sparse_bytes_p)) {
+			apfs_err(inode->i_sb, "bad xlen (%d) on inode 0x%llx", xlen, apfs_ino(inode));
 			return -EFSCORRUPTED;
+		}
 		sparse_bytes_p = (__le64 *)xval;
 
 		*sparse_bytes_p = cpu_to_le64(dstream->ds_sparse_bytes);
@@ -1369,32 +1419,44 @@ int apfs_update_inode(struct inode *inode, char *new_name)
 	int err;
 
 	err = apfs_flush_extent_cache(dstream);
-	if (err)
+	if (err) {
+		apfs_err(sb, "extent cache flush failed for inode 0x%llx", apfs_ino(inode));
 		return err;
+	}
 
 	query = apfs_inode_lookup(inode);
-	if (IS_ERR(query))
+	if (IS_ERR(query)) {
+		apfs_err(sb, "lookup failed for ino 0x%llx", apfs_ino(inode));
 		return PTR_ERR(query);
+	}
 
 	/* TODO: copy the record to memory and make all xfield changes there */
 	err = apfs_inode_rename(inode, new_name, query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "rename failed for ino 0x%llx", apfs_ino(inode));
 		goto fail;
+	}
 
 	err = apfs_inode_resize(inode, query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "resize failed for ino 0x%llx", apfs_ino(inode));
 		goto fail;
+	}
 
 	err = apfs_inode_resize_sparse(inode, query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "sparse resize failed for ino 0x%llx", apfs_ino(inode));
 		goto fail;
+	}
 	if (dstream->ds_sparse_bytes)
 		ai->i_int_flags |= APFS_INODE_IS_SPARSE;
 
 	/* TODO: just use apfs_btree_replace()? */
 	err = apfs_query_join_transaction(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "query join failed");
 		goto fail;
+	}
 	node_raw = (void *)query->node->object.data;
 	apfs_assert_in_transaction(sb, &node_raw->btn_o);
 	inode_raw = (void *)node_raw + query->off;
@@ -1443,13 +1505,16 @@ int APFS_UPDATE_INODE_MAXOPS(void)
  */
 static int apfs_delete_inode(struct inode *inode)
 {
+	struct super_block *sb = inode->i_sb;
 	struct apfs_dstream_info *dstream = NULL;
 	struct apfs_query *query;
 	int ret;
 
 	ret = apfs_delete_all_xattrs(inode);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "xattr deletion failed for ino 0x%llx", apfs_ino(inode));
 		return ret;
+	}
 
 	/*
 	 * This is very wasteful since all the new extents and references will
@@ -1457,24 +1522,34 @@ static int apfs_delete_inode(struct inode *inode)
 	 * big reason to improve it (TODO)
 	 */
 	ret = apfs_inode_create_exclusive_dstream(inode);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "dstream creation failed for ino 0x%llx", apfs_ino(inode));
 		return ret;
+	}
 
 	/* TODO: truncate an orphan inode in multiple transactions */
 	dstream = &APFS_I(inode)->i_dstream;
 	ret = apfs_truncate(dstream, 0 /* new_size */);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "truncation failed for ino 0x%llx", apfs_ino(inode));
 		return ret;
+	}
 
 	ret = apfs_put_dstream_rec(dstream);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "failed to put dstream for ino 0x%llx", apfs_ino(inode));
 		return ret;
+	}
 
 	query = apfs_inode_lookup(inode);
-	if (IS_ERR(query))
+	if (IS_ERR(query)) {
+		apfs_err(sb, "lookup failed for ino 0x%llx", apfs_ino(inode));
 		return PTR_ERR(query);
+	}
 	ret = apfs_btree_remove(query);
 	apfs_free_query(query);
+	if (ret)
+		apfs_err(sb, "removal failed for ino 0x%llx", apfs_ino(inode));
 	return ret;
 }
 #define APFS_DELETE_INODE_MAXOPS	1
@@ -1503,7 +1578,7 @@ void apfs_evict_inode(struct inode *inode)
 out_abort:
 	apfs_transaction_abort(sb);
 out_report:
-	apfs_warn(sb, "failed to delete orphan inode 0x%llx", apfs_ino(inode));
+	apfs_err(sb, "failed to delete orphan inode 0x%llx", apfs_ino(inode));
 out_clear:
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);
@@ -1596,6 +1671,7 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 
 	if (apfs_insert_inode_locked(inode)) {
 		/* The inode number should have been free, but wasn't */
+		apfs_err(sb, "next obj_id (0x%llx) not free", cnid);
 		make_bad_inode(inode);
 		iput(inode);
 		return ERR_PTR(-EFSCORRUPTED);
@@ -1633,8 +1709,10 @@ int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 	query->flags |= APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for ino 0x%llx", apfs_ino(inode));
 		goto fail;
+	}
 
 	apfs_key_set_hdr(APFS_TYPE_INODE, apfs_ino(inode), &raw_key);
 
@@ -1644,8 +1722,9 @@ int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 		goto fail;
 	}
 
-	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
-				raw_val, val_len);
+	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), raw_val, val_len);
+	if (ret)
+		apfs_err(sb, "insertion failed for ino 0x%llx", apfs_ino(inode));
 	kfree(raw_val);
 
 fail:
@@ -1666,6 +1745,7 @@ int APFS_CREATE_INODE_REC_MAXOPS(void)
  */
 static int apfs_setsize(struct inode *inode, loff_t new_size)
 {
+	struct super_block *sb = inode->i_sb;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
 	int err;
 
@@ -1674,13 +1754,17 @@ static int apfs_setsize(struct inode *inode, loff_t new_size)
 	inode->i_mtime = inode->i_ctime = current_time(inode);
 
 	err = apfs_inode_create_dstream_rec(inode);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to create dstream for ino 0x%llx", apfs_ino(inode));
 		return err;
+	}
 
 	/* Must be called before i_size is changed */
 	err = apfs_truncate(dstream, new_size);
-	if (err)
+	if (err) {
+		apfs_err(sb, "truncation failed for ino 0x%llx", apfs_ino(inode));
 		return err;
+	}
 
 	truncate_setsize(inode, new_size);
 	dstream->ds_size = i_size_read(inode);
@@ -1727,8 +1811,10 @@ int apfs_setattr(struct mnt_idmap *idmap,
 
 	if (resizing) {
 		err = apfs_setsize(inode, iattr->ia_size);
-		if (err)
+		if (err) {
+			apfs_err(sb, "setsize failed for ino 0x%llx", apfs_ino(inode));
 			goto fail;
+		}
 	}
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)

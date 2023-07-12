@@ -35,13 +35,17 @@ static int apfs_child_from_query(struct apfs_query *query, u64 *child)
 	if (query->flags & APFS_QUERY_CAT && apfs_is_sealed(sb)) {
 		struct apfs_btn_index_node_val *index_val = NULL;
 
-		if (query->len != sizeof(*index_val))
+		if (query->len != sizeof(*index_val)) {
+			apfs_err(sb, "bad sealed index value length (%d)", query->len);
 			return -EFSCORRUPTED;
+		}
 		index_val = (struct apfs_btn_index_node_val *)(raw + query->off);
 		*child = le64_to_cpu(index_val->binv_child_oid) + apfs_catalog_base_oid(query);
 	} else {
-		if (query->len != 8) /* The data on a nonleaf node is the child id */
+		if (query->len != 8) { /* The data on a nonleaf node is the child id */
+			apfs_err(sb, "bad index value length (%d)", query->len);
 			return -EFSCORRUPTED;
+		}
 		*child = le64_to_cpup((__le64 *)(raw + query->off));
 	}
 	return 0;
@@ -190,8 +194,11 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap,
 	query->flags |= APFS_QUERY_OMAP;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret)
+	if (ret) {
+		if (ret != -ENODATA)
+			apfs_err(sb, "query failed for oid 0x%llx, xid 0x%llx", id, apfs_mounted_xid(sb));
 		goto fail;
+	}
 
 	ret = apfs_omap_map_from_query(query, &map);
 	if (ret) {
@@ -211,6 +218,7 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap,
 
 		new_bh = apfs_read_object_block(sb, *block, write, preserve);
 		if (IS_ERR(new_bh)) {
+			apfs_err(sb, "CoW failed for oid 0x%llx, xid 0x%llx", id, apfs_mounted_xid(sb));
 			ret = PTR_ERR(new_bh);
 			goto fail;
 		}
@@ -225,6 +233,8 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap,
 			ret = apfs_btree_insert(query, &key, sizeof(key), &val, sizeof(val));
 		else
 			ret = apfs_btree_replace(query, &key, sizeof(key), &val, sizeof(val));
+		if (ret)
+			apfs_err(sb, "CoW omap update failed (oid 0x%llx, xid 0x%llx)", id, apfs_mounted_xid(sb));
 
 		*block = new_bh->b_blocknr;
 		brelse(new_bh);
@@ -265,8 +275,10 @@ int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno)
 	query->flags |= APFS_QUERY_OMAP;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret && ret != -ENODATA)
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for oid 0x%llx, bno 0x%llx", oid, bno);
 		goto fail;
+	}
 
 	raw_key.ok_oid = cpu_to_le64(oid);
 	raw_key.ok_xid = cpu_to_le64(nxi->nx_xid);
@@ -276,8 +288,10 @@ int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno)
 
 	ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key),
 				&raw_val, sizeof(raw_val));
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "insertion failed for oid 0x%llx, bno 0x%llx", oid, bno);
 		goto fail;
+	}
 
 	apfs_omap_cache_save(omap, oid, bno);
 
@@ -311,13 +325,23 @@ int apfs_delete_omap_rec(struct super_block *sb, u64 oid)
 	query->flags |= APFS_QUERY_OMAP;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret == -ENODATA)
+	if (ret == -ENODATA) {
+		apfs_err(sb, "nonexistent record (oid 0x%llx)", oid);
 		ret = -EFSCORRUPTED;
-	if (!ret)
-		ret = apfs_btree_remove(query);
-	if (!ret)
-		apfs_omap_cache_delete(omap, oid);
+		goto fail;
+	}
+	if (ret) {
+		apfs_err(sb, "query failed (oid 0x%llx)", oid);
+		goto fail;
+	}
+	ret = apfs_btree_remove(query);
+	if (ret) {
+		apfs_err(sb, "removal failed (oid 0x%llx)", oid);
+		goto fail;
+	}
+	apfs_omap_cache_delete(omap, oid);
 
+fail:
 	apfs_free_query(query);
 	return ret;
 }
@@ -409,8 +433,10 @@ static int apfs_query_set_before_first(struct super_block *sb, struct apfs_query
 
 		/* Now go a level deeper */
 		node = apfs_read_node(sb, child_id, storage, false /* write */);
-		if (IS_ERR(node))
+		if (IS_ERR(node)) {
+			apfs_err(sb, "failed to read child 0x%llx of node 0x%llx", child_id, (*query)->node->object.oid);
 			return PTR_ERR(node);
+		}
 
 		parent = *query;
 		*query = apfs_alloc_query(node, parent);
@@ -422,7 +448,7 @@ static int apfs_query_set_before_first(struct super_block *sb, struct apfs_query
 		node = NULL;
 	}
 
-	apfs_alert(sb, "b-tree is corrupted");
+	apfs_err(sb, "btree is too high");
 	return -EFSCORRUPTED;
 }
 
@@ -455,7 +481,7 @@ next_node:
 		 * forever if the filesystem is damaged. 12 should be more
 		 * than enough to map every block.
 		 */
-		apfs_alert(sb, "b-tree is corrupted");
+		apfs_err(sb, "btree is too high");
 		return -EFSCORRUPTED;
 	}
 
@@ -466,8 +492,10 @@ next_node:
 		 * let the query give up at the root node.
 		 */
 		err = apfs_query_set_before_first(sb, query);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to set before the first record");
 			return err;
+		}
 		return -ENODATA;
 	} else if (err == -EAGAIN) {
 		if (!(*query)->parent) /* We are at the root of the tree */
@@ -494,8 +522,10 @@ next_node:
 
 	/* Now go a level deeper and search the child */
 	node = apfs_read_node(sb, child_id, storage, false /* write */);
-	if (IS_ERR(node))
+	if (IS_ERR(node)) {
+		apfs_err(sb, "failed to read node 0x%llx", child_id);
 		return PTR_ERR(node);
+	}
 
 	if (node->object.oid != child_id)
 		apfs_debug(sb, "corrupt b-tree");
@@ -513,28 +543,6 @@ next_node:
 	}
 	node = NULL;
 	goto next_node;
-}
-
-/**
- * apfs_omap_read_node - Find and read a node from a b-tree
- * @sb: filesystem superblock
- * @id: id for the seeked node
- *
- * Returns NULL is case of failure, otherwise a pointer to the resulting
- * apfs_node structure.
- */
-struct apfs_node *apfs_omap_read_node(struct super_block *sb, u64 id)
-{
-	struct apfs_node *result;
-
-	result = apfs_read_node(sb, id, APFS_OBJ_VIRTUAL, false /* write */);
-	if (IS_ERR(result))
-		return result;
-
-	if (result->object.oid != id)
-		apfs_debug(sb, "corrupt b-tree");
-
-	return result;
 }
 
 /**
@@ -556,8 +564,10 @@ int apfs_query_join_transaction(struct apfs_query *query)
 	ASSERT(!apfs_node_is_root(node));
 
 	node = apfs_read_node(sb, oid, storage, true /* write */);
-	if (IS_ERR(node))
+	if (IS_ERR(node)) {
+		apfs_err(sb, "Cow failed for node 0x%llx", oid);
 		return PTR_ERR(node);
+	}
 	apfs_node_free(query->node);
 	query->node = node;
 
@@ -665,18 +675,20 @@ static int apfs_query_refresh(struct apfs_query *old_query)
 	 * which are only expected when large inline xattr values are involved.
 	 */
 	if ((old_query->flags & APFS_QUERY_TREE_MASK) != APFS_QUERY_CAT) {
-		apfs_warn(sb, "attempt to refresh a non-catalog query");
+		apfs_err(sb, "non-catalog query");
 		return -EFSCORRUPTED;
 	}
 	if (!apfs_node_is_leaf(node)) {
-		apfs_warn(sb, "attempt to refresh a non-leaf query");
+		apfs_err(sb, "non-leaf query");
 		return -EFSCORRUPTED;
 	}
 
 	/* Build a new query that points exactly to the same key */
 	err = apfs_read_cat_key(raw + old_query->key_off, old_query->key_len, &new_key, hashed);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to read the key");
 		return err;
+	}
 	new_query = apfs_alloc_query(APFS_SB(sb)->s_cat_root, NULL /* parent */);
 	if (!new_query)
 		return -ENOMEM;
@@ -684,8 +696,10 @@ static int apfs_query_refresh(struct apfs_query *old_query)
 	new_query->flags = APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	err = apfs_btree_query(sb, &new_query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to rerun");
 		goto fail;
+	}
 
 	/* Set the original query flags and key on the new query */
 	for (ancestor = new_query; ancestor; ancestor = ancestor->parent) {
@@ -739,6 +753,7 @@ int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
 		      void *val, int val_len)
 {
 	struct apfs_node *node = query->node;
+	struct super_block *sb = node->object.sb;
 	struct apfs_btree_node_phys *node_raw;
 	int err;
 
@@ -748,8 +763,10 @@ int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
 					    key_len, val_len);
 
 	err = apfs_query_join_transaction(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "query join failed");
 		return err;
+	}
 
 again:
 	node = query->node;
@@ -760,18 +777,23 @@ again:
 	if (err == -ENOSPC) {
 		if (!query->parent && !apfs_node_is_root(node)) {
 			err = apfs_query_refresh(query);
-			if (err)
+			if (err) {
+				apfs_err(sb, "query refresh failed");
 				return err;
+			}
 			if (node->records == 1) {
 				/* The new record just won't fit in the node */
 				return apfs_create_single_rec_node(query, key, key_len, val, val_len);
 			}
 		}
 		err = apfs_node_split(query);
-		if (err)
+		if (err) {
+			apfs_err(sb, "node split failed");
 			return err;
+		}
 		goto again;
 	} else if (err) {
+		apfs_err(sb, "node record insertion failed");
 		return err;
 	}
 
@@ -779,6 +801,8 @@ again:
 	if (query->parent && query->index == 0) {
 		err = apfs_btree_replace(query->parent, key, key_len,
 					 NULL /* val */, 0 /* val_len */);
+		if (err)
+			apfs_err(sb, "parent update failed");
 	}
 	return err;
 }
@@ -792,6 +816,7 @@ again:
 int apfs_btree_remove(struct apfs_query *query)
 {
 	struct apfs_node *node = query->node;
+	struct super_block *sb = node->object.sb;
 	struct apfs_btree_node_phys *node_raw;
 	int later_entries = node->records - query->index - 1;
 	int err;
@@ -804,8 +829,10 @@ int apfs_btree_remove(struct apfs_query *query)
 		apfs_btree_change_node_count(query, -1 /* change */);
 
 	err = apfs_query_join_transaction(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "query join failed");
 		return err;
+	}
 
 	node = query->node;
 	node_raw = (void *)query->node->object.data;
@@ -834,8 +861,10 @@ int apfs_btree_remove(struct apfs_query *query)
 
 		err = apfs_btree_replace(query->parent, key, first_key_len,
 					 NULL /* val */, 0 /* val_len */);
-		if (err)
+		if (err) {
+			apfs_err(sb, "parent update failed");
 			return err;
+		}
 	}
 
 	/* Remove the entry from the table of contents */
@@ -902,8 +931,10 @@ int apfs_btree_replace(struct apfs_query *query, void *key, int key_len,
 	}
 
 	err = apfs_query_join_transaction(query);
-	if (err)
+	if (err) {
+		apfs_err(sb, "query join failed");
 		return err;
+	}
 
 again:
 	node = query->node;
@@ -914,8 +945,10 @@ again:
 	if (key && query->parent && query->index == 0) {
 		err = apfs_btree_replace(query->parent, key, key_len,
 					 NULL /* val */, 0 /* val_len */);
-		if (err)
+		if (err) {
+			apfs_err(sb, "parent update failed");
 			return err;
+		}
 	}
 
 	err = apfs_node_replace(query, key, key_len, val, val_len);
@@ -927,12 +960,16 @@ again:
 				return -EFSCORRUPTED;
 			}
 			err = apfs_query_refresh(query);
-			if (err)
+			if (err) {
+				apfs_err(sb, "query refresh failed");
 				return err;
+			}
 		}
 		err = apfs_node_split(query);
-		if (err)
+		if (err) {
+			apfs_err(sb, "node split failed");
 			return err;
+		}
 		goto again;
 	}
 	return err;

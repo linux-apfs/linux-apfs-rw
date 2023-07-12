@@ -95,13 +95,17 @@ static int apfs_cpoint_init_desc(struct super_block *sb)
 	u32 new_sb_index;
 	int err;
 
-	if (!desc_blks || !desc_len)
+	if (!desc_blks || !desc_len) {
+		apfs_err(sb, "bad checkpoint descriptor area");
 		return -EFSCORRUPTED;
+	}
 
 	err = apfs_cpoint_init_area(sb, desc_base, desc_blks,
 				    desc_next, desc_len);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to init area");
 		return err;
+	}
 
 	/* Now update the superblock with the new checkpoint */
 
@@ -149,13 +153,17 @@ static int apfs_cpoint_init_data(struct super_block *sb)
 	u32 data_len = le32_to_cpu(raw_sb->nx_xp_data_len);
 	int err;
 
-	if (!data_blks || !data_len)
+	if (!data_blks || !data_len) {
+		apfs_err(sb, "bad checkpoint data area");
 		return -EFSCORRUPTED;
+	}
 
 	err = apfs_cpoint_init_area(sb, data_base, data_blks,
 				    data_next, data_len);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to init area");
 		return err;
+	}
 
 	/* Apparently the previous checkpoint gets invalidated right away */
 	apfs_assert_in_transaction(sb, &raw_sb->nx_o);
@@ -219,14 +227,17 @@ static int apfs_update_mapping_blocks(struct super_block *sb)
 		int j;
 
 		bh = apfs_sb_bread(sb, desc_base + desc_curr);
-		if (!bh)
+		if (!bh) {
+			apfs_err(sb, "failed to read cpm block");
 			return -EINVAL;
+		}
 		ASSERT(buffer_trans(bh));
 		cpm = (struct apfs_checkpoint_map_phys *)bh->b_data;
 		apfs_assert_in_transaction(sb, &cpm->cpm_o);
 
 		map_count = le32_to_cpu(cpm->cpm_count);
 		if (map_count > apfs_max_maps_per_block(sb)) {
+			apfs_err(sb, "block has too many maps (%d)", map_count);
 			brelse(bh);
 			return -EFSCORRUPTED;
 		}
@@ -290,6 +301,7 @@ int apfs_cpoint_data_free(struct super_block *sb, u64 bno)
 		new_bh = apfs_getblk(sb, apfs_data_index_to_bno(sb, i));
 		old_bh = apfs_sb_bread(sb, apfs_data_index_to_bno(sb, i + 1));
 		if (!new_bh || !old_bh) {
+			apfs_err(sb, "failed to map blocks in data area");
 			brelse(new_bh);
 			brelse(old_bh);
 			return -EIO;
@@ -327,12 +339,18 @@ static int apfs_checkpoint_start(struct super_block *sb)
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 
 	err = apfs_cpoint_init_desc(sb);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to init descriptor area");
 		return err;
+	}
 	err = apfs_cpoint_init_data(sb);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to init data area");
 		return err;
+	}
 	err = apfs_update_mapping_blocks(sb);
+	if (err)
+		apfs_err(sb, "failed to update checkpoint mappings");
 
 	return err;
 }
@@ -444,12 +462,16 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 		nx_trans->t_starts_count = 0;
 
 		err = apfs_checkpoint_start(sb);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to start a new checkpoint");
 			goto fail;
+		}
 
 		err = apfs_read_spaceman(sb);
-		if (err)
+		if (err) {
+			apfs_err(sb, "failed to read the spaceman");
 			goto fail;
+		}
 	}
 
 	/* Don't start transactions unless we are sure they fit in disk */
@@ -457,8 +479,10 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 		/* Commit what we have so far to flush the queues */
 		nx_trans->t_state |= APFS_NX_TRANS_FORCE_COMMIT;
 		err = apfs_transaction_commit(sb);
-		if (err)
+		if (err) {
+			apfs_err(sb, "commit failed");
 			goto fail;
+		}
 		return -ENOSPC;
 	}
 
@@ -473,16 +497,22 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 		get_bh(vol_trans->t_old_omap_root.object.o_bh);
 
 		err = apfs_map_volume_super(sb, true /* write */);
-		if (err)
+		if (err) {
+			apfs_err(sb, "CoW failed for volume super");
 			goto fail;
+		}
 
 		/* TODO: don't copy these nodes for transactions that don't use them */
 		err = apfs_read_omap(sb, true /* write */);
-		if (err)
+		if (err) {
+			apfs_err(sb, "CoW failed for omap");
 			goto fail;
+		}
 		err = apfs_read_catalog(sb, true /* write */);
-		if (err)
+		if (err) {
+			apfs_err(sb, "Cow failed for catalog");
 			goto fail;
+		}
 	}
 
 	nx_trans->t_starts_count++;
@@ -577,8 +607,10 @@ int apfs_transaction_flush_all_inodes(struct super_block *sb)
 		nx_trans->t_state = 0;
 
 		/* Transaction aborted by ->evict_inode(), error code is lost */
-		if (sb->s_flags & SB_RDONLY)
+		if (sb->s_flags & SB_RDONLY) {
+			apfs_err(sb, "abort during inode eviction");
 			return -EROFS;
+		}
 	}
 
 	return err;
@@ -602,8 +634,10 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 
 	/* Before committing the bhs, write all inode metadata to them */
 	err = apfs_transaction_flush_all_inodes(sb);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to flush all inodes");
 		return err;
+	}
 
 	/*
 	 * Now that nothing else will be freed, flush the last update to the
@@ -611,8 +645,10 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	 */
 	if (sm->sm_free_cache_base) {
 		err = apfs_free_queue_insert_nocache(sb, sm->sm_free_cache_base, sm->sm_free_cache_blkcnt);
-		if (err)
+		if (err) {
+			apfs_err(sb, "fq cache flush failed (0x%llx-0x%llx)", sm->sm_free_cache_base, sm->sm_free_cache_blkcnt);
 			return err;
+		}
 		sm->sm_free_cache_base = sm->sm_free_cache_blkcnt = 0;
 	}
 
@@ -639,8 +675,10 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		apfs_submit_bh(REQ_OP_WRITE, REQ_SYNC, bh);
 	}
 	err = apfs_checkpoint_end(sb);
-	if (err)
+	if (err) {
+		apfs_err(sb, "failed to end the checkpoint");
 		return err;
+	}
 
 	/* Success: forget the old container and volume superblocks */
 	brelse(nx_trans->t_old_msb);
@@ -750,7 +788,7 @@ int apfs_transaction_commit(struct super_block *sb)
 	if (apfs_transaction_need_commit(sb)) {
 		err = apfs_transaction_commit_nx(sb);
 		if (err) {
-			apfs_warn(sb, "transaction commit failed");
+			apfs_err(sb, "transaction commit failed");
 			return err;
 		}
 	}
@@ -858,7 +896,7 @@ void apfs_transaction_abort(struct super_block *sb)
 
 	ASSERT(nx_trans->t_old_msb);
 	nx_trans->t_state = 0;
-	apfs_warn(sb, "aborting transaction");
+	apfs_err(sb, "aborting transaction");
 
 	--nxi->nx_xid;
 	list_for_each_entry_safe(bhi, tmp, &nx_trans->t_buffers, list) {
