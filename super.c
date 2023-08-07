@@ -272,7 +272,7 @@ static void apfs_update_software_info(struct super_block *sb)
 	memmove(mod_by + 1, mod_by, (APFS_MAX_HIST - 1) * sizeof(*mod_by));
 
 	memset(mod_by->id, 0, sizeof(mod_by->id));
-	strcpy(mod_by->id, APFS_MODULE_ID_STRING);
+	strscpy(mod_by->id, APFS_MODULE_ID_STRING, sizeof(mod_by->id));
 	mod_by->timestamp = cpu_to_le64(ktime_get_real_ns());
 	mod_by->last_xid = cpu_to_le64(APFS_NXI(sb)->nx_xid);
 }

@@ -465,7 +465,7 @@ static int apfs_build_xattr_key(const char *name, u64 ino, struct apfs_xattr_key
 
 	apfs_key_set_hdr(APFS_TYPE_XATTR, ino, key);
 	key->name_len = cpu_to_le16(namelen);
-	strcpy(key->name, name);
+	strscpy(key->name, name, namelen);
 
 	*key_p = key;
 	return key_len;

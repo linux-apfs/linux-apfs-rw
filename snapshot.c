@@ -116,7 +116,7 @@ static int apfs_create_snap_metadata_rec(struct inode *mntpoint, struct apfs_nod
 	raw_val->extentref_tree_type = vsb_raw->apfs_extentref_tree_type;
 	raw_val->flags = 0;
 	raw_val->name_len = cpu_to_le16(name_len + 1); /* Count the null byte */
-	strcpy(raw_val->name, name);
+	strscpy(raw_val->name, name, name_len + 1);
 
 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 	raw_val->inum = vsb_raw->apfs_next_obj_id;
@@ -173,7 +173,7 @@ static int apfs_create_snap_name_rec(struct apfs_node *snap_root, const char *na
 	}
 	apfs_key_set_hdr(APFS_TYPE_SNAP_NAME, APFS_SNAP_NAME_OBJ_ID, raw_key);
 	raw_key->name_len = cpu_to_le16(name_len + 1); /* Count the null byte */
-	strcpy(raw_key->name, name);
+	strscpy(raw_key->name, name, name_len + 1);
 
 	raw_val.snap_xid = cpu_to_le64(APFS_NXI(sb)->nx_xid);
 
