@@ -679,6 +679,12 @@ static void apfs_noop_invalidate_folio(struct folio *folio, size_t offset, size_
 
 /* bmap is not implemented to avoid issues with CoW on swapfiles */
 static const struct address_space_operations apfs_aops = {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
+	.dirty_folio	= block_dirty_folio,
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
+	.set_page_dirty	= __set_page_dirty_buffers,
+#endif
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
 	.read_folio	= apfs_read_folio,
 #else
