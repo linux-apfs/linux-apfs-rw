@@ -891,6 +891,7 @@ extern loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct fi
 extern int apfs_clone_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, u64 len);
 #endif
 extern int apfs_clone_extents(struct apfs_dstream_info *dstream, u64 new_id);
+extern int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *buf, size_t count, u64 offset);
 
 /* file.c */
 extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync);

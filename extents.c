@@ -5,6 +5,7 @@
 
 #include <linux/buffer_head.h>
 #include <linux/slab.h>
+#include <linux/blk_types.h>
 #include "apfs.h"
 
 #define MAX(X, Y)	((X) <= (Y) ? (Y) : (X))
@@ -2129,4 +2130,96 @@ int apfs_clone_extents(struct apfs_dstream_info *dstream, u64 new_id)
 			return err;
 	}
 	return 0;
+}
+
+/**
+ * apfs_nonsparse_dstream_read - Read from a dstream without holes
+ * @dstream:	dstream to read
+ * @buf:	destination buffer
+ * @count:	exact number of bytes to read
+ * @offset:	dstream offset to read from
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *buf, size_t count, u64 offset)
+{
+	struct super_block *sb = dstream->ds_sb;
+	u64 logical_start_block, logical_end_block, log_bno, blkcnt, idx;
+	struct buffer_head **bhs = NULL;
+	int ret = 0;
+
+	/* Save myself from thinking about overflow here */
+	if (count >= APFS_MAX_FILE_SIZE || offset >= APFS_MAX_FILE_SIZE) {
+		apfs_err(sb, "dstream read overflow (0x%llx-0x%llx)", offset, (unsigned long long)count);
+		return -EFBIG;
+	}
+
+	logical_start_block = offset >> sb->s_blocksize_bits;
+	logical_end_block = (offset + count + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
+	blkcnt = logical_end_block - logical_start_block;
+	bhs = kcalloc(blkcnt, sizeof(*bhs), GFP_KERNEL);
+
+	for (log_bno = logical_start_block; log_bno < logical_end_block; log_bno++) {
+		struct buffer_head *bh = NULL;
+		u64 bno = 0;
+
+		idx = log_bno - logical_start_block;
+
+		ret = apfs_logic_to_phys_bno(dstream, log_bno, &bno);
+		if (ret)
+			goto out;
+		if (bno == 0) {
+			apfs_err(sb, "nonsparse dstream has a hole");
+			ret = -EFSCORRUPTED;
+			goto out;
+		}
+
+		bhs[idx] = __getblk_gfp(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
+		if (!bhs[idx]) {
+			apfs_err(sb, "failed to map block 0x%llx", bno);
+			ret = -EIO;
+			goto out;
+		}
+
+		bh = bhs[idx];
+		if (!buffer_uptodate(bh)) {
+			get_bh(bh);
+			lock_buffer(bh);
+			bh->b_end_io = end_buffer_read_sync;
+			apfs_submit_bh(REQ_OP_READ, 0, bh);
+		}
+	}
+
+	for (log_bno = logical_start_block; log_bno < logical_end_block; log_bno++) {
+		int off_in_block, left_in_block;
+
+		idx = log_bno - logical_start_block;
+		wait_on_buffer(bhs[idx]);
+		if (!buffer_uptodate(bhs[idx])) {
+			apfs_err(sb, "failed to read a block");
+			ret = -EIO;
+			goto out;
+		}
+
+		if (log_bno == logical_start_block)
+			off_in_block = offset & (sb->s_blocksize - 1);
+		else
+			off_in_block = 0;
+
+		if (log_bno == logical_end_block - 1)
+			left_in_block = count + offset - (log_bno << sb->s_blocksize_bits) - off_in_block;
+		else
+			left_in_block = sb->s_blocksize - off_in_block;
+
+		memcpy(buf, bhs[idx]->b_data + off_in_block, left_in_block);
+		buf += left_in_block;
+	}
+
+out:
+	if (bhs) {
+		for (idx = 0; idx < blkcnt; idx++)
+			brelse(bhs[idx]);
+		kfree(bhs);
+	}
+	return ret;
 }

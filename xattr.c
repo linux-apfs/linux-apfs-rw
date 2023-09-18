@@ -112,9 +112,7 @@ static int apfs_xattr_extents_read(struct inode *parent,
 {
 	struct super_block *sb = parent->i_sb;
 	struct apfs_dstream_info *dstream;
-	int length, blkcnt, i;
-	struct buffer_head **bhs = NULL;
-	int ret;
+	int length, ret;
 
 	dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
 	if (!dstream)
@@ -146,59 +144,11 @@ static int apfs_xattr_extents_read(struct inode *parent,
 			length = size;
 	}
 
-	blkcnt = (length + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
-	bhs = kcalloc(blkcnt, sizeof(*bhs), GFP_KERNEL);
-	for (i = 0; i < blkcnt; i++) {
-		struct buffer_head *bh = NULL;
-		u64 bno = 0;
-
-		ret = apfs_logic_to_phys_bno(dstream, i, &bno);
-		if (ret)
-			goto out;
-		if (bno == 0) {
-			/* No holes in xattr dstreams, I believe */
-			apfs_err(sb, "xattr dstream has a hole");
-			ret = -EFSCORRUPTED;
-			goto out;
-		}
-
-		bhs[i] = __getblk_gfp(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
-		if (!bhs[i]) {
-			apfs_err(sb, "failed to map block 0x%llx", bno);
-			ret = -EIO;
-			goto out;
-		}
-
-		bh = bhs[i];
-		if (!buffer_uptodate(bh)) {
-			get_bh(bh);
-			lock_buffer(bh);
-			bh->b_end_io = end_buffer_read_sync;
-			apfs_submit_bh(REQ_OP_READ, 0, bh);
-		}
-	}
-	for (i = 0; i < blkcnt; i++) {
-		int off, tocopy;
-
-		wait_on_buffer(bhs[i]);
-		if (!buffer_uptodate(bhs[i])) {
-			apfs_err(sb, "failed to read a block");
-			ret = -EIO;
-			goto out;
-		}
-
-		off = i << sb->s_blocksize_bits;
-		tocopy = min(sb->s_blocksize, (unsigned long)(length - off));
-		memcpy(buffer + off, bhs[i]->b_data, tocopy);
-	}
-	ret = length;
+	ret = apfs_nonsparse_dstream_read(dstream, buffer, length, 0 /* offset */);
+	if (ret == 0)
+		ret = length;
 
 out:
-	if (bhs) {
-		for (i = 0; i < blkcnt; i++)
-			brelse(bhs[i]);
-		kfree(bhs);
-	}
 	kfree(dstream);
 	return ret;
 }
