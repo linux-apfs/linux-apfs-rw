@@ -272,10 +272,12 @@ static void apfs_update_software_info(struct super_block *sb)
 	memmove(mod_by + 1, mod_by, (APFS_MAX_HIST - 1) * sizeof(*mod_by));
 
 	memset(mod_by->id, 0, sizeof(mod_by->id));
-	strcpy(mod_by->id, APFS_MODULE_ID_STRING);
+	strscpy(mod_by->id, APFS_MODULE_ID_STRING, sizeof(mod_by->id));
 	mod_by->timestamp = cpu_to_le64(ktime_get_real_ns());
 	mod_by->last_xid = cpu_to_le64(APFS_NXI(sb)->nx_xid);
 }
+
+static struct file_system_type apfs_fs_type;
 
 /**
  * apfs_unmap_main_super - Clean up apfs_map_main_super()
@@ -286,11 +288,15 @@ static void apfs_update_software_info(struct super_block *sb)
 static inline void apfs_unmap_main_super(struct apfs_sb_info *sbi)
 {
 	struct apfs_nxsb_info *nxi = sbi->s_nxi;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	fmode_t mode = FMODE_READ | FMODE_EXCL;
+#endif
 	struct apfs_object *obj = NULL;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	if (nxi->nx_flags & APFS_READWRITE)
 		mode |= FMODE_WRITE;
+#endif
 
 	lockdep_assert_held(&nxs_mutex);
 
@@ -304,7 +310,12 @@ static inline void apfs_unmap_main_super(struct apfs_sb_info *sbi)
 	obj->o_bh = NULL;
 	obj = NULL;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+	blkdev_put(nxi->nx_bdev, &apfs_fs_type);
+#else
 	blkdev_put(nxi->nx_bdev, mode);
+#endif
+
 	list_del(&nxi->nx_list);
 	kfree(nxi);
 out:
@@ -1450,8 +1461,6 @@ static int apfs_set_super(struct super_block *sb, void *data)
 	return err;
 }
 
-static struct file_system_type apfs_fs_type;
-
 /*
  * Wrapper for lookup_bdev() that supports older kernels.
  */
@@ -1480,7 +1489,11 @@ static int apfs_lookup_bdev(const char *pathname, dev_t *dev)
  *
  * Returns 0 on success, or a negative error code in case of failure.
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, blk_mode_t mode)
+#else
 static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode_t mode)
+#endif
 {
 	struct apfs_nxsb_info *nxi;
 	dev_t dev = 0;
@@ -1500,7 +1513,11 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 		if (!nxi)
 			return -ENOMEM;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+		bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type, NULL);
+#else
 		bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type);
+#endif
 		if (IS_ERR(bdev)) {
 			kfree(nxi);
 			return PTR_ERR(bdev);
@@ -1527,7 +1544,11 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	struct apfs_nxsb_info *nxi;
 	struct super_block *sb;
 	struct apfs_sb_info *sbi;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+	blk_mode_t mode = sb_open_mode(flags);
+#else
 	fmode_t mode = FMODE_READ | FMODE_EXCL;
+#endif
 	int error = 0;
 
 	mutex_lock(&nxs_mutex);
@@ -1544,8 +1565,10 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	if (sbi->s_snap_name)
 		flags |= SB_RDONLY;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	if (!(flags & SB_RDONLY))
 		mode |= FMODE_WRITE;
+#endif
 
 	error = apfs_attach_nxi(sbi, dev_name, mode);
 	if (error)
@@ -1572,7 +1595,9 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 		error = apfs_map_main_super(sb);
 		if (error)
 			goto out_deactivate_super;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 		sb->s_mode = mode;
+#endif
 		snprintf(sb->s_id, sizeof(sb->s_id), "%xg", sb->s_dev);
 		error = apfs_fill_super(sb, data, flags & SB_SILENT ? 1 : 0);
 		if (error)

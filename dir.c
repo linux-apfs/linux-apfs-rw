@@ -268,7 +268,7 @@ static int apfs_build_dentry_unhashed_key(struct qstr *qname, u64 parent_id,
 
 	apfs_key_set_hdr(APFS_TYPE_DIR_REC, parent_id, key);
 	key->name_len = cpu_to_le16(namelen);
-	strcpy(key->name, qname->name);
+	strscpy(key->name, qname->name, namelen);
 
 	*key_p = key;
 	return key_len;
@@ -297,7 +297,7 @@ static int apfs_build_dentry_hashed_key(struct qstr *qname, u64 hash, u64 parent
 
 	apfs_key_set_hdr(APFS_TYPE_DIR_REC, parent_id, key);
 	key->name_len_and_hash = cpu_to_le32(namelen | hash);
-	strcpy(key->name, qname->name);
+	strscpy(key->name, qname->name, namelen);
 
 	*key_p = key;
 	return key_len;
@@ -434,7 +434,7 @@ static int apfs_build_sibling_val(struct dentry *dentry,
 
 	val->parent_id = cpu_to_le64(apfs_ino(parent));
 	val->name_len = cpu_to_le16(namelen);
-	strcpy(val->name, qname->name);
+	strscpy(val->name, qname->name, namelen);
 
 	*val_p = val;
 	return val_len;
@@ -1089,7 +1089,7 @@ static int apfs_sibling_link_from_query(struct apfs_query *query,
 	*name = kmalloc(namelen, GFP_KERNEL);
 	if (!*name)
 		return -ENOMEM;
-	strcpy(*name, siblink->name);
+	strscpy(*name, siblink->name, namelen);
 	*parent = le64_to_cpu(siblink->parent_id);
 	return 0;
 }

@@ -36,8 +36,11 @@ static inline void *kvmalloc(size_t size, gfp_t flags)
 
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0) */
 
-/* maximum size of compressed data currently supported */
-#define MAX_FBUF_SIZE		(128 * 1024 * 1024)
+/*
+ * Maximum size of compressed data currently supported. This is getting too
+ * big already. TODO: avoid vmalloc().
+ */
+#define MAX_FBUF_SIZE		(256 * 1024 * 1024)
 
 struct apfs_compress_file_data {
 	struct apfs_compress_hdr hdr;
