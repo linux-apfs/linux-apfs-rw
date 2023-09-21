@@ -521,11 +521,29 @@ static int apfs_compress_file_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+static ssize_t apfs_compress_file_write(struct file *filp, const char __user *buf, size_t size, loff_t *off)
+{
+	struct apfs_compress_file_data *fd = filp->private_data;
+	struct super_block *sb = fd->sb;
+
+	/*
+	 * The official implementation seems to transparently decompress files
+	 * when you write to them. Doing that atomically inside the kernel is
+	 * probably a chore, so for now I'll just leave it to the user to make
+	 * an uncompressed copy themselves and replace the original. I might
+	 * fix this in the future, but only if people complain (TODO).
+	 */
+	apfs_warn(sb, "writes to compressed files are not supported");
+	apfs_warn(sb, "you can work with a copy of the file instead");
+	return -EOPNOTSUPP;
+}
+
 const struct file_operations apfs_compress_file_operations = {
 	.open		= apfs_compress_file_open,
 	.llseek		= generic_file_llseek,
 	.read		= apfs_compress_file_read,
 	.release	= apfs_compress_file_release,
+	.write		= apfs_compress_file_write,
 };
 
 int apfs_compress_get_size(struct inode *inode, loff_t *size)
