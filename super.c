@@ -1331,6 +1331,27 @@ static int apfs_setup_bdi(struct super_block *sb)
 
 #endif
 
+static void apfs_set_trans_buffer_limit(struct super_block *sb)
+{
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	unsigned long memsize_in_blocks;
+	struct sysinfo info = {0};
+
+	si_meminfo(&info);
+	memsize_in_blocks = info.totalram << (PAGE_SHIFT - sb->s_blocksize_bits);
+
+	/*
+	 * Buffer heads are not reclaimed while they are part of the current
+	 * transaction, so systems with little memory will crash if we don't
+	 * commit often enough. This hack should make that happen in general,
+	 * but I still need to get the reclaim to work eventually (TODO).
+	 */
+	if (memsize_in_blocks >= 16 * TRANSACTION_BUFFERS_MAX)
+		sbi->s_trans_buffers_max = TRANSACTION_BUFFERS_MAX;
+	else
+		sbi->s_trans_buffers_max = memsize_in_blocks / 16;
+}
+
 static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
@@ -1343,6 +1364,8 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 	err = apfs_setup_bdi(sb);
 	if (err)
 		return err;
+
+	apfs_set_trans_buffer_limit(sb);
 
 	sbi->s_uid = INVALID_UID;
 	sbi->s_gid = INVALID_GID;

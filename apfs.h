@@ -299,6 +299,7 @@ struct apfs_sb_info {
 	struct apfs_crypto_state_val *s_dflt_pfk; /* default per-file key */
 
 	struct apfs_vol_transaction s_transaction;
+	int s_trans_buffers_max;
 
 	struct inode *s_private_dir;	/* Inode for the private directory */
 };
