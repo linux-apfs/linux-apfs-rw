@@ -212,16 +212,19 @@ int apfs_xattr_get_dstream(struct inode *inode, const char *name, struct apfs_ds
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
-	if (ret)
+	if (ret) {
+		apfs_err(sb, "query failed for id 0x%llx (%s)", cnid, name);
 		goto done;
+	}
 
 	ret = apfs_xattr_from_query(query, &xattr);
 	if (ret) {
-		apfs_alert(sb, "bad xattr record in inode 0x%llx", cnid);
+		apfs_err(sb, "bad xattr record in inode 0x%llx", cnid);
 		goto done;
 	}
 
 	if (!xattr.has_dstream) {
+		apfs_err(sb, "xattr has no dstream");
 		ret = -EFSCORRUPTED;
 		goto done;
 	}
