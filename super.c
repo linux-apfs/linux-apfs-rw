@@ -970,11 +970,14 @@ static int apfs_show_options(struct seq_file *seq, struct dentry *root)
 	return 0;
 }
 
-/* TODO: don't ignore @wait */
 int apfs_sync_fs(struct super_block *sb, int wait)
 {
 	struct apfs_max_ops maxops = {0};
 	int err;
+
+	/* TODO: actually start the commit and return without waiting? */
+	if (wait == 0)
+		return 0;
 
 	err = apfs_transaction_start(sb, maxops);
 	if (err)
