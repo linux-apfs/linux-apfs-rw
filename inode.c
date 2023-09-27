@@ -796,7 +796,11 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 	}
 
 	inode->i_atime = ns_to_timespec64(le64_to_cpu(inode_val->access_time));
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode->i_ctime = ns_to_timespec64(le64_to_cpu(inode_val->change_time));
+#else
+	inode_set_ctime_to_ts(inode, ns_to_timespec64(le64_to_cpu(inode_val->change_time)));
+#endif
 	inode->i_mtime = ns_to_timespec64(le64_to_cpu(inode_val->mod_time));
 	ai->i_crtime = ns_to_timespec64(le64_to_cpu(inode_val->create_time));
 
@@ -1079,8 +1083,10 @@ int apfs_getattr(struct mnt_idmap *idmap,
 	generic_fillattr(inode, stat);
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 	generic_fillattr(mnt_userns, inode, stat);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	generic_fillattr(idmap, inode, stat);
+#else
+	generic_fillattr(idmap, request_mask, inode, stat);
 #endif
 
 	stat->ino = apfs_ino(inode);
@@ -1483,7 +1489,12 @@ int apfs_update_inode(struct inode *inode, char *new_name)
 		inode_raw->group = cpu_to_le32(ai->i_saved_gid);
 
 	inode_raw->access_time = cpu_to_le64(timespec64_to_ns(&inode->i_atime));
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode_raw->change_time = cpu_to_le64(timespec64_to_ns(&inode->i_ctime));
+#else
+	struct timespec64 ictime = inode_get_ctime(inode);
+	inode_raw->change_time = cpu_to_le64(timespec64_to_ns(&ictime));
+#endif
 	inode_raw->mod_time = cpu_to_le64(timespec64_to_ns(&inode->i_mtime));
 	inode_raw->create_time = cpu_to_le64(timespec64_to_ns(&ai->i_crtime));
 
@@ -1663,7 +1674,12 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 	dstream->ds_shared = false;
 
 	now = current_time(inode);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode->i_atime = inode->i_mtime = inode->i_ctime = ai->i_crtime = now;
+#else
+	inode_set_ctime_to_ts(inode, now);
+	inode->i_atime = inode->i_mtime = ai->i_crtime = now;
+#endif
 	vsb_raw->apfs_last_mod_time = cpu_to_le64(timespec64_to_ns(&now));
 
 	if (S_ISREG(mode))
@@ -1757,7 +1773,12 @@ static int apfs_setsize(struct inode *inode, loff_t new_size)
 
 	if (new_size == inode->i_size)
 		return 0;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode->i_mtime = inode->i_ctime = current_time(inode);
+#else
+	inode_set_ctime_to_ts(inode, inode_set_ctime_current(inode));
+	inode->i_mtime = inode_set_ctime_current(inode);
+#endif
 
 	err = apfs_inode_create_dstream_rec(inode);
 	if (err) {
@@ -1843,7 +1864,11 @@ fail:
 }
 
 /* TODO: this only seems to be necessary because ->write_inode() isn't firing */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 int apfs_update_time(struct inode *inode, struct timespec64 *time, int flags)
+#else
+int apfs_update_time(struct inode *inode, int flags)
+#endif
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_max_ops maxops;
@@ -1857,7 +1882,11 @@ int apfs_update_time(struct inode *inode, struct timespec64 *time, int flags)
 		return err;
 	apfs_inode_join_transaction(sb, inode);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	err = generic_update_time(inode, time, flags);
+#else
+	err = generic_update_time(inode, flags);
+#endif
 	if (err)
 		goto fail;
 
@@ -2280,8 +2309,11 @@ int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct fil
 
 	apfs_inode_join_transaction(sb, inode);
 	apfs_setflags(inode, fa->flags);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode->i_ctime = current_time(inode);
-
+#else
+	inode_set_ctime_current(inode);
+#endif
 	err = apfs_transaction_commit(sb);
 	if (err)
 		apfs_transaction_abort(sb);

@@ -1703,7 +1703,11 @@ int apfs_clone_file_range(struct file *src_file, loff_t off, struct file *dst_fi
 	}
 	src_ds->ds_shared = true;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	dst_inode->i_mtime = dst_inode->i_ctime = current_time(dst_inode);
+#else
+	dst_inode->i_mtime = inode_set_ctime_current(dst_inode);
+#endif
 	dst_inode->i_size = src_inode->i_size;
 	dst_ai->i_key_class = src_ai->i_key_class;
 	dst_ai->i_int_flags = src_ai->i_int_flags;
