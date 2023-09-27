@@ -601,7 +601,11 @@ static int apfs_create_dentry(struct dentry *dentry, struct inode *inode)
 	}
 
 	/* Now update the parent inode */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	parent->i_mtime = parent->i_ctime = current_time(inode);
+#else
+	parent->i_mtime = inode_set_ctime_current(parent);
+#endif
 	++APFS_I(parent)->i_nchildren;
 	apfs_inode_join_transaction(parent->i_sb, parent);
 	return 0;
@@ -841,7 +845,11 @@ static int __apfs_link(struct dentry *old_dentry, struct dentry *dentry)
 
 	/* First update the inode's link count */
 	inc_nlink(inode);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode->i_ctime = current_time(inode);
+#else
+	inode_set_ctime_current(inode);
+#endif
 	apfs_inode_join_transaction(inode->i_sb, inode);
 
 	if (inode->i_nlink == 2) {
@@ -1030,7 +1038,11 @@ static int apfs_delete_dentry(struct dentry *dentry)
 	}
 
 	/* Now update the parent inode */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	parent->i_mtime = parent->i_ctime = current_time(parent);
+#else
+	parent->i_mtime = inode_set_ctime_current(parent);
+#endif
 	--APFS_I(parent)->i_nchildren;
 	apfs_inode_join_transaction(sb, parent);
 	return err;
@@ -1194,7 +1206,11 @@ static int apfs_create_orphan_link(struct inode *inode)
 	}
 
 	/* Now update the child count for private-dir */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	priv_dir->i_mtime = priv_dir->i_ctime = current_time(priv_dir);
+#else
+	priv_dir->i_mtime = inode_set_ctime_current(priv_dir);
+#endif
 	++APFS_I(priv_dir)->i_nchildren;
 	apfs_inode_join_transaction(sb, priv_dir);
 
@@ -1239,7 +1255,11 @@ int apfs_delete_orphan_link(struct inode *inode)
 	}
 
 	/* Now update the child count for private-dir */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	priv_dir->i_mtime = priv_dir->i_ctime = current_time(priv_dir);
+#else
+	priv_dir->i_mtime = inode_set_ctime_current(priv_dir);
+#endif
 	--APFS_I(priv_dir)->i_nchildren;
 	apfs_inode_join_transaction(sb, priv_dir);
 
@@ -1330,7 +1350,11 @@ static int __apfs_unlink(struct inode *dir, struct dentry *dentry)
 	if (err)
 		goto fail;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode->i_ctime = dir->i_ctime;
+#else
+	inode_set_ctime_to_ts(inode, inode_get_ctime(dir));
+#endif
 	/* TODO: defer write of the primary name? */
 	err = apfs_update_inode(inode, primary_name);
 	if (err)

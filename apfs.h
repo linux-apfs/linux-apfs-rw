@@ -933,7 +933,11 @@ extern int apfs_setattr(struct mnt_idmap *idmap,
 			struct dentry *dentry, struct iattr *iattr);
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 extern int apfs_update_time(struct inode *inode, struct timespec64 *time, int flags);
+#else
+extern int apfs_update_time(struct inode *inode, int flags);
+#endif
 long apfs_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 long apfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 

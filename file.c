@@ -99,7 +99,11 @@ out_abort:
 	apfs_transaction_abort(sb);
 out:
 	if (err)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 		ret = block_page_mkwrite_return(err);
+#else
+		ret = vmf_fs_error(err);
+#endif
 	sb_end_pagefault(inode->i_sb);
 	return ret;
 }
