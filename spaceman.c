@@ -930,7 +930,6 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 	ci->ci_bitmap_addr = cpu_to_le64(bmap_bh->b_blocknr);
 	ASSERT(buffer_trans(*cib_bh));
 	set_buffer_csum(*cib_bh);
-	mark_buffer_dirty(*cib_bh);
 
 	/* Finally, allocate / free the actual block that was requested */
 	if(is_alloc) {
@@ -947,7 +946,6 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 			apfs_err(sb, "block already marked as free (0x%llx)", *bno);
 			le32_add_cpu(&ci->ci_free_count, -1);
 			set_buffer_csum(*cib_bh);
-			mark_buffer_dirty(*cib_bh);
 			err = -EFSCORRUPTED;
 		} else
 			sm->sm_free_count += 1;

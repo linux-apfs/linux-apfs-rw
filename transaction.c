@@ -531,7 +531,7 @@ fail:
 static void apfs_end_buffer_write_sync(struct buffer_head *bh, int uptodate)
 {
 	struct page *page = NULL;
-	bool must_unlock, is_metadata;
+	bool is_metadata;
 
 	page = bh->b_page;
 	get_page(page);
@@ -542,7 +542,7 @@ static void apfs_end_buffer_write_sync(struct buffer_head *bh, int uptodate)
 	bh = NULL;
 
 	/* Future writes to mmapped areas should fault for CoW */
-	must_unlock = trylock_page(page);
+	lock_page(page);
 	page_mkclean(page);
 
 	/* XXX: otherwise, the page cache fills up and crashes the machine */
@@ -554,8 +554,7 @@ static void apfs_end_buffer_write_sync(struct buffer_head *bh, int uptodate)
 #endif
 	}
 
-	if (must_unlock)
-		unlock_page(page);
+	unlock_page(page);
 	put_page(page);
 }
 
