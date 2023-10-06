@@ -1049,6 +1049,7 @@ extern int apfs_insert_xfield(u8 *buffer, int buflen,
  */
 
 /* compress.c */
+extern const struct address_space_operations apfs_compress_aops;
 extern const struct file_operations apfs_compress_file_operations;
 
 /* dir.c */

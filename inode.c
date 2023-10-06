@@ -722,11 +722,13 @@ static void apfs_inode_set_ops(struct inode *inode, dev_t rdev, bool compressed)
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFREG:
 		inode->i_op = &apfs_file_inode_operations;
-		if (compressed)
+		if (compressed) {
 			inode->i_fop = &apfs_compress_file_operations;
-		else
+			inode->i_mapping->a_ops = &apfs_compress_aops;
+		} else {
 			inode->i_fop = &apfs_file_operations;
-		inode->i_mapping->a_ops = &apfs_aops;
+			inode->i_mapping->a_ops = &apfs_aops;
+		}
 		break;
 	case S_IFDIR:
 		inode->i_op = &apfs_dir_inode_operations;

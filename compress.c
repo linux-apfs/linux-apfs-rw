@@ -538,12 +538,144 @@ static ssize_t apfs_compress_file_write(struct file *filp, const char __user *bu
 	return -EOPNOTSUPP;
 }
 
+static ssize_t apfs_compress_file_read_from_block_to_kernel(struct apfs_compress_file_data *fd, char *buf, size_t size, loff_t off)
+{
+	struct super_block *sb = fd->sb;
+	loff_t block;
+	size_t bsize;
+	ssize_t res;
+
+	if(off >= le64_to_cpu(fd->hdr.size))
+		return 0;
+	if(size > le64_to_cpu(fd->hdr.size) - off)
+		size = le64_to_cpu(fd->hdr.size) - off;
+
+	block = off / APFS_COMPRESS_BLOCK;
+	off -= block * APFS_COMPRESS_BLOCK;
+	if(block != fd->bufblk) {
+		res = apfs_compress_file_read_block(fd, block);
+		if (res) {
+			apfs_err(sb, "failed to read block into buffer");
+			return res;
+		}
+	}
+	bsize = fd->bufsize;
+
+	if(bsize < off)
+		return 0;
+	bsize -= off;
+	if(size > bsize)
+		size = bsize;
+	memcpy(buf, fd->buf + off, size);
+	return size;
+}
+
+/*
+ * Same as apfs_compress_file_read(), but always reads up to a single page,
+ * and the destination is not a user address.
+ *
+ * TODO: get rid of the other version and make everything go through the page
+ * cache.
+ */
+static ssize_t apfs_compress_file_read_page(struct file *filp, char *buf, loff_t off)
+{
+	struct apfs_compress_file_data *fd = filp->private_data;
+	loff_t step;
+	ssize_t block, res;
+	size_t size = PAGE_SIZE;
+
+	if(apfs_compress_is_rsrc(le32_to_cpu(fd->hdr.algo))) {
+		step = 0;
+		while(step < size) {
+			block = APFS_COMPRESS_BLOCK - ((off + step) & (APFS_COMPRESS_BLOCK - 1));
+			if(block > size - step)
+				block = size - step;
+			mutex_lock(&fd->mtx);
+			res = apfs_compress_file_read_from_block_to_kernel(fd, buf + step, block, off + step);
+			mutex_unlock(&fd->mtx);
+			if(res < block) {
+				if(res < 0 && !step)
+					return res;
+				step += res > 0 ? res : 0;
+				break;
+			}
+			step += block;
+		}
+		return step;
+	} else {
+		if(off >= fd->size)
+			return 0;
+		if(size > fd->size - off)
+			size = fd->size - off;
+		memcpy(buf, fd->data + off, size);
+		return size;
+	}
+}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+static int apfs_compress_read_folio(struct file *filp, struct folio *folio)
+{
+	struct page *page = &folio->page;
+#else
+static int apfs_compress_readpage(struct file *filp, struct page *page)
+{
+#endif
+	void *addr = NULL;
+	ssize_t ret;
+	loff_t off;
+
+	/* Mostly copied from ext4_read_inline_page() */
+	off = page->index << PAGE_SHIFT;
+	addr = kmap_atomic(page);
+	ret = apfs_compress_file_read_page(filp, addr, off);
+	flush_dcache_page(page);
+	kunmap_atomic(addr);
+	if (ret >= 0) {
+		zero_user_segment(page, ret, PAGE_SIZE);
+		ret = 0;
+	}
+	SetPageUptodate(page);
+
+	unlock_page(page);
+	return 0;
+}
+
+const struct address_space_operations apfs_compress_aops = {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+	.read_folio	= apfs_compress_read_folio,
+#else
+	.readpage	= apfs_compress_readpage,
+#endif
+};
+
+static const struct vm_operations_struct apfs_compress_file_vm_ops = {
+	.fault		= filemap_fault,
+	.map_pages	= filemap_map_pages,
+};
+
+static int apfs_compress_file_mmap(struct file * file, struct vm_area_struct * vma)
+{
+	struct address_space *mapping = file->f_mapping;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+	if (!mapping->a_ops->read_folio)
+#else
+	if (!mapping->a_ops->readpage)
+#endif
+		return -ENOEXEC;
+	file_accessed(file);
+	vma->vm_ops = &apfs_compress_file_vm_ops;
+	return 0;
+}
+
+/* TODO: these operations are all happening without proper locks */
 const struct file_operations apfs_compress_file_operations = {
 	.open		= apfs_compress_file_open,
 	.llseek		= generic_file_llseek,
 	.read		= apfs_compress_file_read,
 	.release	= apfs_compress_file_release,
 	.write		= apfs_compress_file_write,
+	.mmap		= apfs_compress_file_mmap,
 };
 
 int apfs_compress_get_size(struct inode *inode, loff_t *size)
