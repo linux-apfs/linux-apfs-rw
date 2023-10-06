@@ -110,7 +110,7 @@ static const struct vm_operations_struct apfs_file_vm_ops = {
 	.page_mkwrite	= apfs_page_mkwrite,
 };
 
-static int apfs_file_mmap(struct file * file, struct vm_area_struct * vma)
+int apfs_file_mmap(struct file * file, struct vm_area_struct * vma)
 {
 	struct address_space *mapping = file->f_mapping;
 

@@ -895,6 +895,7 @@ extern int apfs_clone_extents(struct apfs_dstream_info *dstream, u64 new_id);
 extern int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *buf, size_t count, u64 offset);
 
 /* file.c */
+extern int apfs_file_mmap(struct file * file, struct vm_area_struct * vma);
 extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync);
 
 /* inode.c */

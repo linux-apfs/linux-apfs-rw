@@ -644,33 +644,13 @@ const struct address_space_operations apfs_compress_aops = {
 #endif
 };
 
-static const struct vm_operations_struct apfs_compress_file_vm_ops = {
-	.fault		= filemap_fault,
-	.map_pages	= filemap_map_pages,
-};
-
-static int apfs_compress_file_mmap(struct file * file, struct vm_area_struct * vma)
-{
-	struct address_space *mapping = file->f_mapping;
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
-	if (!mapping->a_ops->read_folio)
-#else
-	if (!mapping->a_ops->readpage)
-#endif
-		return -ENOEXEC;
-	file_accessed(file);
-	vma->vm_ops = &apfs_compress_file_vm_ops;
-	return 0;
-}
-
 /* TODO: these operations are all happening without proper locks */
 const struct file_operations apfs_compress_file_operations = {
 	.open		= apfs_compress_file_open,
 	.llseek		= generic_file_llseek,
 	.read		= apfs_compress_file_read,
 	.release	= apfs_compress_file_release,
-	.mmap		= apfs_compress_file_mmap,
+	.mmap		= apfs_file_mmap,
 };
 
 int apfs_compress_get_size(struct inode *inode, loff_t *size)
