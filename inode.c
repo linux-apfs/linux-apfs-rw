@@ -1790,17 +1790,10 @@ int apfs_setattr(struct mnt_idmap *idmap,
 #endif
 {
 	struct inode *inode = d_inode(dentry);
-	struct apfs_inode_info *ai = APFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct apfs_max_ops maxops;
 	bool resizing = S_ISREG(inode->i_mode) && (iattr->ia_valid & ATTR_SIZE);
 	int err;
-
-	if (resizing && (ai->i_bsd_flags & APFS_INOBSD_COMPRESSED)) {
-		apfs_warn(sb, "resizing compressed files is not supported");
-		apfs_warn(sb, "you can work with a copy of the file instead");
-		return -EOPNOTSUPP;
-	}
 
 	if (resizing && iattr->ia_size > APFS_MAX_FILE_SIZE)
 		return -EFBIG;
