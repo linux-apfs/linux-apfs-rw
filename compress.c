@@ -444,78 +444,6 @@ fail:
 	return res;
 }
 
-static ssize_t apfs_compress_file_read_from_block(struct apfs_compress_file_data *fd, char __user *buf, size_t size, loff_t off)
-{
-	struct super_block *sb = fd->sb;
-	loff_t block;
-	size_t bsize;
-	ssize_t res;
-
-	if(off >= le64_to_cpu(fd->hdr.size))
-		return 0;
-	if(size > le64_to_cpu(fd->hdr.size) - off)
-		size = le64_to_cpu(fd->hdr.size) - off;
-
-	block = off / APFS_COMPRESS_BLOCK;
-	off -= block * APFS_COMPRESS_BLOCK;
-	if(block != fd->bufblk) {
-		res = apfs_compress_file_read_block(fd, block);
-		if (res) {
-			apfs_err(sb, "failed to read block into buffer");
-			return res;
-		}
-	}
-	bsize = fd->bufsize;
-
-	if(bsize < off)
-		return 0;
-	bsize -= off;
-	if(size > bsize)
-		size = bsize;
-	res = copy_to_user(buf, fd->buf + off, size);
-	if(res == size)
-		return -EFAULT;
-	return size - res;
-}
-
-static ssize_t apfs_compress_file_read(struct file *filp, char __user *buf, size_t size, loff_t *off)
-{
-	struct apfs_compress_file_data *fd = filp->private_data;
-	loff_t step;
-	ssize_t block, res;
-
-	if(apfs_compress_is_rsrc(le32_to_cpu(fd->hdr.algo))) {
-		step = 0;
-		while(step < size) {
-			block = APFS_COMPRESS_BLOCK - ((*off + step) & (APFS_COMPRESS_BLOCK - 1));
-			if(block > size - step)
-				block = size - step;
-			mutex_lock(&fd->mtx);
-			res = apfs_compress_file_read_from_block(fd, buf + step, block, *off + step);
-			mutex_unlock(&fd->mtx);
-			if(res < block) {
-				if(res < 0 && !step)
-					return res;
-				step += res > 0 ? res : 0;
-				break;
-			}
-			step += block;
-		}
-		*off += step;
-		return step;
-	} else {
-		if(*off >= fd->size)
-			return 0;
-		if(size > fd->size - *off)
-			size = fd->size - *off;
-		res = copy_to_user(buf, fd->data + *off, size);
-		if(res == size)
-			return -EFAULT;
-		*off += size - res;
-		return size - res;
-	}
-}
-
 static int apfs_compress_file_release(struct inode *inode, struct file *filp)
 {
 	struct apfs_compress_file_data *fd = filp->private_data;
@@ -534,7 +462,7 @@ static int apfs_compress_file_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static ssize_t apfs_compress_file_read_from_block_to_kernel(struct apfs_compress_file_data *fd, char *buf, size_t size, loff_t off)
+static ssize_t apfs_compress_file_read_from_block(struct apfs_compress_file_data *fd, char *buf, size_t size, loff_t off)
 {
 	struct super_block *sb = fd->sb;
 	loff_t block;
@@ -566,13 +494,6 @@ static ssize_t apfs_compress_file_read_from_block_to_kernel(struct apfs_compress
 	return size;
 }
 
-/*
- * Same as apfs_compress_file_read(), but always reads up to a single page,
- * and the destination is not a user address.
- *
- * TODO: get rid of the other version and make everything go through the page
- * cache.
- */
 static ssize_t apfs_compress_file_read_page(struct file *filp, char *buf, loff_t off)
 {
 	struct apfs_compress_file_data *fd = filp->private_data;
@@ -587,7 +508,7 @@ static ssize_t apfs_compress_file_read_page(struct file *filp, char *buf, loff_t
 			if(block > size - step)
 				block = size - step;
 			mutex_lock(&fd->mtx);
-			res = apfs_compress_file_read_from_block_to_kernel(fd, buf + step, block, off + step);
+			res = apfs_compress_file_read_from_block(fd, buf + step, block, off + step);
 			mutex_unlock(&fd->mtx);
 			if(res < block) {
 				if(res < 0 && !step)
@@ -648,7 +569,7 @@ const struct address_space_operations apfs_compress_aops = {
 const struct file_operations apfs_compress_file_operations = {
 	.open		= apfs_compress_file_open,
 	.llseek		= generic_file_llseek,
-	.read		= apfs_compress_file_read,
+	.read_iter	= generic_file_read_iter,
 	.release	= apfs_compress_file_release,
 	.mmap		= apfs_file_mmap,
 };
