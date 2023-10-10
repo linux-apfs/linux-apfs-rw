@@ -373,6 +373,7 @@ static int apfs_compress_file_read_block(struct apfs_compress_file_data *fd, lof
 				goto fail;
 			}
 			bsize = res;
+			res = 0;
 		} else if((cdata[0] & 0x0F) == 0x0F) {
 			memcpy(tmp, &cdata[1], csize - 1);
 			bsize = csize - 1;
@@ -404,6 +405,7 @@ static int apfs_compress_file_read_block(struct apfs_compress_file_data *fd, lof
 				apfs_err(sb, "lzbitmap rsrc read failed");
 				goto fail;
 			}
+			res = 0;
 		} else if((cdata[0] & 0x0F) == 0x0F) {
 			memcpy(tmp, &cdata[1], csize - 1);
 			bsize = csize - 1;
@@ -423,6 +425,7 @@ static int apfs_compress_file_read_block(struct apfs_compress_file_data *fd, lof
 				goto fail;
 			}
 			bsize = res;
+			res = 0;
 		} else {
 			/* cdata[0] == 0xff, apparently */
 			memcpy(tmp, &cdata[1], csize - 1);
