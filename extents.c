@@ -2164,6 +2164,8 @@ int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *buf, si
 	logical_end_block = (offset + count + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
 	blkcnt = logical_end_block - logical_start_block;
 	bhs = kcalloc(blkcnt, sizeof(*bhs), GFP_KERNEL);
+	if (!bhs)
+		return -ENOMEM;
 
 	for (log_bno = logical_start_block; log_bno < logical_end_block; log_bno++) {
 		struct buffer_head *bh = NULL;
