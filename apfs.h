@@ -893,6 +893,7 @@ extern int apfs_clone_file_range(struct file *src_file, loff_t off, struct file 
 #endif
 extern int apfs_clone_extents(struct apfs_dstream_info *dstream, u64 new_id);
 extern int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *buf, size_t count, u64 offset);
+extern void apfs_nonsparse_dstream_preread(struct apfs_dstream_info *dstream);
 
 /* file.c */
 extern int apfs_file_mmap(struct file * file, struct vm_area_struct * vma);

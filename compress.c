@@ -472,6 +472,16 @@ static ssize_t apfs_compress_file_read_from_block(struct apfs_compress_file_data
 	size_t bsize;
 	ssize_t res;
 
+	/*
+	 * Request reads of all blocks before actually working with any of them.
+	 * The compressed data is typically small enough that this is effective.
+	 * It would be much better to make an inode for the xattr dstream and
+	 * work with readahead as usual, but I'm not confident I can get that
+	 * right (TODO).
+	 */
+	if (off == 0)
+		apfs_nonsparse_dstream_preread(fd->dstream);
+
 	if(off >= le64_to_cpu(fd->hdr.size))
 		return 0;
 	if(size > le64_to_cpu(fd->hdr.size) - off)

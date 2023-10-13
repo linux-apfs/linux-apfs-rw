@@ -2231,3 +2231,39 @@ out:
 	}
 	return ret;
 }
+
+/**
+ * apfs_nonsparse_dstream_preread - Attempt to preread a dstream without holes
+ * @dstream:	dstream to preread
+ *
+ * Requests reads for all blocks of a dstream, but doesn't wait for the result.
+ */
+void apfs_nonsparse_dstream_preread(struct apfs_dstream_info *dstream)
+{
+	struct super_block *sb = dstream->ds_sb;
+	u64 logical_end_block, log_bno;
+
+	logical_end_block = (dstream->ds_size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
+
+	for (log_bno = 0; log_bno < logical_end_block; log_bno++) {
+		struct buffer_head *bh = NULL;
+		u64 bno = 0;
+		int ret;
+
+		ret = apfs_logic_to_phys_bno(dstream, log_bno, &bno);
+		if (ret || bno == 0)
+			return;
+
+		bh = __getblk_gfp(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
+		if (!bh)
+			return;
+		if (!buffer_uptodate(bh)) {
+			get_bh(bh);
+			lock_buffer(bh);
+			bh->b_end_io = end_buffer_read_sync;
+			apfs_submit_bh(REQ_OP_READ, 0, bh);
+		}
+		brelse(bh);
+		bh = NULL;
+	}
+}
