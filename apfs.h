@@ -775,6 +775,15 @@ struct apfs_xattr {
 	bool has_dstream;
 };
 
+struct apfs_compressed_data {
+	bool has_dstream;
+	u64 size;
+	union {
+		struct apfs_dstream_info *dstream;
+		void *data;
+	};
+};
+
 /*
  * Report function name and line number for the message types that are likely
  * to signal a bug, to make things easier for reporters. Don't do this for the
@@ -1037,7 +1046,9 @@ extern int apfs_xattr_set(struct inode *inode, const char *name, const void *val
 			  size_t size, int flags);
 extern int APFS_XATTR_SET_MAXOPS(void);
 extern ssize_t apfs_listxattr(struct dentry *dentry, char *buffer, size_t size);
-extern int apfs_xattr_get_dstream(struct inode *inode, const char *name, struct apfs_dstream_info **dstream_p);
+extern int apfs_xattr_get_compressed_data(struct inode *inode, const char *name, struct apfs_compressed_data *cdata);
+extern void apfs_release_compressed_data(struct apfs_compressed_data *cdata);
+extern int apfs_compressed_data_read(struct apfs_compressed_data *cdata, void *buf, size_t count, u64 offset);
 
 /* xfield.c */
 extern int apfs_find_xfield(u8 *xfields, int len, u8 xtype, char **xval);
