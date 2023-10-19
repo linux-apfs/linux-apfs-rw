@@ -417,12 +417,12 @@ static int apfs_compress_readpage(struct file *filp, struct page *page)
 	kunmap_atomic(addr);
 	if (ret >= 0) {
 		zero_user_segment(page, ret, PAGE_SIZE);
+		SetPageUptodate(page);
 		ret = 0;
 	}
-	SetPageUptodate(page);
 
 	unlock_page(page);
-	return 0;
+	return ret;
 }
 
 const struct address_space_operations apfs_compress_aops = {
