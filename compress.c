@@ -113,8 +113,10 @@ static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 	}
 
 	fd->buf = kvmalloc(APFS_COMPRESS_BLOCK, GFP_KERNEL);
-	if(!fd->buf)
-		goto fail_enomem;
+	if(!fd->buf) {
+		res = -ENOMEM;
+		goto fail;
+	}
 	fd->bufblk = -1;
 
 	is_rsrc = apfs_compress_is_rsrc(le32_to_cpu(fd->hdr.algo));
@@ -127,8 +129,6 @@ static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 	filp->private_data = fd;
 	return 0;
 
-fail_enomem:
-	res = -ENOMEM;
 fail:
 	apfs_release_compressed_data(&fd->cdata);
 	if(fd->buf)
