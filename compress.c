@@ -75,6 +75,7 @@ static inline bool apfs_compress_is_supported(u32 algo)
 static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 {
 	struct super_block *sb = inode->i_sb;
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_compress_file_data *fd;
 	ssize_t res;
 	bool is_rsrc;
@@ -101,6 +102,8 @@ static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 	mutex_init(&fd->mtx);
 	fd->sb = sb;
 
+	down_read(&nxi->nx_big_sem);
+
 	res = ____apfs_xattr_get(inode, APFS_XATTR_NAME_COMPRESSED, &fd->hdr, sizeof(fd->hdr), 0);
 	if(res != sizeof(fd->hdr)) {
 		apfs_err(sb, "decmpfs header read failed");
@@ -126,6 +129,8 @@ static int apfs_compress_file_open(struct inode *inode, struct file *filp)
 		goto fail;
 	}
 
+	up_read(&nxi->nx_big_sem);
+
 	filp->private_data = fd;
 	return 0;
 
@@ -133,6 +138,7 @@ fail:
 	apfs_release_compressed_data(&fd->cdata);
 	if(fd->buf)
 		kvfree(fd->buf);
+	up_read(&nxi->nx_big_sem);
 	kfree(fd);
 	if(res > 0)
 		res = -EINVAL;
@@ -331,6 +337,7 @@ static int apfs_compress_file_release(struct inode *inode, struct file *filp)
 static ssize_t apfs_compress_file_read_from_block(struct apfs_compress_file_data *fd, char *buf, size_t size, loff_t off)
 {
 	struct super_block *sb = fd->sb;
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_compressed_data cdata = fd->cdata;
 	loff_t block;
 	size_t bsize;
@@ -343,8 +350,11 @@ static ssize_t apfs_compress_file_read_from_block(struct apfs_compress_file_data
 	 * work with readahead as usual, but I'm not confident I can get that
 	 * right (TODO).
 	 */
-	if (cdata.has_dstream && off == 0)
+	if (cdata.has_dstream && off == 0) {
+		down_read(&nxi->nx_big_sem);
 		apfs_nonsparse_dstream_preread(cdata.dstream);
+		up_read(&nxi->nx_big_sem);
+	}
 
 	if(off >= le64_to_cpu(fd->hdr.size))
 		return 0;
@@ -354,7 +364,9 @@ static ssize_t apfs_compress_file_read_from_block(struct apfs_compress_file_data
 	block = off / APFS_COMPRESS_BLOCK;
 	off -= block * APFS_COMPRESS_BLOCK;
 	if(block != fd->bufblk) {
+		down_read(&nxi->nx_big_sem);
 		res = apfs_compress_file_read_block(fd, block);
+		up_read(&nxi->nx_big_sem);
 		if (res) {
 			apfs_err(sb, "failed to read block into buffer");
 			return res;
