@@ -842,11 +842,10 @@ int apfs_btree_remove(struct apfs_query *query)
 		if (query->parent) {
 			/* Just get rid of the node */
 			return apfs_delete_node(query);
-		} else {
-			/* All descendants are gone, root is the whole tree */
-			node_raw->btn_level = 0;
-			node->flags |= APFS_BTNODE_LEAF;
 		}
+		/* All descendants are gone, root is the whole tree */
+		node_raw->btn_level = 0;
+		node->flags |= APFS_BTNODE_LEAF;
 	}
 
 	/* The first key in a node must match the parent record's */

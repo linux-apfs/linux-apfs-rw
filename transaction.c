@@ -685,6 +685,7 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 
 	list_for_each_entry(sbi, &nxi->vol_list, list) {
 		struct apfs_vol_transaction *vol_trans = &sbi->s_transaction;
+
 		if (!vol_trans->t_old_vsb)
 			continue;
 
@@ -750,7 +751,7 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 			mq_max += 20;
 		}
 
-		if(nx_trans->t_buffers_count > buffers_max)
+		if (nx_trans->t_buffers_count > buffers_max)
 			return true;
 		if (nx_trans->t_starts_count > starts_max)
 			return true;
@@ -760,11 +761,11 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 		 * exactly 3 times. Don't allow large transactions if we can't
 		 * be sure the bitmap changes will all fit.
 		 */
-		if(le64_to_cpu(fq_ip->sfq_count) * 3 > le64_to_cpu(sm_raw->sm_ip_block_count))
+		if (le64_to_cpu(fq_ip->sfq_count) * 3 > le64_to_cpu(sm_raw->sm_ip_block_count))
 			return true;
 
 		/* Don't let the main queue get too full either */
-		if(le64_to_cpu(fq_main->sfq_count) > mq_max)
+		if (le64_to_cpu(fq_main->sfq_count) > mq_max)
 			return true;
 	}
 
@@ -844,7 +845,7 @@ int apfs_transaction_join(struct super_block *sb, struct buffer_head *bh)
 	get_bh(bh);
 	bhi->bh = bh;
 	list_add(&bhi->list, &nx_trans->t_buffers);
-	nx_trans->t_buffers_count ++;
+	nx_trans->t_buffers_count++;
 
 	set_buffer_trans(bh);
 	bh->b_private = bhi;
@@ -922,6 +923,7 @@ void apfs_transaction_abort(struct super_block *sb)
 
 	list_for_each_entry(sbi, &nxi->vol_list, list) {
 		struct apfs_vol_transaction *vol_trans = &sbi->s_transaction;
+
 		if (!vol_trans->t_old_vsb)
 			continue;
 

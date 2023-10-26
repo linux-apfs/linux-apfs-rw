@@ -1475,7 +1475,7 @@ struct apfs_snap_meta_ext {
 	__le32	sme_version;
 	__le32	sme_flags;
 	__le64	sme_snap_xid;
-	char 	sme_uuid[UUID_SIZE];
+	char	sme_uuid[UUID_SIZE];
 	__le64	sme_token;
 } __packed;
 
@@ -1503,7 +1503,7 @@ enum {
  * Structure of a single entry in the keybag
  */
 struct apfs_keybag_entry {
-	char 	ke_uuid[UUID_SIZE];
+	char	ke_uuid[UUID_SIZE];
 	__le16	ke_tag;
 	__le16	ke_keylen;
 	__le32	padding;

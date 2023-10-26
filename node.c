@@ -869,6 +869,7 @@ int apfs_node_query(struct super_block *sb, struct apfs_query *query)
 	left = 0;
 	do {
 		struct apfs_key curr_key;
+
 		if (cmp > 0) {
 			right = query->index - 1;
 			if (right < left) {

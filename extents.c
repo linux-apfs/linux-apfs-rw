@@ -47,7 +47,7 @@ int apfs_extent_from_query(struct apfs_query *query,
 	char *raw = query->node->object.data;
 	u64 ext_len;
 
-	if(!apfs_is_sealed(sb)) {
+	if (!apfs_is_sealed(sb)) {
 		struct apfs_file_extent_val *ext = NULL;
 		struct apfs_file_extent_key *ext_key = NULL;
 
@@ -602,7 +602,7 @@ static int apfs_update_mid_extent(struct apfs_dstream_info *dstream, const struc
 	raw_key.logical_addr = cpu_to_le64(extent->logical_addr);
 	raw_val.len_and_flags = cpu_to_le64(extent->len);
 	raw_val.phys_block_num = cpu_to_le64(extent->phys_block_num);
-	if(apfs_vol_is_encrypted(sb))
+	if (apfs_vol_is_encrypted(sb))
 		new_crypto = extent_id;
 	else
 		new_crypto = 0;

@@ -320,8 +320,10 @@ static inline bool apfs_is_sealed(struct super_block *sb)
  * apfs_vol_is_encrypted - Check if a volume is encrypting files
  * @sb: superblock
  */
-static inline bool apfs_vol_is_encrypted(struct super_block *sb) {
+static inline bool apfs_vol_is_encrypted(struct super_block *sb)
+{
 	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+
 	return (vsb_raw->apfs_fs_flags & cpu_to_le64(APFS_FS_UNENCRYPTED)) == 0;
 }
 
@@ -905,7 +907,7 @@ extern int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *
 extern void apfs_nonsparse_dstream_preread(struct apfs_dstream_info *dstream);
 
 /* file.c */
-extern int apfs_file_mmap(struct file * file, struct vm_area_struct * vma);
+extern int apfs_file_mmap(struct file *file, struct vm_area_struct *vma);
 extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync);
 
 /* inode.c */

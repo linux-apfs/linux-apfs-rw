@@ -1482,6 +1482,7 @@ static int apfs_test_super(struct super_block *sb, void *data)
 static int apfs_set_super(struct super_block *sb, void *data)
 {
 	int err = set_anon_super(sb, data);
+
 	if (!err)
 		sb->s_fs_info = data;
 	return err;

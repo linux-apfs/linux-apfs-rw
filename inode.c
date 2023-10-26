@@ -288,14 +288,16 @@ static int apfs_create_crypto_rec(struct inode *inode)
 		goto out;
 
 	apfs_key_set_hdr(APFS_TYPE_CRYPTO_STATE, dstream->ds_id, &raw_key);
-	if(sbi->s_dflt_pfk) {
+	if (sbi->s_dflt_pfk) {
 		struct apfs_crypto_state_val *raw_val = sbi->s_dflt_pfk;
-		unsigned key_len = le16_to_cpu(raw_val->state.key_len);
+		unsigned int key_len = le16_to_cpu(raw_val->state.key_len);
+
 		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), raw_val, sizeof(*raw_val) + key_len);
 		if (ret)
 			apfs_err(sb, "insertion failed for id 0x%llx", dstream->ds_id);
 	} else {
 		struct apfs_crypto_state_val raw_val;
+
 		raw_val.refcnt = cpu_to_le32(1);
 		raw_val.state.major_version = cpu_to_le16(APFS_WMCS_MAJOR_VERSION);
 		raw_val.state.minor_version = cpu_to_le16(APFS_WMCS_MINOR_VERSION);
@@ -318,7 +320,7 @@ out:
  * apfs_dflt_key_class - Returns default key class for files in volume
  * @sb: volume superblock
  */
-static unsigned apfs_dflt_key_class(struct super_block *sb)
+static unsigned int apfs_dflt_key_class(struct super_block *sb)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 
@@ -399,7 +401,7 @@ static int apfs_crypto_set_key(struct super_block *sb, u64 crypto_id, struct apf
 	struct apfs_crypto_state_val *raw_val;
 	char *raw;
 	int ret;
-	unsigned pfk_len;
+	unsigned int pfk_len;
 
 	if (!crypto_id)
 		return 0;
@@ -441,7 +443,7 @@ out:
  * @max_len: maximum allowed value of val->state.key_len
  */
 static int apfs_crypto_get_key(struct super_block *sb, u64 crypto_id, struct apfs_crypto_state_val *val,
-			       unsigned max_len)
+			       unsigned int max_len)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_key key;
@@ -449,7 +451,7 @@ static int apfs_crypto_get_key(struct super_block *sb, u64 crypto_id, struct apf
 	struct apfs_crypto_state_val *raw_val;
 	char *raw;
 	int ret;
-	unsigned pfk_len;
+	unsigned int pfk_len;
 
 	if (!crypto_id)
 		return -ENOENT;
@@ -468,7 +470,7 @@ static int apfs_crypto_get_key(struct super_block *sb, u64 crypto_id, struct apf
 	raw_val = (void *)raw + query->off;
 
 	pfk_len = le16_to_cpu(raw_val->state.key_len);
-	if(pfk_len > max_len) {
+	if (pfk_len > max_len) {
 		ret = -ENOSPC;
 		goto out;
 	}
@@ -501,7 +503,7 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 		return err;
 	}
 
-	if(apfs_vol_is_encrypted(sb)) {
+	if (apfs_vol_is_encrypted(sb)) {
 		err = apfs_create_crypto_rec(inode);
 		if (err) {
 			apfs_err(sb, "crypto creation failed for ino 0x%llx", apfs_ino(inode));
@@ -1239,7 +1241,7 @@ static int apfs_create_dstream_xfield(struct inode *inode,
 
 	dstream_raw.size = cpu_to_le64(inode->i_size);
 	dstream_raw.alloced_size = cpu_to_le64(apfs_alloced_size(dstream));
-	if(apfs_vol_is_encrypted(inode->i_sb))
+	if (apfs_vol_is_encrypted(inode->i_sb))
 		dstream_raw.default_crypto_id = cpu_to_le64(dstream->ds_id);
 
 	/* TODO: can we assume that all inode records have an xfield blob? */
@@ -1909,7 +1911,7 @@ static int apfs_ioc_set_dflt_pfk(struct file *file, void __user *user_pfk)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_wrapped_crypto_state pfk_hdr;
 	struct apfs_crypto_state_val *pfk;
-	unsigned key_len;
+	unsigned int key_len;
 
 	if (__copy_from_user(&pfk_hdr, user_pfk, sizeof(pfk_hdr)))
 		return -EFAULT;
@@ -1976,7 +1978,7 @@ static int apfs_ioc_set_pfk(struct file *file, void __user *user_pfk)
 	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_dstream_info *dstream = &ai->i_dstream;
 	struct apfs_max_ops maxops;
-	unsigned key_len, key_class;
+	unsigned int key_len, key_class;
 	int err;
 
 	if (__copy_from_user(&pfk_hdr, user_pfk, sizeof(pfk_hdr)))
@@ -2043,7 +2045,7 @@ static int apfs_ioc_get_pfk(struct file *file, void __user *user_pfk)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_wrapped_crypto_state pfk_hdr;
 	struct apfs_crypto_state_val *pfk;
-	unsigned max_len, key_len;
+	unsigned int max_len, key_len;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
 	int err;
 
