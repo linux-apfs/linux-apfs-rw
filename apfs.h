@@ -649,7 +649,9 @@ static inline u32 apfs_query_storage(struct apfs_query *query)
 		return APFS_OBJ_PHYSICAL;
 	if (query->flags & APFS_QUERY_OMAP_SNAP)
 		return APFS_OBJ_PHYSICAL;
-	BUG();
+
+	/* Absurd, but don't panic: let the callers fail and report it */
+	return -1;
 }
 
 /*
@@ -800,7 +802,7 @@ struct apfs_compressed_data {
 #define apfs_info(sb, fmt, ...) apfs_msg(sb, KERN_INFO, NULL, 0, fmt, ##__VA_ARGS__)
 
 #ifdef CONFIG_APFS_DEBUG
-#define ASSERT(expr)	BUG_ON(!(expr))
+#define ASSERT(expr)	WARN_ON(!(expr))
 #define apfs_debug(sb, fmt, ...) apfs_msg(sb, KERN_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #else
 #define ASSERT(expr)	((void)0)

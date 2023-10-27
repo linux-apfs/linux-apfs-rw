@@ -955,7 +955,7 @@ again:
 		if (!query->parent && !apfs_node_is_root(node)) {
 			if (node->records == 1) {
 				/* Node is defragmented, ENOSPC is absurd */
-				WARN_ON(1);
+				apfs_alert(sb, "absurd ENOSPC in empty node");
 				return -EFSCORRUPTED;
 			}
 			err = apfs_query_refresh(query);
