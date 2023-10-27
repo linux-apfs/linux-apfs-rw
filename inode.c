@@ -1886,12 +1886,10 @@ int apfs_update_time(struct inode *inode, int flags)
 	apfs_inode_join_transaction(sb, inode);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
-	err = generic_update_time(inode, time, flags);
+	generic_update_time(inode, time, flags);
 #else
-	err = generic_update_time(inode, flags);
+	generic_update_time(inode, flags);
 #endif
-	if (err)
-		goto fail;
 
 	err = apfs_transaction_commit(sb);
 	if (err)
