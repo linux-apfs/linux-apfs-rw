@@ -159,6 +159,13 @@ const struct file_operations apfs_file_operations = {
 #else
 	.clone_file_range	= apfs_clone_file_range,
 #endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+	.splice_read		= generic_file_splice_read,
+#else
+	.splice_read		= filemap_splice_read,
+#endif
+	.splice_write		= iter_file_splice_write,
 };
 
 #if LINUX_VERSION_CODE == KERNEL_VERSION(5, 3, 0)
