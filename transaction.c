@@ -524,41 +524,6 @@ fail:
 }
 
 /**
- * apfs_end_buffer_write_sync - Clean up a buffer head just synced to disk
- * @bh:		the buffer head to clean
- * @uptodate:	has the write succeeded?
- */
-static void apfs_end_buffer_write_sync(struct buffer_head *bh, int uptodate)
-{
-	struct page *page = NULL;
-	bool is_metadata;
-
-	page = bh->b_page;
-	get_page(page);
-
-	is_metadata = buffer_csum(bh);
-	clear_buffer_csum(bh);
-	end_buffer_write_sync(bh, uptodate);
-	bh = NULL;
-
-	/* Future writes to mmapped areas should fault for CoW */
-	lock_page(page);
-	page_mkclean(page);
-
-	/* XXX: otherwise, the page cache fills up and crashes the machine */
-	if (!is_metadata) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
-		try_to_free_buffers(page_folio(page));
-#else
-		try_to_free_buffers(page);
-#endif
-	}
-
-	unlock_page(page);
-	put_page(page);
-}
-
-/**
  * apfs_transaction_flush_all_inodes - Flush inode metadata to the buffer heads
  * @sb: superblock structure
  *
@@ -651,13 +616,32 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		sm->sm_free_cache_base = sm->sm_free_cache_blkcnt = 0;
 	}
 
-	list_for_each_entry_safe(bhi, tmp, &nx_trans->t_buffers, list) {
+	list_for_each_entry(bhi, &nx_trans->t_buffers, list) {
 		struct buffer_head *bh = bhi->bh;
 
 		ASSERT(buffer_trans(bh));
 
 		if (buffer_csum(bh))
 			apfs_obj_set_csum(sb, (void *)bh->b_data);
+
+		clear_buffer_dirty(bh);
+		get_bh(bh);
+		lock_buffer(bh);
+		bh->b_end_io = end_buffer_write_sync;
+		apfs_submit_bh(REQ_OP_WRITE, REQ_SYNC, bh);
+	}
+	list_for_each_entry_safe(bhi, tmp, &nx_trans->t_buffers, list) {
+		struct buffer_head *bh = bhi->bh;
+		struct page *page = NULL;
+		bool is_metadata;
+
+		ASSERT(buffer_trans(bh));
+
+		wait_on_buffer(bh);
+		if (!buffer_uptodate(bh)) {
+			apfs_err(sb, "failed to write some blocks");
+			return -EIO;
+		}
 
 		list_del(&bhi->list);
 		clear_buffer_trans(bh);
@@ -668,10 +652,27 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		kfree(bhi);
 		bhi = NULL;
 
-		clear_buffer_dirty(bh);
-		lock_buffer(bh);
-		bh->b_end_io = apfs_end_buffer_write_sync;
-		apfs_submit_bh(REQ_OP_WRITE, REQ_SYNC, bh);
+		page = bh->b_page;
+		get_page(page);
+
+		is_metadata = buffer_csum(bh);
+		clear_buffer_csum(bh);
+		put_bh(bh);
+		bh = NULL;
+
+		/* Future writes to mmapped areas should fault for CoW */
+		lock_page(page);
+		page_mkclean(page);
+		/* XXX: otherwise, the page cache fills up and crashes the machine */
+		if (!is_metadata) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+			try_to_free_buffers(page_folio(page));
+#else
+			try_to_free_buffers(page);
+#endif
+		}
+		unlock_page(page);
+		put_page(page);
 	}
 	err = apfs_checkpoint_end(sb);
 	if (err) {
