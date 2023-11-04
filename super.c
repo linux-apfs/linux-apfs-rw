@@ -14,6 +14,9 @@
 #include <linux/statfs.h>
 #include <linux/seq_file.h>
 #include "apfs.h"
+#include "version.h"
+
+#define APFS_MODULE_ID_STRING	"linux-apfs by eafer (" GIT_COMMIT ")"
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0) /* iversion came in 4.16 */
 #include <linux/iversion.h>

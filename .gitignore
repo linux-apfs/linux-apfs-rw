@@ -9,3 +9,4 @@
 *.a
 *.mod
 tags
+version.h
