@@ -306,7 +306,7 @@ struct apfs_wrapped_crypto_state {
 	__le32 key_os_version;
 	__le16 key_revision;
 	__le16 key_len;
-	u8 persistent_key[0];
+	u8 persistent_key[];
 } __packed;
 
 /*
@@ -503,7 +503,7 @@ struct apfs_dir_stats_val {
 struct apfs_sibling_val {
 	__le64 parent_id;
 	__le16 name_len;
-	u8 name[0];
+	u8 name[];
 } __packed;
 
 /*
@@ -622,7 +622,7 @@ enum {
 struct apfs_drec_key {
 	struct apfs_key_header hdr;
 	__le16 name_len;
-	u8 name[0];
+	u8 name[];
 } __packed;
 
 /*
@@ -632,7 +632,7 @@ struct apfs_drec_key {
 struct apfs_drec_hashed_key {
 	struct apfs_key_header hdr;
 	__le32 name_len_and_hash;
-	u8 name[0];
+	u8 name[];
 } __packed;
 
 /*
@@ -641,7 +641,7 @@ struct apfs_drec_hashed_key {
 struct apfs_xattr_key {
 	struct apfs_key_header hdr;
 	__le16 name_len;
-	u8 name[0];
+	u8 name[];
 } __packed;
 
 /*
@@ -660,7 +660,7 @@ struct apfs_snap_metadata_key {
 struct apfs_snap_name_key {
 	struct apfs_key_header hdr;
 	__le16 name_len;
-	u8 name[0];
+	u8 name[];
 } __packed;
 
 /*
@@ -1278,7 +1278,7 @@ enum {
 struct apfs_xattr_val {
 	__le16 flags;
 	__le16 xdata_len;
-	u8 xdata[0];
+	u8 xdata[];
 } __packed;
 
 /*
@@ -1372,7 +1372,7 @@ struct apfs_file_info_key {
 struct apfs_file_data_hash_val {
 	__le16	hashed_len;
 	u8	hash_size;
-	u8	hash[0];
+	u8	hash[];
 } __packed;
 
 #define APFS_FILE_INFO_DATA_HASH	1
@@ -1435,7 +1435,7 @@ struct apfs_compress_rsrc_data {
 	struct apfs_compress_rsrc_block {
 		__le32 offs;
 		__le32 size;
-	} __packed block[0];
+	} __packed block[];
 } __packed;
 
 /*
@@ -1456,7 +1456,7 @@ struct apfs_snap_metadata_val {
 	__le32 extentref_tree_type;
 	__le32 flags;
 	__le16 name_len;
-	u8 name[0];
+	u8 name[];
 } __packed;
 
 /*
@@ -1475,7 +1475,7 @@ struct apfs_snap_meta_ext {
 	__le32	sme_version;
 	__le32	sme_flags;
 	__le64	sme_snap_xid;
-	char 	sme_uuid[UUID_SIZE];
+	char	sme_uuid[UUID_SIZE];
 	__le64	sme_token;
 } __packed;
 
@@ -1503,11 +1503,11 @@ enum {
  * Structure of a single entry in the keybag
  */
 struct apfs_keybag_entry {
-	char 	ke_uuid[UUID_SIZE];
+	char	ke_uuid[UUID_SIZE];
 	__le16	ke_tag;
 	__le16	ke_keylen;
 	__le32	padding;
-	u8	ke_keydata[0];
+	u8	ke_keydata[];
 } __packed;
 
 #define APFS_KEYBAG_VERSION	2
@@ -1520,7 +1520,7 @@ struct apfs_kb_locker {
 	__le16				kl_nkeys;
 	__le32				kl_nbytes;
 	__le64				padding;
-	struct apfs_keybag_entry	kl_entries[0];
+	struct apfs_keybag_entry	kl_entries[];
 } __packed;
 
 #endif	/* _APFS_RAW_H */

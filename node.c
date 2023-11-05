@@ -108,6 +108,9 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 			return (void *)bh;
 		}
 		break;
+	default:
+		apfs_alert(sb, "invalid storage type %u - bug!", storage);
+		return ERR_PTR(-EINVAL);
 	}
 	raw = (struct apfs_btree_node_phys *) bh->b_data;
 
@@ -374,8 +377,8 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 		}
 		break;
 	default:
-		ASSERT(false);
-		return ERR_PTR(-EINVAL); /* Prevent compiler warnings */
+		apfs_alert(sb, "invalid storage type %u - bug!", storage);
+		return ERR_PTR(-EINVAL);
 	}
 
 	bh = apfs_getblk(sb, bno);
@@ -869,6 +872,7 @@ int apfs_node_query(struct super_block *sb, struct apfs_query *query)
 	left = 0;
 	do {
 		struct apfs_key curr_key;
+
 		if (cmp > 0) {
 			right = query->index - 1;
 			if (right < left) {

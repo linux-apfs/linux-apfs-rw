@@ -288,14 +288,16 @@ static int apfs_create_crypto_rec(struct inode *inode)
 		goto out;
 
 	apfs_key_set_hdr(APFS_TYPE_CRYPTO_STATE, dstream->ds_id, &raw_key);
-	if(sbi->s_dflt_pfk) {
+	if (sbi->s_dflt_pfk) {
 		struct apfs_crypto_state_val *raw_val = sbi->s_dflt_pfk;
-		unsigned key_len = le16_to_cpu(raw_val->state.key_len);
+		unsigned int key_len = le16_to_cpu(raw_val->state.key_len);
+
 		ret = apfs_btree_insert(query, &raw_key, sizeof(raw_key), raw_val, sizeof(*raw_val) + key_len);
 		if (ret)
 			apfs_err(sb, "insertion failed for id 0x%llx", dstream->ds_id);
 	} else {
 		struct apfs_crypto_state_val raw_val;
+
 		raw_val.refcnt = cpu_to_le32(1);
 		raw_val.state.major_version = cpu_to_le16(APFS_WMCS_MAJOR_VERSION);
 		raw_val.state.minor_version = cpu_to_le16(APFS_WMCS_MINOR_VERSION);
@@ -318,7 +320,7 @@ out:
  * apfs_dflt_key_class - Returns default key class for files in volume
  * @sb: volume superblock
  */
-static unsigned apfs_dflt_key_class(struct super_block *sb)
+static unsigned int apfs_dflt_key_class(struct super_block *sb)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 
@@ -399,7 +401,7 @@ static int apfs_crypto_set_key(struct super_block *sb, u64 crypto_id, struct apf
 	struct apfs_crypto_state_val *raw_val;
 	char *raw;
 	int ret;
-	unsigned pfk_len;
+	unsigned int pfk_len;
 
 	if (!crypto_id)
 		return 0;
@@ -441,7 +443,7 @@ out:
  * @max_len: maximum allowed value of val->state.key_len
  */
 static int apfs_crypto_get_key(struct super_block *sb, u64 crypto_id, struct apfs_crypto_state_val *val,
-			       unsigned max_len)
+			       unsigned int max_len)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_key key;
@@ -449,7 +451,7 @@ static int apfs_crypto_get_key(struct super_block *sb, u64 crypto_id, struct apf
 	struct apfs_crypto_state_val *raw_val;
 	char *raw;
 	int ret;
-	unsigned pfk_len;
+	unsigned int pfk_len;
 
 	if (!crypto_id)
 		return -ENOENT;
@@ -468,7 +470,7 @@ static int apfs_crypto_get_key(struct super_block *sb, u64 crypto_id, struct apf
 	raw_val = (void *)raw + query->off;
 
 	pfk_len = le16_to_cpu(raw_val->state.key_len);
-	if(pfk_len > max_len) {
+	if (pfk_len > max_len) {
 		ret = -ENOSPC;
 		goto out;
 	}
@@ -501,7 +503,7 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 		return err;
 	}
 
-	if(apfs_vol_is_encrypted(sb)) {
+	if (apfs_vol_is_encrypted(sb)) {
 		err = apfs_create_crypto_rec(inode);
 		if (err) {
 			apfs_err(sb, "crypto creation failed for ino 0x%llx", apfs_ino(inode));
@@ -722,11 +724,13 @@ static void apfs_inode_set_ops(struct inode *inode, dev_t rdev, bool compressed)
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFREG:
 		inode->i_op = &apfs_file_inode_operations;
-		if (compressed)
+		if (compressed) {
 			inode->i_fop = &apfs_compress_file_operations;
-		else
+			inode->i_mapping->a_ops = &apfs_compress_aops;
+		} else {
 			inode->i_fop = &apfs_file_operations;
-		inode->i_mapping->a_ops = &apfs_aops;
+			inode->i_mapping->a_ops = &apfs_aops;
+		}
 		break;
 	case S_IFDIR:
 		inode->i_op = &apfs_dir_inode_operations;
@@ -796,7 +800,11 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 	}
 
 	inode->i_atime = ns_to_timespec64(le64_to_cpu(inode_val->access_time));
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode->i_ctime = ns_to_timespec64(le64_to_cpu(inode_val->change_time));
+#else
+	inode_set_ctime_to_ts(inode, ns_to_timespec64(le64_to_cpu(inode_val->change_time)));
+#endif
 	inode->i_mtime = ns_to_timespec64(le64_to_cpu(inode_val->mod_time));
 	ai->i_crtime = ns_to_timespec64(le64_to_cpu(inode_val->create_time));
 
@@ -1079,8 +1087,10 @@ int apfs_getattr(struct mnt_idmap *idmap,
 	generic_fillattr(inode, stat);
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 	generic_fillattr(mnt_userns, inode, stat);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	generic_fillattr(idmap, inode, stat);
+#else
+	generic_fillattr(idmap, request_mask, inode, stat);
 #endif
 
 	stat->ino = apfs_ino(inode);
@@ -1231,7 +1241,7 @@ static int apfs_create_dstream_xfield(struct inode *inode,
 
 	dstream_raw.size = cpu_to_le64(inode->i_size);
 	dstream_raw.alloced_size = cpu_to_le64(apfs_alloced_size(dstream));
-	if(apfs_vol_is_encrypted(inode->i_sb))
+	if (apfs_vol_is_encrypted(inode->i_sb))
 		dstream_raw.default_crypto_id = cpu_to_le64(dstream->ds_id);
 
 	/* TODO: can we assume that all inode records have an xfield blob? */
@@ -1483,7 +1493,12 @@ int apfs_update_inode(struct inode *inode, char *new_name)
 		inode_raw->group = cpu_to_le32(ai->i_saved_gid);
 
 	inode_raw->access_time = cpu_to_le64(timespec64_to_ns(&inode->i_atime));
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode_raw->change_time = cpu_to_le64(timespec64_to_ns(&inode->i_ctime));
+#else
+	struct timespec64 ictime = inode_get_ctime(inode);
+	inode_raw->change_time = cpu_to_le64(timespec64_to_ns(&ictime));
+#endif
 	inode_raw->mod_time = cpu_to_le64(timespec64_to_ns(&inode->i_mtime));
 	inode_raw->create_time = cpu_to_le64(timespec64_to_ns(&ai->i_crtime));
 
@@ -1663,7 +1678,12 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 	dstream->ds_shared = false;
 
 	now = current_time(inode);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode->i_atime = inode->i_mtime = inode->i_ctime = ai->i_crtime = now;
+#else
+	inode_set_ctime_to_ts(inode, now);
+	inode->i_atime = inode->i_mtime = ai->i_crtime = now;
+#endif
 	vsb_raw->apfs_last_mod_time = cpu_to_le64(timespec64_to_ns(&now));
 
 	if (S_ISREG(mode))
@@ -1757,7 +1777,11 @@ static int apfs_setsize(struct inode *inode, loff_t new_size)
 
 	if (new_size == inode->i_size)
 		return 0;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode->i_mtime = inode->i_ctime = current_time(inode);
+#else
+	inode->i_mtime = inode_set_ctime_current(inode);
+#endif
 
 	err = apfs_inode_create_dstream_rec(inode);
 	if (err) {
@@ -1843,7 +1867,11 @@ fail:
 }
 
 /* TODO: this only seems to be necessary because ->write_inode() isn't firing */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 int apfs_update_time(struct inode *inode, struct timespec64 *time, int flags)
+#else
+int apfs_update_time(struct inode *inode, int flags)
+#endif
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_max_ops maxops;
@@ -1857,9 +1885,11 @@ int apfs_update_time(struct inode *inode, struct timespec64 *time, int flags)
 		return err;
 	apfs_inode_join_transaction(sb, inode);
 
-	err = generic_update_time(inode, time, flags);
-	if (err)
-		goto fail;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
+	generic_update_time(inode, time, flags);
+#else
+	generic_update_time(inode, flags);
+#endif
 
 	err = apfs_transaction_commit(sb);
 	if (err)
@@ -1879,7 +1909,7 @@ static int apfs_ioc_set_dflt_pfk(struct file *file, void __user *user_pfk)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_wrapped_crypto_state pfk_hdr;
 	struct apfs_crypto_state_val *pfk;
-	unsigned key_len;
+	unsigned int key_len;
 
 	if (__copy_from_user(&pfk_hdr, user_pfk, sizeof(pfk_hdr)))
 		return -EFAULT;
@@ -1946,7 +1976,7 @@ static int apfs_ioc_set_pfk(struct file *file, void __user *user_pfk)
 	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_dstream_info *dstream = &ai->i_dstream;
 	struct apfs_max_ops maxops;
-	unsigned key_len, key_class;
+	unsigned int key_len, key_class;
 	int err;
 
 	if (__copy_from_user(&pfk_hdr, user_pfk, sizeof(pfk_hdr)))
@@ -2013,7 +2043,7 @@ static int apfs_ioc_get_pfk(struct file *file, void __user *user_pfk)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_wrapped_crypto_state pfk_hdr;
 	struct apfs_crypto_state_val *pfk;
-	unsigned max_len, key_len;
+	unsigned int max_len, key_len;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
 	int err;
 
@@ -2280,7 +2310,11 @@ int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct fil
 
 	apfs_inode_join_transaction(sb, inode);
 	apfs_setflags(inode, fa->flags);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	inode->i_ctime = current_time(inode);
+#else
+	inode_set_ctime_current(inode);
+#endif
 
 	err = apfs_transaction_commit(sb);
 	if (err)

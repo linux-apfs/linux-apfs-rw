@@ -99,7 +99,11 @@ out_abort:
 	apfs_transaction_abort(sb);
 out:
 	if (err)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 		ret = block_page_mkwrite_return(err);
+#else
+		ret = vmf_fs_error(err);
+#endif
 	sb_end_pagefault(inode->i_sb);
 	return ret;
 }
@@ -110,7 +114,7 @@ static const struct vm_operations_struct apfs_file_vm_ops = {
 	.page_mkwrite	= apfs_page_mkwrite,
 };
 
-static int apfs_file_mmap(struct file * file, struct vm_area_struct * vma)
+int apfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct address_space *mapping = file->f_mapping;
 
@@ -155,6 +159,13 @@ const struct file_operations apfs_file_operations = {
 #else
 	.clone_file_range	= apfs_clone_file_range,
 #endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+	.splice_read		= generic_file_splice_read,
+#else
+	.splice_read		= filemap_splice_read,
+#endif
+	.splice_write		= iter_file_splice_write,
 };
 
 #if LINUX_VERSION_CODE == KERNEL_VERSION(5, 3, 0)

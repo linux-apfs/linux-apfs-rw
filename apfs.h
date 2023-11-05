@@ -299,6 +299,7 @@ struct apfs_sb_info {
 	struct apfs_crypto_state_val *s_dflt_pfk; /* default per-file key */
 
 	struct apfs_vol_transaction s_transaction;
+	int s_trans_buffers_max;
 
 	struct inode *s_private_dir;	/* Inode for the private directory */
 };
@@ -319,8 +320,10 @@ static inline bool apfs_is_sealed(struct super_block *sb)
  * apfs_vol_is_encrypted - Check if a volume is encrypting files
  * @sb: superblock
  */
-static inline bool apfs_vol_is_encrypted(struct super_block *sb) {
+static inline bool apfs_vol_is_encrypted(struct super_block *sb)
+{
 	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+
 	return (vsb_raw->apfs_fs_flags & cpu_to_le64(APFS_FS_UNENCRYPTED)) == 0;
 }
 
@@ -646,7 +649,9 @@ static inline u32 apfs_query_storage(struct apfs_query *query)
 		return APFS_OBJ_PHYSICAL;
 	if (query->flags & APFS_QUERY_OMAP_SNAP)
 		return APFS_OBJ_PHYSICAL;
-	BUG();
+
+	/* Absurd, but don't panic: let the callers fail and report it */
+	return -1;
 }
 
 /*
@@ -774,6 +779,15 @@ struct apfs_xattr {
 	bool has_dstream;
 };
 
+struct apfs_compressed_data {
+	bool has_dstream;
+	u64 size;
+	union {
+		struct apfs_dstream_info *dstream;
+		void *data;
+	};
+};
+
 /*
  * Report function name and line number for the message types that are likely
  * to signal a bug, to make things easier for reporters. Don't do this for the
@@ -788,7 +802,7 @@ struct apfs_xattr {
 #define apfs_info(sb, fmt, ...) apfs_msg(sb, KERN_INFO, NULL, 0, fmt, ##__VA_ARGS__)
 
 #ifdef CONFIG_APFS_DEBUG
-#define ASSERT(expr)	BUG_ON(!(expr))
+#define ASSERT(expr)	WARN_ON(!(expr))
 #define apfs_debug(sb, fmt, ...) apfs_msg(sb, KERN_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #else
 #define ASSERT(expr)	((void)0)
@@ -891,8 +905,11 @@ extern loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct fi
 extern int apfs_clone_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, u64 len);
 #endif
 extern int apfs_clone_extents(struct apfs_dstream_info *dstream, u64 new_id);
+extern int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *buf, size_t count, u64 offset);
+extern void apfs_nonsparse_dstream_preread(struct apfs_dstream_info *dstream);
 
 /* file.c */
+extern int apfs_file_mmap(struct file *file, struct vm_area_struct *vma);
 extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync);
 
 /* inode.c */
@@ -920,7 +937,11 @@ extern int apfs_setattr(struct mnt_idmap *idmap,
 			struct dentry *dentry, struct iattr *iattr);
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 extern int apfs_update_time(struct inode *inode, struct timespec64 *time, int flags);
+#else
+extern int apfs_update_time(struct inode *inode, int flags);
+#endif
 long apfs_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 long apfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
@@ -1033,6 +1054,9 @@ extern int apfs_xattr_set(struct inode *inode, const char *name, const void *val
 			  size_t size, int flags);
 extern int APFS_XATTR_SET_MAXOPS(void);
 extern ssize_t apfs_listxattr(struct dentry *dentry, char *buffer, size_t size);
+extern int apfs_xattr_get_compressed_data(struct inode *inode, const char *name, struct apfs_compressed_data *cdata);
+extern void apfs_release_compressed_data(struct apfs_compressed_data *cdata);
+extern int apfs_compressed_data_read(struct apfs_compressed_data *cdata, void *buf, size_t count, u64 offset);
 
 /* xfield.c */
 extern int apfs_find_xfield(u8 *xfields, int len, u8 xtype, char **xval);
@@ -1046,6 +1070,7 @@ extern int apfs_insert_xfield(u8 *buffer, int buflen,
  */
 
 /* compress.c */
+extern const struct address_space_operations apfs_compress_aops;
 extern const struct file_operations apfs_compress_file_operations;
 
 /* dir.c */

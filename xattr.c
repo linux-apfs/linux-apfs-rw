@@ -112,9 +112,7 @@ static int apfs_xattr_extents_read(struct inode *parent,
 {
 	struct super_block *sb = parent->i_sb;
 	struct apfs_dstream_info *dstream;
-	int length, blkcnt, i;
-	struct buffer_head **bhs = NULL;
-	int ret;
+	int length, ret;
 
 	dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
 	if (!dstream)
@@ -146,59 +144,11 @@ static int apfs_xattr_extents_read(struct inode *parent,
 			length = size;
 	}
 
-	blkcnt = (length + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
-	bhs = kcalloc(blkcnt, sizeof(*bhs), GFP_KERNEL);
-	for (i = 0; i < blkcnt; i++) {
-		struct buffer_head *bh = NULL;
-		u64 bno = 0;
-
-		ret = apfs_logic_to_phys_bno(dstream, i, &bno);
-		if (ret)
-			goto out;
-		if (bno == 0) {
-			/* No holes in xattr dstreams, I believe */
-			apfs_err(sb, "xattr dstream has a hole");
-			ret = -EFSCORRUPTED;
-			goto out;
-		}
-
-		bhs[i] = __getblk_gfp(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
-		if (!bhs[i]) {
-			apfs_err(sb, "failed to map block 0x%llx", bno);
-			ret = -EIO;
-			goto out;
-		}
-
-		bh = bhs[i];
-		if (!buffer_uptodate(bh)) {
-			get_bh(bh);
-			lock_buffer(bh);
-			bh->b_end_io = end_buffer_read_sync;
-			apfs_submit_bh(REQ_OP_READ, 0, bh);
-		}
-	}
-	for (i = 0; i < blkcnt; i++) {
-		int off, tocopy;
-
-		wait_on_buffer(bhs[i]);
-		if (!buffer_uptodate(bhs[i])) {
-			apfs_err(sb, "failed to read a block");
-			ret = -EIO;
-			goto out;
-		}
-
-		off = i << sb->s_blocksize_bits;
-		tocopy = min(sb->s_blocksize, (unsigned long)(length - off));
-		memcpy(buffer + off, bhs[i]->b_data, tocopy);
-	}
-	ret = length;
+	ret = apfs_nonsparse_dstream_read(dstream, buffer, length, 0 /* offset */);
+	if (ret == 0)
+		ret = length;
 
 out:
-	if (bhs) {
-		for (i = 0; i < blkcnt; i++)
-			brelse(bhs[i]);
-		kfree(bhs);
-	}
 	kfree(dstream);
 	return ret;
 }
@@ -231,6 +181,125 @@ static int apfs_xattr_inline_read(struct apfs_xattr *xattr, void *buffer, size_t
 	}
 	memcpy(buffer, xattr->xdata, length);
 	return length;
+}
+
+/**
+ * apfs_xattr_get_compressed_data - Get the compressed data in a named attribute
+ * @inode:	inode the attribute belongs to
+ * @name:	name of the attribute
+ * @cdata:	compressed data struct to set on return
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+int apfs_xattr_get_compressed_data(struct inode *inode, const char *name, struct apfs_compressed_data *cdata)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_key key;
+	struct apfs_query *query;
+	struct apfs_xattr xattr;
+	u64 cnid = apfs_ino(inode);
+	int ret;
+
+	apfs_init_xattr_key(cnid, name, &key);
+
+	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+	query->key = &key;
+	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
+
+	ret = apfs_btree_query(sb, &query);
+	if (ret) {
+		apfs_err(sb, "query failed for id 0x%llx (%s)", cnid, name);
+		goto done;
+	}
+
+	ret = apfs_xattr_from_query(query, &xattr);
+	if (ret) {
+		apfs_err(sb, "bad xattr record in inode 0x%llx", cnid);
+		goto done;
+	}
+
+	cdata->has_dstream = xattr.has_dstream;
+	if (cdata->has_dstream) {
+		struct apfs_dstream_info *dstream = NULL;
+
+		dstream = kzalloc(sizeof(*dstream), GFP_KERNEL);
+		if (!dstream) {
+			ret = -ENOMEM;
+			goto done;
+		}
+		apfs_dstream_from_xattr(sb, &xattr, dstream);
+
+		cdata->dstream = dstream;
+		cdata->size = dstream->ds_size;
+	} else {
+		void *data = NULL;
+		int len;
+
+		len = xattr.xdata_len;
+		if (len > APFS_XATTR_MAX_EMBEDDED_SIZE) {
+			apfs_err(sb, "inline xattr too big");
+			ret = -EFSCORRUPTED;
+			goto done;
+		}
+		data = kzalloc(len, GFP_KERNEL);
+		if (!data) {
+			ret = -ENOMEM;
+			goto done;
+		}
+		memcpy(data, xattr.xdata, len);
+
+		cdata->data = data;
+		cdata->size = len;
+	}
+	ret = 0;
+
+done:
+	apfs_free_query(query);
+	return ret;
+}
+
+/**
+ * apfs_release_compressed_data - Clean up a compressed data struct
+ * @cdata: struct to clean up (but not free)
+ */
+void apfs_release_compressed_data(struct apfs_compressed_data *cdata)
+{
+	if (!cdata)
+		return;
+
+	if (cdata->has_dstream) {
+		kfree(cdata->dstream);
+		cdata->dstream = NULL;
+	} else {
+		kfree(cdata->data);
+		cdata->data = NULL;
+	}
+}
+
+/**
+ * apfs_compressed_data_read - Read from a compressed data struct
+ * @cdata:	compressed data struct
+ * @buf:	destination buffer
+ * @count:	exact number of bytes to read
+ * @offset:	dstream offset to read from
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+int apfs_compressed_data_read(struct apfs_compressed_data *cdata, void *buf, size_t count, u64 offset)
+{
+	if (cdata->has_dstream)
+		return apfs_nonsparse_dstream_read(cdata->dstream, buf, count, offset);
+
+	if (offset > cdata->size || count > cdata->size - offset) {
+		apfs_err(NULL, "reading past the end (0x%llx-0x%llx)", offset, (unsigned long long)count);
+		/* No caller is expected to legitimately read out-of-bounds */
+		return -EFSCORRUPTED;
+	}
+	memcpy(buf, cdata->data + offset, count);
+	return 0;
 }
 
 /**

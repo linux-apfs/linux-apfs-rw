@@ -361,7 +361,7 @@ static int apfs_flush_fq_rec(struct apfs_node *root, u64 xid, u64 *len)
 	}
 
 	for (bno = fqrec.bno; bno < fqrec.bno + fqrec.len; ++bno) {
-		if(apfs_block_in_ip(sm, bno))
+		if (apfs_block_in_ip(sm, bno))
 			err = apfs_ip_mark_free(sb, bno);
 		else
 			err = apfs_main_free(sb, bno);
@@ -406,7 +406,7 @@ static u64 apfs_free_queue_oldest_xid(struct apfs_node *root)
  *
  * Returns 0 on success or a negative error code in case of failure.
  */
-static int apfs_flush_free_queue(struct super_block *sb, unsigned qid)
+static int apfs_flush_free_queue(struct super_block *sb, unsigned int qid)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_spaceman *sm = APFS_SM(sb);
@@ -829,7 +829,7 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 	if (!ci->ci_bitmap_addr) {
 		u64 bmap_bno;
 
-		if(!is_alloc) {
+		if (!is_alloc) {
 			apfs_err(sb, "attempt to free block in all-free chunk");
 			return -EFSCORRUPTED;
 		}
@@ -930,10 +930,9 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 	ci->ci_bitmap_addr = cpu_to_le64(bmap_bh->b_blocknr);
 	ASSERT(buffer_trans(*cib_bh));
 	set_buffer_csum(*cib_bh);
-	mark_buffer_dirty(*cib_bh);
 
 	/* Finally, allocate / free the actual block that was requested */
-	if(is_alloc) {
+	if (is_alloc) {
 		*bno = apfs_chunk_find_free(sb, bmap, le64_to_cpu(ci->ci_addr));
 		if (!*bno) {
 			apfs_err(sb, "no free blocks in chunk");
@@ -943,11 +942,10 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
 		apfs_chunk_mark_used(sb, bmap, *bno);
 		sm->sm_free_count -= 1;
 	} else {
-		if(!apfs_chunk_mark_free(sb, bmap, *bno)) {
+		if (!apfs_chunk_mark_free(sb, bmap, *bno)) {
 			apfs_err(sb, "block already marked as free (0x%llx)", *bno);
 			le32_add_cpu(&ci->ci_free_count, -1);
 			set_buffer_csum(*cib_bh);
-			mark_buffer_dirty(*cib_bh);
 			err = -EFSCORRUPTED;
 		} else
 			sm->sm_free_count += 1;
@@ -1102,7 +1100,7 @@ static int apfs_main_free(struct super_block *sb, u64 bno)
 	u64 cib_bno;
 	int err;
 
-	if(!sm_raw->sm_blocks_per_chunk || !sm_raw->sm_chunks_per_cib) {
+	if (!sm_raw->sm_blocks_per_chunk || !sm_raw->sm_chunks_per_cib) {
 		apfs_err(sb, "block or chunk count not set");
 		return -EINVAL;
 	}
