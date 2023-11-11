@@ -18,6 +18,9 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 #endif
 	struct page *page = vmf->page;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)
+	struct folio *folio;
+#endif
 	struct inode *inode = file_inode(vma->vm_file);
 	struct super_block *sb = inode->i_sb;
 	struct buffer_head *bh, *head;
@@ -54,8 +57,16 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 		goto out_unlock;
 	}
 
-	if (!page_has_buffers(page))
+	if (!page_has_buffers(page)) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
 		create_empty_buffers(page, sb->s_blocksize, 0);
+#else
+		folio = page_folio(page);
+		bh = folio_buffers(folio);
+		if (!bh)
+			bh = create_empty_buffers(folio, sb->s_blocksize, 0);
+#endif
+	}
 
 	size = i_size_read(inode);
 	if (page->index == size >> PAGE_SHIFT)

@@ -1142,7 +1142,11 @@ apfs_getblk(struct super_block *sb, sector_t block)
 {
 	struct buffer_head *bh;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
 	bh = __getblk_gfp(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
+#else
+	bh = bdev_getblk(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
+#endif
 	if (bh)
 		set_buffer_uptodate(bh);
 	return bh;

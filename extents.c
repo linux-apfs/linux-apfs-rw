@@ -1694,8 +1694,10 @@ int apfs_clone_file_range(struct file *src_file, loff_t off, struct file *dst_fi
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	dst_inode->i_mtime = dst_inode->i_ctime = current_time(dst_inode);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
 	dst_inode->i_mtime = inode_set_ctime_current(dst_inode);
+#else
+	inode_set_mtime_to_ts(dst_inode, inode_set_ctime_current(dst_inode));
 #endif
 	dst_inode->i_size = src_inode->i_size;
 	dst_ai->i_key_class = src_ai->i_key_class;
@@ -2171,7 +2173,11 @@ int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *buf, si
 			goto out;
 		}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
 		bhs[idx] = __getblk_gfp(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
+#else
+		bhs[idx] = bdev_getblk(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
+#endif
 		if (!bhs[idx]) {
 			apfs_err(sb, "failed to map block 0x%llx", bno);
 			ret = -EIO;
@@ -2243,7 +2249,11 @@ void apfs_nonsparse_dstream_preread(struct apfs_dstream_info *dstream)
 		if (ret || bno == 0)
 			return;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
 		bh = __getblk_gfp(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
+#else
+		bh = bdev_getblk(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
+#endif
 		if (!bh)
 			return;
 		if (!buffer_uptodate(bh)) {
