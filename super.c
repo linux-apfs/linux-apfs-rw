@@ -1680,6 +1680,7 @@ static void __exit exit_apfs_fs(void)
 
 MODULE_AUTHOR("Ernesto A. Fernández");
 MODULE_DESCRIPTION("Apple File System");
+MODULE_VERSION(GIT_COMMIT);
 MODULE_LICENSE("GPL");
 module_init(init_apfs_fs)
 module_exit(exit_apfs_fs)
