@@ -320,6 +320,8 @@ static inline void apfs_unmap_main_super(struct apfs_sb_info *sbi)
 #endif
 
 	list_del(&nxi->nx_list);
+	kfree(nxi->nx_spaceman);
+	nxi->nx_spaceman = NULL;
 	kfree(nxi);
 out:
 	sbi->s_nxi = NULL;
