@@ -592,6 +592,7 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	struct apfs_bh_info *bhi, *tmp;
 	int err = 0;
+	u32 bmap_idx;
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 	ASSERT(nx_trans->t_old_msb);
@@ -702,8 +703,10 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		vol_trans->t_old_cat_root.object.o_bh = NULL;
 	}
 
-	brelse(APFS_SM(sb)->sm_ip);
-	APFS_SM(sb)->sm_ip = NULL;
+	for (bmap_idx = 0; bmap_idx < APFS_SM(sb)->sm_ip_bmaps_count; ++bmap_idx) {
+		brelse(APFS_SM(sb)->sm_ip_bmaps[bmap_idx]);
+		APFS_SM(sb)->sm_ip_bmaps[bmap_idx] = NULL;
+	}
 	brelse(APFS_SM(sb)->sm_bh);
 	APFS_SM(sb)->sm_bh = NULL;
 	return 0;
@@ -884,6 +887,8 @@ void apfs_transaction_abort(struct super_block *sb)
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	struct apfs_bh_info *bhi, *tmp;
 	struct apfs_inode_info *ai, *ai_tmp;
+	struct apfs_spaceman *sm = NULL;
+	u32 bmap_idx;
 
 	if (sb->s_flags & SB_RDONLY) {
 		/* Transaction already aborted, do nothing */
@@ -947,10 +952,15 @@ void apfs_transaction_abort(struct super_block *sb)
 		vol_trans->t_old_cat_root.object.data = NULL;
 	}
 
-	brelse(APFS_SM(sb)->sm_ip);
-	APFS_SM(sb)->sm_ip = NULL;
-	brelse(APFS_SM(sb)->sm_bh);
-	APFS_SM(sb)->sm_bh = NULL;
+	sm = APFS_SM(sb);
+	if (sm) {
+		for (bmap_idx = 0; bmap_idx < sm->sm_ip_bmaps_count; ++bmap_idx) {
+			brelse(sm->sm_ip_bmaps[bmap_idx]);
+			sm->sm_ip_bmaps[bmap_idx] = NULL;
+		}
+		brelse(sm->sm_bh);
+		sm->sm_bh = NULL;
+	}
 
 	/*
 	 * It's not possible to undo in-memory changes from old operations in

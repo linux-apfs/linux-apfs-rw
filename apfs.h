@@ -122,7 +122,7 @@ static inline bool apfs_node_has_fixed_kv_size(struct apfs_node *node)
 struct apfs_spaceman {
 	struct apfs_spaceman_phys *sm_raw; /* On-disk spaceman structure */
 	struct buffer_head	  *sm_bh;  /* Buffer head for @sm_raw */
-	struct buffer_head	  *sm_ip;  /* Current internal pool */
+	struct apfs_nxsb_info	  *sm_nxi; /* Container superblock */
 
 	u32 sm_blocks_per_chunk;	/* Blocks covered by a bitmap block */
 	u32 sm_chunks_per_cib;		/* Chunk count in a chunk-info block */
@@ -138,6 +138,15 @@ struct apfs_spaceman {
 	 */
 	u64 sm_free_cache_base;
 	u64 sm_free_cache_blkcnt;
+
+	/* Shift to match an ip block with its bitmap in the array */
+	int sm_ip_bmaps_shift;
+	/* Mask to find an ip block's offset inside its ip bitmap */
+	u32 sm_ip_bmaps_mask;
+	/* Number of ip bitmaps */
+	u32 sm_ip_bmaps_count;
+	/* List of ip bitmaps, in order */
+	struct buffer_head *sm_ip_bmaps[];
 };
 
 #define TRANSACTION_MAIN_QUEUE_MAX	4096
@@ -217,7 +226,7 @@ struct apfs_nxsb_info {
 	unsigned long nx_blocksize;
 	unsigned char nx_blocksize_bits;
 
-	struct apfs_spaceman nx_spaceman;
+	struct apfs_spaceman *nx_spaceman;
 	struct apfs_nx_transaction nx_transaction;
 
 	/* For now, a single semaphore for every operation */
@@ -340,7 +349,7 @@ static inline struct apfs_nxsb_info *APFS_NXI(struct super_block *sb)
  */
 static inline struct apfs_spaceman *APFS_SM(struct super_block *sb)
 {
-	return &APFS_NXI(sb)->nx_spaceman;
+	return APFS_NXI(sb)->nx_spaceman;
 }
 
 static inline bool apfs_is_case_insensitive(struct super_block *sb)
