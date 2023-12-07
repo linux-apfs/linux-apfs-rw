@@ -1483,17 +1483,25 @@ static int apfs_test_super(struct super_block *sb, void *data)
 }
 
 /**
- * apfs_set_super - Assign a fake bdev and an info struct to a superblock
+ * apfs_set_super - Assign the device and an info struct to a superblock
  * @sb:		superblock structure to set
  * @data:	superblock info for the volume being mounted
  */
 static int apfs_set_super(struct super_block *sb, void *data)
 {
-	int err = set_anon_super(sb, data);
+	struct apfs_sb_info *sbi = data;
+	struct apfs_nxsb_info *nxi = sbi->s_nxi;
 
-	if (!err)
-		sb->s_fs_info = data;
-	return err;
+	/*
+	 * This device number is output in the mountinfo file, and it seems
+	 * that udisks uses it to decide if a device is mounted, so it must be
+	 * set. It will be shared with other volumes, but I don't think that's
+	 * a problem.
+	 */
+	sb->s_dev = nxi->nx_bdev->bd_dev;
+
+	sb->s_fs_info = sbi;
+	return 0;
 }
 
 /*
@@ -1659,7 +1667,7 @@ static struct file_system_type apfs_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "apfs",
 	.mount		= apfs_mount,
-	.kill_sb	= kill_anon_super,
+	.kill_sb	= generic_shutdown_super,
 	.fs_flags	= FS_REQUIRES_DEV,
 };
 MODULE_ALIAS_FS("apfs");
