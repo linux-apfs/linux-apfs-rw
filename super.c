@@ -964,6 +964,8 @@ static int apfs_show_options(struct seq_file *seq, struct dentry *root)
 
 	if (sbi->s_vol_nr != 0)
 		seq_printf(seq, ",vol=%u", sbi->s_vol_nr);
+	if (sbi->s_snap_name)
+		seq_printf(seq, ",snap=%s", sbi->s_snap_name);
 	if (uid_valid(sbi->s_uid))
 		seq_printf(seq, ",uid=%u", from_kuid(&init_user_ns,
 						     sbi->s_uid));
