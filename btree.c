@@ -162,17 +162,18 @@ static inline bool apfs_xid_in_snapshot(struct apfs_omap *omap, u64 xid)
 }
 
 /**
- * apfs_omap_lookup_block - Find the block number of a b-tree node from its id
+ * apfs_omap_lookup_block_with_xid - Find bno of a virtual object from oid/xid
  * @sb:		filesystem superblock
  * @omap:	object map to be searched
  * @id:		id of the node
+ * @xid:	transaction id
  * @block:	on return, the found block number
  * @write:	get write access to the object?
  *
- * Returns 0 on success or a negative error code in case of failure.
+ * Searches @omap for the most recent matching object with a transaction id
+ * below @xid. Returns 0 on success or a negative error code in case of failure.
  */
-int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap,
-			   u64 id, u64 *block, bool write)
+static int apfs_omap_lookup_block_with_xid(struct super_block *sb, struct apfs_omap *omap, u64 id, u64 xid, u64 *block, bool write)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_query *query;
@@ -189,14 +190,14 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap,
 	if (!query)
 		return -ENOMEM;
 
-	apfs_init_omap_key(id, apfs_mounted_xid(sb), &key);
+	apfs_init_omap_key(id, xid, &key);
 	query->key = &key;
 	query->flags |= APFS_QUERY_OMAP;
 
 	ret = apfs_btree_query(sb, &query);
 	if (ret) {
 		if (ret != -ENODATA)
-			apfs_err(sb, "query failed for oid 0x%llx, xid 0x%llx", id, apfs_mounted_xid(sb));
+			apfs_err(sb, "query failed for oid 0x%llx, xid 0x%llx", id, xid);
 		goto fail;
 	}
 
@@ -218,7 +219,7 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap,
 
 		new_bh = apfs_read_object_block(sb, *block, write, preserve);
 		if (IS_ERR(new_bh)) {
-			apfs_err(sb, "CoW failed for oid 0x%llx, xid 0x%llx", id, apfs_mounted_xid(sb));
+			apfs_err(sb, "CoW failed for oid 0x%llx, xid 0x%llx", id, xid);
 			ret = PTR_ERR(new_bh);
 			goto fail;
 		}
@@ -234,7 +235,7 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap,
 		else
 			ret = apfs_btree_replace(query, &key, sizeof(key), &val, sizeof(val));
 		if (ret)
-			apfs_err(sb, "CoW omap update failed (oid 0x%llx, xid 0x%llx)", id, apfs_mounted_xid(sb));
+			apfs_err(sb, "CoW omap update failed (oid 0x%llx, xid 0x%llx)", id, xid);
 
 		*block = new_bh->b_blocknr;
 		brelse(new_bh);
@@ -245,6 +246,36 @@ int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap,
 fail:
 	apfs_free_query(query);
 	return ret;
+}
+
+/**
+ * apfs_omap_lookup_block - Find the block number of a b-tree node from its id
+ * @sb:		filesystem superblock
+ * @omap:	object map to be searched
+ * @id:		id of the node
+ * @block:	on return, the found block number
+ * @write:	get write access to the object?
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+int apfs_omap_lookup_block(struct super_block *sb, struct apfs_omap *omap, u64 id, u64 *block, bool write)
+{
+	return apfs_omap_lookup_block_with_xid(sb, omap, id, apfs_mounted_xid(sb), block, write);
+}
+
+/**
+ * apfs_omap_lookup_newest_block - Find newest bno for a virtual object's oid
+ * @sb:		filesystem superblock
+ * @omap:	object map to be searched
+ * @id:		id of the object
+ * @block:	on return, the found block number
+ * @write:	get write access to the object?
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+int apfs_omap_lookup_newest_block(struct super_block *sb, struct apfs_omap *omap, u64 id, u64 *block, bool write)
+{
+	return apfs_omap_lookup_block_with_xid(sb, omap, id, -1, block, write);
 }
 
 /**

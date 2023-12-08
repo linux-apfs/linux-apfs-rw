@@ -884,10 +884,11 @@ static int apfs_count_used_blocks(struct super_block *sb, u64 *count)
 		vol_id = le64_to_cpu(msb_raw->nx_fs_oid[i]);
 		if (vol_id == 0) /* All volumes have been checked */
 			break;
-		err = apfs_omap_lookup_block(sb, omap, vol_id, &vol_bno,
-					     false /* write */);
-		if (err)
+		err = apfs_omap_lookup_newest_block(sb, omap, vol_id, &vol_bno, false /* write */);
+		if (err) {
+			apfs_err(sb, "omap lookup failed for vol id 0x%llx", vol_id);
 			break;
+		}
 
 		bh = apfs_sb_bread(sb, vol_bno);
 		if (!bh) {
