@@ -290,6 +290,8 @@ struct apfs_sb_info {
 	struct list_head list;		/* List of mounted volumes in container */
 	struct apfs_superblock *s_vsb_raw; /* On-disk volume sb */
 
+	dev_t s_anon_dev; /* Anonymous device for this volume-snapshot */
+
 	char *s_snap_name; /* Label for the mounted snapshot */
 	u64 s_snap_xid; /* Transaction id for mounted snapshot */
 
