@@ -1491,12 +1491,21 @@ static int apfs_set_super(struct super_block *sb, void *data)
 {
 	struct apfs_sb_info *sbi = data;
 	struct apfs_nxsb_info *nxi = sbi->s_nxi;
+	int err;
 
 	/*
-	 * This device number is output in the mountinfo file, and it seems
-	 * that udisks uses it to decide if a device is mounted, so it must be
-	 * set. It will be shared with other volumes, but I don't think that's
-	 * a problem.
+	 * This fake device number will be unique to this volume-snapshot
+	 * combination. It gets reported by stat(), so that userland tools can
+	 * use it to tell different mountpoints apart.
+	 */
+	err = get_anon_bdev(&sbi->s_anon_dev);
+	if (err)
+		return err;
+
+	/*
+	 * This is the actual device number, shared by all volumes and
+	 * snapshots. It gets reported by the mountinfo file, and it seems that
+	 * udisks uses it to decide if a device is mounted, so it must be set.
 	 */
 	sb->s_dev = nxi->nx_bdev->bd_dev;
 
@@ -1663,11 +1672,19 @@ out_unlock:
 	return ERR_PTR(error);
 }
 
+static void apfs_kill_sb(struct super_block *sb)
+{
+	dev_t anon_dev = APFS_SB(sb)->s_anon_dev;
+
+	generic_shutdown_super(sb);
+	free_anon_bdev(anon_dev);
+}
+
 static struct file_system_type apfs_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "apfs",
 	.mount		= apfs_mount,
-	.kill_sb	= generic_shutdown_super,
+	.kill_sb	= apfs_kill_sb,
 	.fs_flags	= FS_REQUIRES_DEV,
 };
 MODULE_ALIAS_FS("apfs");

@@ -1044,6 +1044,7 @@ int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 	struct inode *inode = d_inode(dentry);
 
 	generic_fillattr(inode, stat);
+	stat->dev = APFS_SB(inode->i_sb)->s_anon_dev;
 	stat->ino = apfs_ino(inode);
 	return 0;
 }
@@ -1093,6 +1094,7 @@ int apfs_getattr(struct mnt_idmap *idmap,
 	generic_fillattr(idmap, request_mask, inode, stat);
 #endif
 
+	stat->dev = APFS_SB(inode->i_sb)->s_anon_dev;
 	stat->ino = apfs_ino(inode);
 	return 0;
 }
