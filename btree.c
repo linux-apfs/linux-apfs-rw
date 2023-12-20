@@ -177,7 +177,6 @@ static int apfs_omap_lookup_block_with_xid(struct super_block *sb, struct apfs_o
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_query *query;
-	struct apfs_key key;
 	struct apfs_omap_map map = {0};
 	int ret = 0;
 
@@ -189,9 +188,7 @@ static int apfs_omap_lookup_block_with_xid(struct super_block *sb, struct apfs_o
 	query = apfs_alloc_query(omap->omap_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-
-	apfs_init_omap_key(id, xid, &key);
-	query->key = &key;
+	apfs_init_omap_key(id, xid, &query->key);
 	query->flags |= APFS_QUERY_OMAP;
 
 	ret = apfs_btree_query(sb, &query);
@@ -292,7 +289,6 @@ int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_omap *omap = sbi->s_omap;
 	struct apfs_query *query;
-	struct apfs_key key;
 	struct apfs_omap_key raw_key;
 	struct apfs_omap_val raw_val;
 	int ret;
@@ -300,9 +296,7 @@ int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno)
 	query = apfs_alloc_query(omap->omap_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-
-	apfs_init_omap_key(oid, nxi->nx_xid, &key);
-	query->key = &key;
+	apfs_init_omap_key(oid, nxi->nx_xid, &query->key);
 	query->flags |= APFS_QUERY_OMAP;
 
 	ret = apfs_btree_query(sb, &query);
@@ -344,15 +338,12 @@ int apfs_delete_omap_rec(struct super_block *sb, u64 oid)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_omap *omap = sbi->s_omap;
 	struct apfs_query *query;
-	struct apfs_key key;
 	int ret;
 
 	query = apfs_alloc_query(omap->omap_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-
-	apfs_init_omap_key(oid, nxi->nx_xid, &key);
-	query->key = &key;
+	apfs_init_omap_key(oid, nxi->nx_xid, &query->key);
 	query->flags |= APFS_QUERY_OMAP;
 
 	ret = apfs_btree_query(sb, &query);
@@ -393,19 +384,21 @@ struct apfs_query *apfs_alloc_query(struct apfs_node *node,
 {
 	struct apfs_query *query;
 
-	query = kmalloc(sizeof(*query), GFP_KERNEL);
+	query = kzalloc(sizeof(*query), GFP_KERNEL);
 	if (!query)
 		return NULL;
 
 	/* To be released by free_query. */
 	query->node = node;
-	query->key = parent ? parent->key : NULL;
-	query->flags = parent ?
-		parent->flags & ~(APFS_QUERY_DONE | APFS_QUERY_NEXT) : 0;
-	query->parent = parent;
 	/* Start the search with the last record and go backwards */
 	query->index = node->records;
-	query->depth = parent ? parent->depth + 1 : 0;
+
+	if (parent) {
+		query->key = parent->key;
+		query->flags = parent->flags & ~(APFS_QUERY_DONE | APFS_QUERY_NEXT);
+		query->parent = parent;
+		query->depth = parent->depth + 1;
+	}
 
 	return query;
 }
@@ -723,7 +716,7 @@ static int apfs_query_refresh(struct apfs_query *old_query)
 	new_query = apfs_alloc_query(APFS_SB(sb)->s_cat_root, NULL /* parent */);
 	if (!new_query)
 		return -ENOMEM;
-	new_query->key = &new_key;
+	new_query->key = new_key;
 	new_query->flags = APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	err = apfs_btree_query(sb, &new_query);

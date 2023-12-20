@@ -71,7 +71,6 @@ static int apfs_create_snap_metadata_rec(struct inode *mntpoint, struct apfs_nod
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
 	struct apfs_query *query = NULL;
-	struct apfs_key key = {0};
 	struct apfs_snap_metadata_key raw_key;
 	struct apfs_snap_metadata_val *raw_val = NULL;
 	int val_len;
@@ -79,14 +78,12 @@ static int apfs_create_snap_metadata_rec(struct inode *mntpoint, struct apfs_nod
 	u64 xid = APFS_NXI(sb)->nx_xid;
 	int err;
 
-	apfs_init_snap_metadata_key(xid, &key);
-
 	query = apfs_alloc_query(snap_root, NULL /* parent */);
 	if (!query) {
 		err = -ENOMEM;
 		goto fail;
 	}
-	query->key = &key;
+	apfs_init_snap_metadata_key(xid, &query->key);
 	query->flags |= APFS_QUERY_SNAP_META | APFS_QUERY_EXACT;
 
 	err = apfs_btree_query(sb, &query);
@@ -137,20 +134,17 @@ static int apfs_create_snap_name_rec(struct apfs_node *snap_root, const char *na
 {
 	struct super_block *sb = snap_root->object.sb;
 	struct apfs_query *query = NULL;
-	struct apfs_key key = {0};
 	struct apfs_snap_name_key *raw_key = NULL;
 	struct apfs_snap_name_val raw_val;
 	int key_len;
 	int err;
-
-	apfs_init_snap_name_key(name, &key);
 
 	query = apfs_alloc_query(snap_root, NULL /* parent */);
 	if (!query) {
 		err = -ENOMEM;
 		goto fail;
 	}
-	query->key = &key;
+	apfs_init_snap_name_key(name, &query->key);
 	query->flags |= APFS_QUERY_SNAP_META | APFS_QUERY_EXACT;
 
 	err = apfs_btree_query(sb, &query);
@@ -246,7 +240,6 @@ static int apfs_update_omap_snap_tree(struct super_block *sb, __le64 *oid_p)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_node *root = NULL;
 	u64 oid = le64_to_cpup(oid_p);
-	struct apfs_key key = {0};
 	struct apfs_query *query = NULL;
 	__le64 raw_key;
 	struct apfs_omap_snapshot raw_val = {0};
@@ -268,14 +261,12 @@ static int apfs_update_omap_snap_tree(struct super_block *sb, __le64 *oid_p)
 	}
 	oid = 0;
 
-	apfs_init_omap_snap_key(nxi->nx_xid, &key);
-
 	query = apfs_alloc_query(root, NULL /* parent */);
 	if (!query) {
 		err = -ENOMEM;
 		goto fail;
 	}
-	query->key = &key;
+	apfs_init_omap_snap_key(nxi->nx_xid, &query->key);
 	query->flags = APFS_QUERY_OMAP_SNAP | APFS_QUERY_EXACT;
 
 	err = apfs_btree_query(sb, &query);
@@ -499,15 +490,12 @@ static int apfs_snapshot_name_to_xid(struct apfs_node *snap_root, const char *na
 {
 	struct super_block *sb = snap_root->object.sb;
 	struct apfs_query *query = NULL;
-	struct apfs_key key = {0};
 	int err;
-
-	apfs_init_snap_name_key(name, &key);
 
 	query = apfs_alloc_query(snap_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_snap_name_key(name, &query->key);
 	query->flags |= APFS_QUERY_SNAP_META | APFS_QUERY_EXACT;
 
 	err = apfs_btree_query(sb, &query);
@@ -545,15 +533,12 @@ static int apfs_snapshot_xid_to_sblock(struct apfs_node *snap_root, u64 xid, u64
 {
 	struct super_block *sb = snap_root->object.sb;
 	struct apfs_query *query = NULL;
-	struct apfs_key key = {0};
 	int err;
-
-	apfs_init_snap_metadata_key(xid, &key);
 
 	query = apfs_alloc_query(snap_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_snap_metadata_key(xid, &query->key);
 	query->flags |= APFS_QUERY_SNAP_META | APFS_QUERY_EXACT;
 
 	err = apfs_btree_query(sb, &query);

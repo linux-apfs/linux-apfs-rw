@@ -99,18 +99,15 @@ static struct apfs_query *apfs_dentry_lookup(struct inode *dir,
 {
 	struct super_block *sb = dir->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	u64 cnid = apfs_ino(dir);
 	bool hashed = apfs_is_normalization_insensitive(sb);
 	int err;
 
-	apfs_init_drec_key(sb, cnid, child->name, child->len, &key);
-
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return ERR_PTR(-ENOMEM);
-	query->key = &key;
+	apfs_init_drec_key(sb, cnid, child->name, child->len, &query->key);
 
 	/*
 	 * Distinct filenames in the same directory may (rarely) share the same
@@ -173,7 +170,6 @@ static int apfs_readdir(struct file *file, struct dir_context *ctx)
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	u64 cnid = apfs_ino(inode);
 	loff_t pos;
@@ -193,8 +189,7 @@ static int apfs_readdir(struct file *file, struct dir_context *ctx)
 	}
 
 	/* We want all the children for the cnid, regardless of the name */
-	apfs_init_drec_key(sb, cnid, NULL /* name */, 0 /* name_len */, &key);
-	query->key = &key;
+	apfs_init_drec_key(sb, cnid, NULL /* name */, 0 /* name_len */, &query->key);
 	query->flags = APFS_QUERY_CAT | APFS_QUERY_MULTIPLE | APFS_QUERY_EXACT;
 
 	pos = ctx->pos - 2;
@@ -361,7 +356,6 @@ static int apfs_create_dentry_rec(struct inode *inode, struct qstr *qname,
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	void *raw_key = NULL;
 	struct apfs_drec_val *raw_val = NULL;
@@ -369,21 +363,20 @@ static int apfs_create_dentry_rec(struct inode *inode, struct qstr *qname,
 	bool hashed = apfs_is_normalization_insensitive(sb);
 	int ret;
 
-	apfs_init_drec_key(sb, parent_id, qname->name, qname->len, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_drec_key(sb, parent_id, qname->name, qname->len, &query->key);
 	query->flags |= APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
 	if (ret && ret != -ENODATA) {
-		apfs_err(sb, "query failed in dir 0x%llx (hash 0x%llx)", parent_id, key.number);
+		apfs_err(sb, "query failed in dir 0x%llx (hash 0x%llx)", parent_id, query->key.number);
 		goto fail;
 	}
 
 	if (hashed)
-		key_len = apfs_build_dentry_hashed_key(qname, key.number, parent_id,
+		key_len = apfs_build_dentry_hashed_key(qname, query->key.number, parent_id,
 						       (struct apfs_drec_hashed_key **)&raw_key);
 	else
 		key_len = apfs_build_dentry_unhashed_key(qname, parent_id,
@@ -401,7 +394,7 @@ static int apfs_create_dentry_rec(struct inode *inode, struct qstr *qname,
 	/* TODO: deal with hash collisions */
 	ret = apfs_btree_insert(query, raw_key, key_len, raw_val, val_len);
 	if (ret)
-		apfs_err(sb, "insertion failed in dir 0x%llx (hash 0x%llx)", parent_id, key.number);
+		apfs_err(sb, "insertion failed in dir 0x%llx (hash 0x%llx)", parent_id, query->key.number);
 
 fail:
 	kfree(raw_val);
@@ -453,18 +446,16 @@ static int apfs_create_sibling_link_rec(struct dentry *dentry,
 {
 	struct super_block *sb = dentry->d_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query = NULL;
 	struct apfs_sibling_link_key raw_key;
 	struct apfs_sibling_val *raw_val;
 	int val_len;
 	int ret;
 
-	apfs_init_sibling_link_key(apfs_ino(inode), sibling_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_sibling_link_key(apfs_ino(inode), sibling_id, &query->key);
 	query->flags |= APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -503,17 +494,15 @@ static int apfs_create_sibling_map_rec(struct dentry *dentry,
 {
 	struct super_block *sb = dentry->d_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query = NULL;
 	struct apfs_sibling_map_key raw_key;
 	struct apfs_sibling_map_val raw_val;
 	int ret;
 
-	apfs_init_sibling_map_key(sibling_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_sibling_map_key(sibling_id, &query->key);
 	query->flags |= APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -923,17 +912,15 @@ static int apfs_delete_sibling_link_rec(struct dentry *dentry, u64 sibling_id)
 	struct super_block *sb = dentry->d_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct inode *inode = d_inode(dentry);
-	struct apfs_key key;
 	struct apfs_query *query = NULL;
 	int ret;
 
 	ASSERT(sibling_id);
 
-	apfs_init_sibling_link_key(apfs_ino(inode), sibling_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_sibling_link_key(apfs_ino(inode), sibling_id, &query->key);
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -966,17 +953,15 @@ static int apfs_delete_sibling_map_rec(struct dentry *dentry, u64 sibling_id)
 {
 	struct super_block *sb = dentry->d_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query = NULL;
 	int ret;
 
 	ASSERT(sibling_id);
 
-	apfs_init_sibling_map_key(sibling_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_sibling_map_key(sibling_id, &query->key);
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -1119,18 +1104,14 @@ static int apfs_find_primary_link(struct inode *inode, char **name, u64 *parent)
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	int err;
 
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-
-	apfs_init_sibling_link_key(apfs_ino(inode), 0 /* sibling_id */, &key);
-	query->key = &key;
-	query->flags |= APFS_QUERY_CAT | APFS_QUERY_ANY_NUMBER |
-			APFS_QUERY_EXACT;
+	apfs_init_sibling_link_key(apfs_ino(inode), 0 /* sibling_id */, &query->key);
+	query->flags |= APFS_QUERY_CAT | APFS_QUERY_ANY_NUMBER | APFS_QUERY_EXACT;
 
 	/* The primary link is the one with the lowest sibling id */
 	*name = NULL;

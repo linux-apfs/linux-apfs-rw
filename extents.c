@@ -139,7 +139,7 @@ static int apfs_extent_read(struct apfs_dstream_info *dstream, sector_t dsblock,
 		ret = -ENOMEM;
 		goto done;
 	}
-	query->key = &key;
+	query->key = key;
 	query->flags = apfs_is_sealed(sb) ? APFS_QUERY_FEXT : APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -413,7 +413,6 @@ static int apfs_update_tail_extent(struct apfs_dstream_info *dstream, const stru
 {
 	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_file_extent_key raw_key;
 	struct apfs_file_extent_val raw_val;
@@ -431,13 +430,11 @@ static int apfs_update_tail_extent(struct apfs_dstream_info *dstream, const stru
 		new_crypto = 0;
 	raw_val.crypto_id = cpu_to_le64(new_crypto);
 
-	/* We want the last extent record */
-	apfs_init_file_extent_key(extent_id, -1, &key);
-
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	/* We want the last extent record */
+	apfs_init_file_extent_key(extent_id, -1, &query->key);
 	query->flags = APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -614,7 +611,7 @@ search_and_insert:
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	query->key = key;
 	query->flags = APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -801,7 +798,6 @@ static int apfs_insert_phys_extent(struct apfs_dstream_info *dstream, const stru
 	struct super_block *sb = dstream->ds_sb;
 	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
 	struct apfs_node *extref_root;
-	struct apfs_key key;
 	struct apfs_query *query = NULL;
 	struct apfs_phys_extent pext;
 	u64 blkcnt = extent->len >> sb->s_blocksize_bits;
@@ -830,8 +826,7 @@ static int apfs_insert_phys_extent(struct apfs_dstream_info *dstream, const stru
 	 * one.
 	 */
 	last_bno = extent->phys_block_num + blkcnt - 1;
-	apfs_init_extent_key(last_bno, &key);
-	query->key = &key;
+	apfs_init_extent_key(last_bno, &query->key);
 	query->flags = APFS_QUERY_EXTENTREF;
 
 	ret = apfs_btree_query(sb, &query);
@@ -1153,7 +1148,6 @@ static int apfs_create_hole(struct apfs_dstream_info *dstream, u64 start, u64 en
 {
 	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_file_extent_key raw_key;
 	struct apfs_file_extent_val raw_val;
@@ -1173,11 +1167,10 @@ static int apfs_create_hole(struct apfs_dstream_info *dstream, u64 start, u64 en
 	raw_val.phys_block_num = cpu_to_le64(0); /* It's a hole... */
 	raw_val.crypto_id = cpu_to_le64(apfs_vol_is_encrypted(sb) ? extent_id : 0);
 
-	apfs_init_file_extent_key(extent_id, start, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_file_extent_key(extent_id, start, &query->key);
 	query->flags = APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -1260,7 +1253,6 @@ static int apfs_range_in_snap(struct super_block *sb, u64 bno, u64 blkcnt, bool 
 {
 	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
 	struct apfs_node *extref_root = NULL;
-	struct apfs_key key;
 	struct apfs_query *query = NULL;
 	struct apfs_phys_extent pext = {0};
 	int ret;
@@ -1287,8 +1279,7 @@ static int apfs_range_in_snap(struct super_block *sb, u64 bno, u64 blkcnt, bool 
 		goto out;
 	}
 
-	apfs_init_extent_key(bno, &key);
-	query->key = &key;
+	apfs_init_extent_key(bno, &query->key);
 	query->flags = APFS_QUERY_EXTENTREF;
 
 	ret = apfs_btree_query(sb, &query);
@@ -1500,18 +1491,15 @@ static int apfs_shrink_dstream_last_extent(struct apfs_dstream_info *dstream, lo
 {
 	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_file_extent tail;
 	u64 extent_id = dstream->ds_id;
 	int ret = 0;
 
-	apfs_init_file_extent_key(extent_id, -1, &key);
-
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_file_extent_key(extent_id, -1, &query->key);
 	query->flags = APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -1760,18 +1748,15 @@ fail:
 static int apfs_extent_create_record(struct super_block *sb, u64 dstream_id, struct apfs_file_extent *extent)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query = NULL;
 	struct apfs_file_extent_val raw_val;
 	struct apfs_file_extent_key raw_key;
 	int ret = 0;
 
-	apfs_init_file_extent_key(dstream_id, extent->logical_addr, &key);
-
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_file_extent_key(dstream_id, extent->logical_addr, &query->key);
 	query->flags = APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -1835,7 +1820,7 @@ restart:
 		ret = -ENOMEM;
 		goto out;
 	}
-	query->key = &key;
+	query->key = key;
 	query->flags = APFS_QUERY_EXTENTREF;
 
 	ret = apfs_btree_query(sb, &query);
@@ -1975,7 +1960,7 @@ restart:
 		ret = -ENOMEM;
 		goto out;
 	}
-	query->key = &key;
+	query->key = key;
 	query->flags = APFS_QUERY_EXTENTREF;
 
 	ret = apfs_btree_query(sb, &query);

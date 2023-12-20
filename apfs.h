@@ -623,7 +623,7 @@ static inline u64 apfs_cat_cnid(struct apfs_key_header *key)
  */
 struct apfs_query {
 	struct apfs_node *node;		/* Node being searched */
-	struct apfs_key *key;		/* What the query is looking for */
+	struct apfs_key key;		/* What the query is looking for */
 
 	struct apfs_query *parent;	/* Query for parent node */
 	unsigned int flags;

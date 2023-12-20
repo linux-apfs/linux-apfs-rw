@@ -64,17 +64,15 @@ static int apfs_create_dstream_rec(struct apfs_dstream_info *dstream)
 {
 	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_dstream_id_key raw_key;
 	struct apfs_dstream_id_val raw_val;
 	int ret;
 
-	apfs_init_dstream_id_key(dstream->ds_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_dstream_id_key(dstream->ds_id, &query->key);
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -190,7 +188,6 @@ int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta)
 {
 	struct super_block *sb = dstream->ds_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_dstream_id_val raw_val;
 	void *raw = NULL;
@@ -199,11 +196,10 @@ int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta)
 
 	ASSERT(APFS_I(dstream->ds_inode)->i_has_dstream);
 
-	apfs_init_dstream_id_key(dstream->ds_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_dstream_id_key(dstream->ds_id, &query->key);
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -268,7 +264,6 @@ static int apfs_create_crypto_rec(struct inode *inode)
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
-	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_crypto_state_key raw_key;
 	int ret;
@@ -276,11 +271,10 @@ static int apfs_create_crypto_rec(struct inode *inode)
 	if (inode->i_size || inode->i_blocks) /* Already has a dstream */
 		return 0;
 
-	apfs_init_crypto_state_key(dstream->ds_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_crypto_state_key(dstream->ds_id, &query->key);
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -343,7 +337,6 @@ static unsigned int apfs_dflt_key_class(struct super_block *sb)
 int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_crypto_state_val *raw_val;
 	char *raw;
@@ -352,11 +345,10 @@ int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta)
 	if (!crypto_id)
 		return 0;
 
-	apfs_init_crypto_state_key(crypto_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_crypto_state_key(crypto_id, &query->key);
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -396,7 +388,6 @@ int APFS_CRYPTO_ADJ_REFCNT_MAXOPS(void)
 static int apfs_crypto_set_key(struct super_block *sb, u64 crypto_id, struct apfs_crypto_state_val *new_val)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_crypto_state_val *raw_val;
 	char *raw;
@@ -408,11 +399,10 @@ static int apfs_crypto_set_key(struct super_block *sb, u64 crypto_id, struct apf
 
 	pfk_len = le16_to_cpu(new_val->state.key_len);
 
-	apfs_init_crypto_state_key(crypto_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_crypto_state_key(crypto_id, &query->key);
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -446,7 +436,6 @@ static int apfs_crypto_get_key(struct super_block *sb, u64 crypto_id, struct apf
 			       unsigned int max_len)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_crypto_state_val *raw_val;
 	char *raw;
@@ -456,11 +445,10 @@ static int apfs_crypto_get_key(struct super_block *sb, u64 crypto_id, struct apf
 	if (!crypto_id)
 		return -ENOENT;
 
-	apfs_init_crypto_state_key(crypto_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_crypto_state_key(crypto_id, &query->key);
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -868,16 +856,13 @@ static struct apfs_query *apfs_inode_lookup(const struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	int ret;
-
-	apfs_init_inode_key(apfs_ino(inode), &key);
 
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return ERR_PTR(-ENOMEM);
-	query->key = &key;
+	apfs_init_inode_key(apfs_ino(inode), &query->key);
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -938,7 +923,6 @@ static int apfs_check_dstream_refcnt(struct inode *inode)
 	struct apfs_dstream_info *dstream = &ai->i_dstream;
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query = NULL;
 	struct apfs_dstream_id_val raw_val;
 	void *raw = NULL;
@@ -950,11 +934,10 @@ static int apfs_check_dstream_refcnt(struct inode *inode)
 		return 0;
 	}
 
-	apfs_init_dstream_id_key(dstream->ds_id, &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_dstream_id_key(dstream->ds_id, &query->key);
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_EXACT;
 
 	ret = apfs_btree_query(sb, &query);
@@ -1722,18 +1705,16 @@ int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 			  struct dentry *dentry)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_key key;
 	struct apfs_query *query;
 	struct apfs_inode_key raw_key;
 	struct apfs_inode_val *raw_val;
 	int val_len;
 	int ret;
 
-	apfs_init_inode_key(apfs_ino(inode), &key);
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	query->key = &key;
+	apfs_init_inode_key(apfs_ino(inode), &query->key);
 	query->flags |= APFS_QUERY_CAT;
 
 	ret = apfs_btree_query(sb, &query);

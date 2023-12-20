@@ -412,15 +412,13 @@ static int apfs_flush_fq_rec(struct apfs_node *root, u64 xid, u64 *len)
 	struct apfs_spaceman *sm = APFS_SM(sb);
 	struct apfs_query *query = NULL;
 	struct apfs_fq_rec fqrec = {0};
-	struct apfs_key key;
 	u64 bno;
 	int err;
 
 	query = apfs_alloc_query(root, NULL /* parent */);
 	if (!query)
 		return -ENOMEM;
-	apfs_init_free_queue_key(xid, 0 /* paddr */, &key);
-	query->key = &key;
+	apfs_init_free_queue_key(xid, 0 /* paddr */, &query->key);
 	query->flags |= APFS_QUERY_FREE_QUEUE | APFS_QUERY_ANY_NUMBER | APFS_QUERY_EXACT;
 
 	err = apfs_btree_query(sb, &query);
@@ -798,7 +796,6 @@ int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count)
 	struct apfs_query *query = NULL;
 	struct apfs_spaceman_free_queue_key raw_key;
 	__le64 raw_val;
-	struct apfs_key key;
 	u64 node_count;
 	u16 node_limit;
 	int err;
@@ -820,9 +817,7 @@ int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count)
 		err = -ENOMEM;
 		goto fail;
 	}
-
-	apfs_init_free_queue_key(nxi->nx_xid, bno, &key);
-	query->key = &key;
+	apfs_init_free_queue_key(nxi->nx_xid, bno, &query->key);
 	query->flags |= APFS_QUERY_FREE_QUEUE;
 
 	err = apfs_btree_query(sb, &query);
