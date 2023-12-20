@@ -633,8 +633,10 @@ static int apfs_node_locate_data(struct apfs_node *node, int index, int *off)
 		entry = (struct apfs_kvoff *)raw->btn_data + index;
 		if (node->tree_type == APFS_OBJECT_TYPE_SPACEMAN_FREE_QUEUE) {
 			/* A free-space queue record may have no value */
-			if (le16_to_cpu(entry->v) == APFS_BTOFF_INVALID)
+			if (le16_to_cpu(entry->v) == APFS_BTOFF_INVALID) {
+				*off = 0;
 				return 0;
+			}
 			len = 8;
 		} else {
 			/* This is an omap or omap snapshots node */
@@ -1790,6 +1792,8 @@ retry:
 	if (val) {
 		query->off = val_off;
 		memcpy((void *)node_raw + val_off, val, val_len);
+	} else {
+		query->off = 0;
 	}
 
 	query->index++; /* The query returned the record right before @key */
