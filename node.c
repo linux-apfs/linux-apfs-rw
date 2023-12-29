@@ -429,33 +429,21 @@ fail:
 
 /**
  * apfs_delete_node - Deletes a nonroot node from disk
- * @query: query pointing to the node
+ * @node: node to delete
+ * @type: tree type for the query that found the node
  *
  * Does nothing to the in-memory node structure.  Returns 0 on success, or a
  * negative error code in case of failure.
  */
-int apfs_delete_node(struct apfs_query *query)
+int apfs_delete_node(struct apfs_node *node, int type)
 {
-	struct super_block *sb = query->node->object.sb;
+	struct super_block *sb = node->object.sb;
 	struct apfs_superblock *vsb_raw;
-	struct apfs_node *node = query->node;
 	u64 oid = node->object.oid;
 	u64 bno = node->object.block_nr;
 	int err;
 
-	ASSERT(query->parent);
-
-	/*
-	 * For ephemeral nodes, it's important to do this before actually
-	 * deleting the node, because that involves moving blocks around.
-	 */
-	err = apfs_btree_remove(query->parent);
-	if (err) {
-		apfs_err(sb, "parent index removal failed for oid x%llx", oid);
-		return err;
-	}
-
-	switch (query->flags & APFS_QUERY_TREE_MASK) {
+	switch (type) {
 	case APFS_QUERY_CAT:
 		err = apfs_free_queue_insert(sb, bno, 1);
 		if (err) {
@@ -499,7 +487,7 @@ int apfs_delete_node(struct apfs_query *query)
 		}
 		return 0;
 	default:
-		apfs_alert(sb, "new query type must implement node deletion (%d)", query->flags & APFS_QUERY_TREE_MASK);
+		apfs_alert(sb, "new query type must implement node deletion (%d)", type);
 		return -EOPNOTSUPP;
 	}
 }
