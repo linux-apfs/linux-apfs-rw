@@ -999,7 +999,7 @@ extern __printf(5, 6) void apfs_msg(struct super_block *sb, const char *prefix, 
 extern struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid,
 					u32 storage, bool write);
 extern void apfs_update_node(struct apfs_node *node);
-extern int apfs_delete_node(struct apfs_query *query);
+extern int apfs_delete_node(struct apfs_node *node, int type);
 extern int apfs_node_query(struct super_block *sb, struct apfs_query *query);
 extern void apfs_node_query_first(struct apfs_query *query);
 extern int apfs_omap_map_from_query(struct apfs_query *query, struct apfs_omap_map *map);

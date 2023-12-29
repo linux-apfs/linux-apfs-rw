@@ -865,7 +865,17 @@ int apfs_btree_remove(struct apfs_query *query)
 	if (node->records == 1) {
 		if (query->parent) {
 			/* Just get rid of the node */
-			return apfs_delete_node(query);
+			err = apfs_btree_remove(query->parent);
+			if (err) {
+				apfs_err(sb, "parent index removal failed");
+				return err;
+			}
+			err = apfs_delete_node(node, query->flags & APFS_QUERY_TREE_MASK);
+			if (err) {
+				apfs_err(sb, "node deletion failed");
+				return err;
+			}
+			return 0;
 		}
 		/* All descendants are gone, root is the whole tree */
 		node_raw->btn_level = 0;
