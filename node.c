@@ -1550,6 +1550,38 @@ static int apfs_node_alloc_val(struct apfs_node *node, u16 len)
 }
 
 /**
+ * apfs_node_update_toc_entry - Update a table of contents entry in place
+ * @query: query pointing to the toc entry
+ *
+ * The toc entry gets updated with the length and offset for the key/value
+ * provided by @query. Don't call this function for nodes with fixed length
+ * key/values, those never need to update their toc entries.
+ */
+static void apfs_node_update_toc_entry(struct apfs_query *query)
+{
+	struct super_block *sb = NULL;
+	struct apfs_node *node = NULL;
+	struct apfs_btree_node_phys *node_raw = NULL;
+	struct apfs_kvloc *kvloc = NULL;
+	int value_end;
+
+	node = query->node;
+	ASSERT(!apfs_node_has_fixed_kv_size(node));
+	sb = node->object.sb;
+	node_raw = (void *)node->object.data;
+
+	value_end = sb->s_blocksize;
+	if (apfs_node_is_root(node))
+		value_end -= sizeof(struct apfs_btree_info);
+
+	kvloc = (struct apfs_kvloc *)node_raw->btn_data + query->index;
+	kvloc->v.off = cpu_to_le16(value_end - query->off);
+	kvloc->v.len = cpu_to_le16(query->len);
+	kvloc->k.off = cpu_to_le16(query->key_off - node->key);
+	kvloc->k.len = cpu_to_le16(query->key_len);
+}
+
+/**
  * apfs_node_replace - Replace a record in a node
  * @query:	exact query that found the record
  * @key:	new on-disk record key (NULL if unchanged)
@@ -1619,20 +1651,8 @@ int apfs_node_replace(struct apfs_query *query, void *key, int key_len, void *va
 	}
 
 	/* If the key or value were resized, update the table of contents */
-	if (!apfs_node_has_fixed_kv_size(node)) {
-		struct apfs_kvloc *kvloc;
-		int value_end;
-
-		value_end = sb->s_blocksize;
-		if (apfs_node_is_root(node))
-			value_end -= sizeof(struct apfs_btree_info);
-
-		kvloc = (struct apfs_kvloc *)node_raw->btn_data + query->index;
-		kvloc->v.off = cpu_to_le16(value_end - query->off);
-		kvloc->v.len = cpu_to_le16(query->len);
-		kvloc->k.off = cpu_to_le16(query->key_off - node->key);
-		kvloc->k.len = cpu_to_le16(query->key_len);
-	}
+	if (!apfs_node_has_fixed_kv_size(node))
+		apfs_node_update_toc_entry(query);
 
 	apfs_update_node(node);
 	return 0;
