@@ -1449,7 +1449,7 @@ static void apfs_node_free_list_unlink(struct apfs_nloc *prev, struct apfs_nloc 
  * @value:	true to allocate in the value area, false for the key area
  *
  * Returns the offset in the node on success, or a negative error code in case
- * of failure.
+ * of failure, which may be -ENOSPC if the node seems full.
  */
 static int apfs_node_free_list_alloc(struct apfs_node *node, u16 len, bool value)
 {
@@ -1515,7 +1515,7 @@ static int apfs_node_free_list_alloc(struct apfs_node *node, u16 len, bool value
  * @len:	wanted key length
  *
  * Returns the offset in the node on success, or a negative error code in case
- * of failure.
+ * of failure, which may be -ENOSPC if the node seems full.
  */
 static int apfs_node_alloc_key(struct apfs_node *node, u16 len)
 {
@@ -1535,7 +1535,7 @@ static int apfs_node_alloc_key(struct apfs_node *node, u16 len)
  * @len:	wanted value length
  *
  * Returns the offset in the node on success, or a negative error code in case
- * of failure.
+ * of failure, which may be -ENOSPC if the node seems full.
  */
 static int apfs_node_alloc_val(struct apfs_node *node, u16 len)
 {
