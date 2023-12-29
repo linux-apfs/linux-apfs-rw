@@ -1550,6 +1550,49 @@ static int apfs_node_alloc_val(struct apfs_node *node, u16 len)
 }
 
 /**
+ * apfs_node_total_room - Total free space in a node
+ * @node: the node
+ */
+static int apfs_node_total_room(struct apfs_node *node)
+{
+	return node->data - node->free + node->key_free_list_len + node->val_free_list_len;
+}
+
+/**
+ * apfs_defragment_node - Make all free space in a node contiguous
+ * @node: node to defragment
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_defragment_node(struct apfs_node *node)
+{
+	struct super_block *sb = node->object.sb;
+	struct apfs_btree_node_phys *node_raw = (void *)node->object.data;
+	struct apfs_node *tmp_node = NULL;
+	int record_count, err;
+
+	apfs_assert_in_transaction(sb, &node_raw->btn_o);
+
+	/* Put all records in a temporary in-memory node and deal them out */
+	err = apfs_node_temp_dup(node, &tmp_node);
+	if (err)
+		return err;
+	record_count = node->records;
+	node->records = 0;
+	node->key_free_list_len = 0;
+	node->val_free_list_len = 0;
+	err = apfs_copy_record_range(node, tmp_node, 0, record_count);
+	if (err) {
+		apfs_err(sb, "record copy failed");
+		goto fail;
+	}
+	apfs_update_node(node);
+fail:
+	apfs_node_free(tmp_node);
+	return err;
+}
+
+/**
  * apfs_node_update_toc_entry - Update a table of contents entry in place
  * @query: query pointing to the toc entry
  *
@@ -1598,12 +1641,18 @@ int apfs_node_replace(struct apfs_query *query, void *key, int key_len, void *va
 	struct apfs_node *node = query->node;
 	struct super_block *sb = node->object.sb;
 	struct apfs_btree_node_phys *node_raw = (void *)node->object.data;
-	int old_free = node->free, old_data = node->data;
-	int old_key_free_len = node->key_free_list_len;
-	int old_val_free_len = node->val_free_list_len;
+	int old_free, old_data;
+	int old_key_free_len, old_val_free_len;
 	int key_off = 0, val_off = 0, err = 0;
+	bool defragged = false;
 
 	apfs_assert_in_transaction(sb, &node_raw->btn_o);
+
+retry:
+	old_free = node->free;
+	old_data = node->data;
+	old_key_free_len = node->key_free_list_len;
+	old_val_free_len = node->val_free_list_len;
 
 	if (key) {
 		if (key_len <= query->key_len) {
@@ -1616,6 +1665,8 @@ int apfs_node_replace(struct apfs_query *query, void *key, int key_len, void *va
 			apfs_node_free_range(node, query->key_off, query->key_len);
 			key_off = apfs_node_alloc_key(node, key_len);
 			if (key_off < 0) {
+				if (key_off == -ENOSPC)
+					goto defrag;
 				err = key_off;
 				goto fail;
 			}
@@ -1633,6 +1684,8 @@ int apfs_node_replace(struct apfs_query *query, void *key, int key_len, void *va
 			apfs_node_free_range(node, query->off, query->len);
 			val_off = apfs_node_alloc_val(node, val_len);
 			if (val_off < 0) {
+				if (val_off == -ENOSPC)
+					goto defrag;
 				err = val_off;
 				goto fail;
 			}
@@ -1657,6 +1710,24 @@ int apfs_node_replace(struct apfs_query *query, void *key, int key_len, void *va
 	apfs_update_node(node);
 	return 0;
 
+defrag:
+	if (defragged) {
+		err = -ENOSPC;
+		goto fail;
+	}
+
+	err = apfs_defragment_node(node);
+	if (err) {
+		apfs_err(sb, "failed to defragment node");
+		return err;
+	}
+	defragged = true;
+
+	/* The record to replace probably moved around */
+	query->len = apfs_node_locate_data(query->node, query->index, &query->off);
+	query->key_len = apfs_node_locate_key(query->node, query->index, &query->key_off);
+	goto retry;
+
 fail:
 	/*
 	 * This isn't very tidy, but the transaction may continue on -ENOSPC,
@@ -1668,49 +1739,6 @@ fail:
 	node->data = old_data;
 	node->key_free_list_len = old_key_free_len;
 	node->val_free_list_len = old_val_free_len;
-	return err;
-}
-
-/**
- * apfs_node_total_room - Total free space in a node
- * @node: the node
- */
-static int apfs_node_total_room(struct apfs_node *node)
-{
-	return node->data - node->free + node->key_free_list_len + node->val_free_list_len;
-}
-
-/**
- * apfs_defragment_node - Make all free space in a node contiguous
- * @node: node to defragment
- *
- * Returns 0 on success or a negative error code in case of failure.
- */
-static int apfs_defragment_node(struct apfs_node *node)
-{
-	struct super_block *sb = node->object.sb;
-	struct apfs_btree_node_phys *node_raw = (void *)node->object.data;
-	struct apfs_node *tmp_node = NULL;
-	int record_count, err;
-
-	apfs_assert_in_transaction(sb, &node_raw->btn_o);
-
-	/* Put all records in a temporary in-memory node and deal them out */
-	err = apfs_node_temp_dup(node, &tmp_node);
-	if (err)
-		return err;
-	record_count = node->records;
-	node->records = 0;
-	node->key_free_list_len = 0;
-	node->val_free_list_len = 0;
-	err = apfs_copy_record_range(node, tmp_node, 0, record_count);
-	if (err) {
-		apfs_err(sb, "record copy failed");
-		goto fail;
-	}
-	apfs_update_node(node);
-fail:
-	apfs_node_free(tmp_node);
 	return err;
 }
 
