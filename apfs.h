@@ -831,6 +831,7 @@ do {									\
 } while (0)
 
 /* btree.c */
+extern struct apfs_node *apfs_query_root(const struct apfs_query *query);
 extern struct apfs_query *apfs_alloc_query(struct apfs_node *node,
 					   struct apfs_query *parent);
 extern void apfs_free_query(struct apfs_query *query);

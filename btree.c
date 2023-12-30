@@ -7,6 +7,14 @@
 #include <linux/slab.h>
 #include "apfs.h"
 
+struct apfs_node *apfs_query_root(const struct apfs_query *query)
+{
+	while (query->parent)
+		query = query->parent;
+	ASSERT(apfs_node_is_root(query->node));
+	return query->node;
+}
+
 static u64 apfs_catalog_base_oid(struct apfs_query *query)
 {
 	struct apfs_query *root_query = NULL;
@@ -628,9 +636,7 @@ static void apfs_btree_change_rec_count(struct apfs_query *query, int change,
 		ASSERT(!key_len && !val_len);
 	ASSERT(apfs_node_is_leaf(query->node));
 
-	while (query->parent)
-		query = query->parent;
-	root = query->node;
+	root = apfs_query_root(query);
 	ASSERT(apfs_node_is_root(root));
 
 	sb = root->object.sb;
@@ -663,9 +669,7 @@ void apfs_btree_change_node_count(struct apfs_query *query, int change)
 
 	ASSERT(!apfs_node_is_leaf(query->node));
 
-	while (query->parent)
-		query = query->parent;
-	root = query->node;
+	root = apfs_query_root(query);
 	ASSERT(apfs_node_is_root(root));
 
 	sb = root->object.sb;
