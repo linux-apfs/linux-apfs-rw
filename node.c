@@ -1153,8 +1153,9 @@ fail:
  * @query:	query pointing to the previous record in the parent
  * @child:	the new child node to attach
  *
- * Returns 0 on success or a negative error code in case of failure; @query is
- * rendered invalid either way and must be freed by the caller.
+ * Returns 0 on success or a negative error code in case of failure (which may
+ * be -EAGAIN if a node split has happened and the caller must refresh and
+ * retry).
  */
 static int apfs_attach_child(struct apfs_query *query, struct apfs_node *child)
 {
@@ -1170,8 +1171,7 @@ static int apfs_attach_child(struct apfs_query *query, struct apfs_node *child)
 		return -EFSCORRUPTED;
 	}
 
-	return apfs_btree_insert(query, (void *)raw + key_off, key_len,
-				 &raw_oid, sizeof(raw_oid));
+	return __apfs_btree_insert(query, (void *)raw + key_off, key_len, &raw_oid, sizeof(raw_oid));
 }
 
 /**
@@ -1211,18 +1211,20 @@ static int apfs_node_temp_dup(const struct apfs_node *original, struct apfs_node
  * @query: query pointing to the node
  *
  * On success returns 0, and @query is left pointing to the same record on the
- * leaf; to simplify the implementation, @query->parent is set to NULL.  Returns
- * a negative error code in case of failure.
+ * tip; to simplify the implementation, @query->parent is set to NULL. Returns
+ * a negative error code in case of failure, which may be -EAGAIN if a node
+ * split has happened and the caller must refresh and retry.
  */
 int apfs_node_split(struct apfs_query *query)
 {
 	struct super_block *sb = query->node->object.sb;
-	struct apfs_node *old_node;
-	struct apfs_btree_node_phys *old_raw;
-	struct apfs_node *tmp_node = NULL;
+	struct apfs_node *old_node = NULL, *new_node = NULL, *tmp_node = NULL;
+	struct apfs_btree_node_phys *new_raw = NULL, *old_raw = NULL;
 	u32 storage = apfs_query_storage(query);
 	int record_count, new_rec_count, old_rec_count;
 	int err;
+
+	apfs_assert_query_is_valid(query);
 
 	if (apfs_node_is_root(query->node)) {
 		err = apfs_btree_inc_height(query);
@@ -1247,13 +1249,64 @@ int apfs_node_split(struct apfs_query *query)
 	if (err)
 		return err;
 
-	/*
-	 * The first half of the records go in the original node. If there's
-	 * only one record, just defragment the node and don't split anything.
-	 */
 	record_count = old_node->records;
+	if (record_count == 1) {
+		apfs_alert(sb, "splitting node with a single record");
+		err = -EFSCORRUPTED;
+		goto out;
+	}
 	new_rec_count = record_count / 2;
 	old_rec_count = record_count - new_rec_count;
+
+	/*
+	 * The second half of the records go into a new node. This is done
+	 * before the first half to avoid committing to any actual changes
+	 * until we know for sure that no ancestor splits are expected.
+	 */
+
+	new_node = apfs_create_node(sb, storage);
+	if (IS_ERR(new_node)) {
+		apfs_err(sb, "node creation failed");
+		err = PTR_ERR(new_node);
+		goto out;
+	}
+	new_node->tree_type = old_node->tree_type;
+	new_node->flags = old_node->flags;
+	new_node->records = 0;
+	new_node->key_free_list_len = 0;
+	new_node->val_free_list_len = 0;
+	err = apfs_copy_record_range(new_node, tmp_node, old_rec_count, record_count);
+	if (err) {
+		apfs_err(sb, "record copy failed");
+		goto out;
+	}
+	new_raw = (void *)new_node->object.data;
+	apfs_assert_in_transaction(sb, &new_raw->btn_o);
+	new_raw->btn_level = old_raw->btn_level;
+	apfs_update_node(new_node);
+
+	err = apfs_attach_child(query->parent, new_node);
+	if (err) {
+		if (err != -EAGAIN) {
+			apfs_err(sb, "child attachment failed");
+			goto out;
+		}
+		err = apfs_delete_node(new_node, query->flags & APFS_QUERY_TREE_MASK);
+		if (err) {
+			apfs_err(sb, "node cleanup failed for query retry");
+			goto out;
+		}
+		err = -EAGAIN;
+		goto out;
+	}
+	apfs_assert_query_is_valid(query->parent);
+	apfs_btree_change_node_count(query->parent, 1 /* change */);
+
+	/*
+	 * No more risk of ancestor splits, now actual changes can be made. The
+	 * first half of the records go into the original node.
+	 */
+
 	old_node->records = 0;
 	old_node->key_free_list_len = 0;
 	old_node->val_free_list_len = 0;
@@ -1264,62 +1317,26 @@ int apfs_node_split(struct apfs_query *query)
 	}
 	apfs_update_node(old_node);
 
-	/* The second half is copied to a new node */
-	if (new_rec_count != 0) {
-		struct apfs_node *new_node;
-		struct apfs_btree_node_phys *new_raw;
-
-		apfs_btree_change_node_count(query->parent, 1 /* change */);
-
-		new_node = apfs_create_node(sb, storage);
-		if (IS_ERR(new_node)) {
-			apfs_err(sb, "node creation failed");
-			err = PTR_ERR(new_node);
-			goto out;
-		}
-		new_node->tree_type = old_node->tree_type;
-		new_node->flags = old_node->flags;
-		new_node->records = 0;
-		new_node->key_free_list_len = 0;
-		new_node->val_free_list_len = 0;
-		err = apfs_copy_record_range(new_node, tmp_node, old_rec_count, record_count);
-		if (err) {
-			apfs_err(sb, "record copy failed");
-			apfs_node_free(new_node);
-			goto out;
-		}
-		new_raw = (void *)new_node->object.data;
-		apfs_assert_in_transaction(sb, &new_raw->btn_o);
-		new_raw->btn_level = old_raw->btn_level;
-		apfs_update_node(new_node);
-
-		err = apfs_attach_child(query->parent, new_node);
-		if (err) {
-			apfs_err(sb, "child attachment failed");
-			apfs_node_free(new_node);
-			goto out;
-		}
-
-		/* Point the query back to the original record */
-		if (query->index >= old_rec_count) {
-			/* The record got moved to the new node */
-			apfs_node_free(query->node);
-			query->node = new_node;
-			query->index -= old_rec_count;
-		} else {
-			apfs_node_free(new_node);
-		}
+	/* Point the query back to the original record */
+	if (query->index >= old_rec_count) {
+		/* The record got moved to the new node */
+		apfs_node_free(query->node);
+		query->node = new_node;
+		new_node = NULL;
+		query->index -= old_rec_count;
 	}
+
+	/*
+	 * This could be avoided in most cases, and queries could get refreshed
+	 * only when really orphaned. But refreshing queries is probably not a
+	 * bottleneck, and trying to be clever with this stuff has caused me a
+	 * lot of trouble already.
+	 */
 	apfs_free_query(query->parent);
 	query->parent = NULL; /* The caller only gets the leaf */
 
-	/* Updating these fields isn't really necessary, but it's cleaner */
-	query->len = apfs_node_locate_data(query->node, query->index,
-					   &query->off);
-	query->key_len = apfs_node_locate_key(query->node, query->index,
-					      &query->key_off);
-
 out:
+	apfs_node_free(new_node);
 	apfs_node_free(tmp_node);
 	return err;
 }
@@ -1654,7 +1671,7 @@ static void apfs_node_update_toc_entry(struct apfs_query *query)
 }
 
 /**
- * apfs_node_replace - Replace a record in a node
+ * apfs_node_replace - Replace a record in a node that has enough room
  * @query:	exact query that found the record
  * @key:	new on-disk record key (NULL if unchanged)
  * @key_len:	length of @key
@@ -1885,7 +1902,8 @@ defrag:
  *
  * The new node is placed right after the one found by @query, which must have
  * a single record. On success, returns 0 and sets @query to the new record;
- * returns a negative error code in case of failure.
+ * returns a negative error code in case of failure, which may be -EAGAIN if a
+ * node split has happened and the caller must refresh and retry.
  */
 int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len, void *val, int val_len)
 {
@@ -1906,7 +1924,15 @@ int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len
 		return -EFSCORRUPTED;
 	}
 
-	apfs_btree_change_node_count(query->parent, 1 /* change */);
+	/*
+	 * This will only be called for leaf nodes because it's the values that
+	 * can get huge, not the keys. It will also never be called for root,
+	 * because the catalog always has more than a single record.
+	 */
+	if (apfs_node_is_root(prev_node) || !apfs_node_is_leaf(prev_node)) {
+		apfs_err(sb, "huge record in index node");
+		return -EFSCORRUPTED;
+	}
 
 	new_node = apfs_create_node(sb, apfs_query_storage(query));
 	if (IS_ERR(new_node)) {
@@ -1938,8 +1964,21 @@ int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len
 		apfs_err(sb, "node record insertion failed");
 		return err;
 	}
+
 	err = apfs_attach_child(query->parent, new_node);
-	if (err)
-		apfs_err(sb, "child attachment failed");
-	return err;
+	if (err) {
+		if (err != -EAGAIN) {
+			apfs_err(sb, "child attachment failed");
+			return err;
+		}
+		err = apfs_delete_node(new_node, query->flags & APFS_QUERY_TREE_MASK);
+		if (err) {
+			apfs_err(sb, "node cleanup failed for query retry");
+			return err;
+		}
+		return -EAGAIN;
+	}
+
+	apfs_btree_change_node_count(query->parent, 1 /* change */);
+	return 0;
 }

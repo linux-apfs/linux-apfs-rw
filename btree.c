@@ -577,6 +577,8 @@ next_node:
 	goto next_node;
 }
 
+static int __apfs_btree_replace(struct apfs_query *query, void *key, int key_len, void *val, int val_len);
+
 /**
  * apfs_query_join_transaction - Add the found node to the current transaction
  * @query: query that found the node
@@ -607,9 +609,7 @@ int apfs_query_join_transaction(struct apfs_query *query)
 		__le64 bno = cpu_to_le64(node->object.block_nr);
 
 		/* The parent node needs to report the new location */
-		return apfs_btree_replace(query->parent,
-					  NULL /* key */, 0 /* key_len */,
-					  &bno, sizeof(bno));
+		return __apfs_btree_replace(query->parent, NULL /* key */, 0 /* key_len */, &bno, sizeof(bno));
 	}
 	return 0;
 }
@@ -667,8 +667,6 @@ void apfs_btree_change_node_count(struct apfs_query *query, int change)
 	struct apfs_btree_node_phys *root_raw;
 	struct apfs_btree_info *info;
 
-	ASSERT(!apfs_node_is_leaf(query->node));
-
 	root = apfs_query_root(query);
 	ASSERT(apfs_node_is_root(root));
 
@@ -682,63 +680,61 @@ void apfs_btree_change_node_count(struct apfs_query *query, int change)
 
 /**
  * apfs_query_refresh - Recreate a catalog query invalidated by node splits
- * @old_query: the catalog query to refresh
+ * @old_query:	query chain to refresh
+ * @root:	root node of the query chain
+ * @nodata:	is the query expected to find nothing?
  *
  * On success, @old_query is left pointing to the same leaf record, but with
  * valid ancestor queries as well. Returns a negative error code in case of
  * failure, or 0 on success.
  */
-static int apfs_query_refresh(struct apfs_query *old_query)
+static int apfs_query_refresh(struct apfs_query *old_query, struct apfs_node *root, bool nodata)
 {
-	struct apfs_node *node = old_query->node;
-	struct super_block *sb = node->object.sb;
-	char *raw = node->object.data;
-	struct apfs_query *new_query, *ancestor;
-	struct apfs_key new_key;
-	bool hashed = apfs_is_normalization_insensitive(sb);
+	struct super_block *sb = NULL;
+	struct apfs_query *new_query = NULL;
 	int err = 0;
 
-	/*
-	 * This function is for handling multiple splits of the same node,
-	 * which are only expected when large inline xattr values are involved.
-	 */
-	if ((old_query->flags & APFS_QUERY_TREE_MASK) != APFS_QUERY_CAT) {
-		apfs_err(sb, "non-catalog query");
+	sb = root->object.sb;
+
+	if (!apfs_node_is_leaf(old_query->node)) {
+		apfs_alert(sb, "attempting refresh of non-leaf query");
 		return -EFSCORRUPTED;
 	}
-	if (!apfs_node_is_leaf(node)) {
-		apfs_err(sb, "non-leaf query");
+	if (apfs_node_is_root(old_query->node)) {
+		apfs_alert(sb, "attempting refresh of root query");
 		return -EFSCORRUPTED;
 	}
 
-	/* Build a new query that points exactly to the same key */
-	err = apfs_read_cat_key(raw + old_query->key_off, old_query->key_len, &new_key, hashed);
-	if (err) {
-		apfs_err(sb, "failed to read the key");
-		return err;
-	}
-	new_query = apfs_alloc_query(APFS_SB(sb)->s_cat_root, NULL /* parent */);
+	new_query = apfs_alloc_query(root, NULL /* parent */);
 	if (!new_query)
 		return -ENOMEM;
-	new_query->key = new_key;
-	new_query->flags = APFS_QUERY_CAT | APFS_QUERY_EXACT;
+	new_query->key = old_query->key;
+	new_query->flags = old_query->flags & ~(APFS_QUERY_DONE | APFS_QUERY_NEXT);
 
 	err = apfs_btree_query(sb, &new_query);
-	if (err) {
+	if (!nodata && err == -ENODATA) {
+		apfs_err(sb, "record should exist");
+		err = -EFSCORRUPTED;
+		goto fail;
+	}
+	if (err && err != -ENODATA) {
 		apfs_err(sb, "failed to rerun");
 		goto fail;
 	}
-
-	/* Set the original query flags and key on the new query */
-	for (ancestor = new_query; ancestor; ancestor = ancestor->parent) {
-		ancestor->flags = old_query->flags;
-		ancestor->key = old_query->key;
-	}
+	err = 0;
 
 	/* Replace the parent of the original query with the new valid one */
 	apfs_free_query(old_query->parent);
 	old_query->parent = new_query->parent;
 	new_query->parent = NULL;
+
+	/* The records may have moved around so update this too */
+	old_query->index = new_query->index;
+	old_query->key_off = new_query->key_off;
+	old_query->key_len = new_query->key_len;
+	old_query->off = new_query->off;
+	old_query->len = new_query->len;
+	old_query->depth = new_query->depth;
 
 fail:
 	apfs_free_query(new_query);
@@ -746,27 +742,79 @@ fail:
 }
 
 /**
- * apfs_query_is_orphan - Check if all of a query's ancestors are set
- * @query: the query to check
+ * __apfs_btree_insert - Insert a new record into a b-tree (at any level)
+ * @query:	query run to search for the record
+ * @key:	on-disk record key
+ * @key_len:	length of @key
+ * @val:	on-disk record value (NULL for ghost records)
+ * @val_len:	length of @val (0 for ghost records)
  *
- * A query may lose some of its ancestors during a node split. This can be
- * used to check if that has happened.
- *
- * TODO: running this check early on the insert, remove and replace functions
- * could be used to simplify several callers that do their own query refresh.
+ * The new record is placed right after the one found by @query.  On success,
+ * returns 0 and sets @query to the new record; returns a negative error code
+ * in case of failure, which may be -EAGAIN if a split happened and the caller
+ * must retry.
  */
-static bool apfs_query_is_orphan(const struct apfs_query *query)
+int __apfs_btree_insert(struct apfs_query *query, void *key, int key_len, void *val, int val_len)
 {
-	while (query) {
-		if (apfs_node_is_root(query->node))
-			return false;
-		query = query->parent;
+	struct apfs_node *node = query->node;
+	struct super_block *sb = node->object.sb;
+	struct apfs_btree_node_phys *node_raw;
+	int needed_room;
+	int err;
+
+	apfs_assert_query_is_valid(query);
+
+	err = apfs_query_join_transaction(query);
+	if (err) {
+		apfs_err(sb, "query join failed");
+		return err;
 	}
-	return true;
+
+	node = query->node;
+	node_raw = (void *)node->object.data;
+	apfs_assert_in_transaction(node->object.sb, &node_raw->btn_o);
+
+	needed_room = key_len + val_len;
+	if (!apfs_node_has_room(node, needed_room, false /* replace */)) {
+		if (node->records == 1) {
+			/* The new record just won't fit in the node */
+			err = apfs_create_single_rec_node(query, key, key_len, val, val_len);
+			if (err && err != -EAGAIN)
+				apfs_err(sb, "failed to create single-record node");
+			return err;
+		}
+		err = apfs_node_split(query);
+		if (err && err != -EAGAIN) {
+			apfs_err(sb, "node split failed");
+			return err;
+		}
+		return -EAGAIN;
+	}
+
+	apfs_assert_query_is_valid(query);
+
+	if (query->parent && query->index == -1) {
+		/* We are about to insert a record before all others */
+		err = __apfs_btree_replace(query->parent, key, key_len, NULL /* val */, 0 /* val_len */);
+		if (err) {
+			if (err != -EAGAIN)
+				apfs_err(sb, "parent update failed");
+			return err;
+		}
+	}
+
+	apfs_assert_query_is_valid(query);
+
+	err = apfs_node_insert(query, key, key_len, val, val_len);
+	if (err) {
+		apfs_err(sb, "node record insertion failed");
+		return err;
+	}
+	return 0;
 }
 
 /**
- * apfs_btree_insert - Insert a new record into a b-tree
+ * apfs_btree_insert - Insert a new record into a b-tree leaf
  * @query:	query run to search for the record
  * @key:	on-disk record key
  * @key_len:	length of @key
@@ -777,74 +825,45 @@ static bool apfs_query_is_orphan(const struct apfs_query *query)
  * returns 0 and sets @query to the new record; returns a negative error code
  * in case of failure.
  */
-int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
-		      void *val, int val_len)
+int apfs_btree_insert(struct apfs_query *query, void *key, int key_len, void *val, int val_len)
 {
-	struct apfs_node *node = query->node;
-	struct super_block *sb = node->object.sb;
-	struct apfs_btree_node_phys *node_raw;
-	int needed_room;
+	struct super_block *sb = NULL;
+	struct apfs_node *root = NULL, *leaf = NULL;
 	int err;
 
-	/* Do this first, or node splits may cause @query->parent to be gone */
-	if (apfs_node_is_leaf(node))
-		apfs_btree_change_rec_count(query, 1 /* change */,
-					    key_len, val_len);
+	root = apfs_query_root(query);
+	ASSERT(apfs_node_is_root(root));
+	leaf = query->node;
+	ASSERT(apfs_node_is_leaf(leaf));
+	sb = root->object.sb;
 
-	err = apfs_query_join_transaction(query);
-	if (err) {
-		apfs_err(sb, "query join failed");
-		return err;
-	}
-
-again:
-	node = query->node;
-	node_raw = (void *)node->object.data;
-	apfs_assert_in_transaction(node->object.sb, &node_raw->btn_o);
-
-	needed_room = key_len + val_len;
-	if (!apfs_node_has_room(node, needed_room, false /* replace */)) {
-		if (!query->parent && !apfs_node_is_root(node)) {
-			err = apfs_query_refresh(query);
-			if (err) {
-				apfs_err(sb, "query refresh failed");
+	while (true) {
+		err = __apfs_btree_insert(query, key, key_len, val, val_len);
+		if (err != -EAGAIN) {
+			if (err)
 				return err;
-			}
-			if (node->records == 1) {
-				/* The new record just won't fit in the node */
-				return apfs_create_single_rec_node(query, key, key_len, val, val_len);
-			}
+			break;
 		}
-		err = apfs_node_split(query);
+		err = apfs_query_refresh(query, root, true /* nodata */);
 		if (err) {
-			apfs_err(sb, "node split failed");
+			apfs_err(sb, "query refresh failed");
 			return err;
 		}
-		goto again;
-	}
-	err = apfs_node_insert(query, key, key_len, val, val_len);
-	if (err) {
-		apfs_err(sb, "node record insertion failed");
-		return err;
 	}
 
-	/* This can only happen when we insert a record before all others */
-	if (query->parent && query->index == 0) {
-		err = apfs_btree_replace(query->parent, key, key_len,
-					 NULL /* val */, 0 /* val_len */);
-		if (err)
-			apfs_err(sb, "parent update failed");
-	}
-	return err;
+	apfs_assert_query_is_valid(query);
+	apfs_btree_change_rec_count(query, 1 /* change */, key_len, val_len);
+	return 0;
 }
 
 /**
- * apfs_btree_remove - Remove a record from a b-tree
+ * __apfs_btree_remove - Remove a record from a b-tree (at any level)
  * @query:	exact query that found the record
  *
- * Returns 0 on success, or a negative error code in case of failure.
+ * Returns 0 on success, or a negative error code in case of failure, which may
+ * be -EAGAIN if a split happened and the caller must retry.
  */
-int apfs_btree_remove(struct apfs_query *query)
+static int __apfs_btree_remove(struct apfs_query *query)
 {
 	struct apfs_node *node = query->node;
 	struct super_block *sb = node->object.sb;
@@ -852,12 +871,7 @@ int apfs_btree_remove(struct apfs_query *query)
 	int later_entries = node->records - query->index - 1;
 	int err;
 
-	/* Do this first, or node splits may cause @query->parent to be gone */
-	if (apfs_node_is_leaf(node))
-		apfs_btree_change_rec_count(query, -1 /* change */,
-					    0 /* key_len */, 0 /* val_len */);
-	else
-		apfs_btree_change_node_count(query, -1 /* change */);
+	apfs_assert_query_is_valid(query);
 
 	err = apfs_query_join_transaction(query);
 	if (err) {
@@ -869,25 +883,25 @@ int apfs_btree_remove(struct apfs_query *query)
 	node_raw = (void *)query->node->object.data;
 	apfs_assert_in_transaction(node->object.sb, &node_raw->btn_o);
 
-	if (node->records == 1) {
-		if (query->parent) {
-			/* Just get rid of the node */
-			err = apfs_btree_remove(query->parent);
-			if (err) {
-				apfs_err(sb, "parent index removal failed");
-				return err;
-			}
-			err = apfs_delete_node(node, query->flags & APFS_QUERY_TREE_MASK);
-			if (err) {
-				apfs_err(sb, "node deletion failed");
-				return err;
-			}
-			return 0;
+	if (query->parent && node->records == 1) {
+		/* Just get rid of the node */
+		err = __apfs_btree_remove(query->parent);
+		if (err == -EAGAIN)
+			return -EAGAIN;
+		if (err) {
+			apfs_err(sb, "parent index removal failed");
+			return err;
 		}
-		/* All descendants are gone, root is the whole tree */
-		node_raw->btn_level = 0;
-		node->flags |= APFS_BTNODE_LEAF;
+		apfs_btree_change_node_count(query, -1 /* change */);
+		err = apfs_delete_node(node, query->flags & APFS_QUERY_TREE_MASK);
+		if (err) {
+			apfs_err(sb, "node deletion failed");
+			return err;
+		}
+		return 0;
 	}
+
+	apfs_assert_query_is_valid(query);
 
 	/* The first key in a node must match the parent record's */
 	if (query->parent && query->index == 0) {
@@ -899,13 +913,16 @@ int apfs_btree_remove(struct apfs_query *query)
 			return -EFSCORRUPTED;
 		key = (void *)node_raw + first_key_off;
 
-		err = apfs_btree_replace(query->parent, key, first_key_len,
-					 NULL /* val */, 0 /* val_len */);
+		err = __apfs_btree_replace(query->parent, key, first_key_len, NULL /* val */, 0 /* val_len */);
+		if (err == -EAGAIN)
+			return -EAGAIN;
 		if (err) {
 			apfs_err(sb, "parent update failed");
 			return err;
 		}
 	}
+
+	apfs_assert_query_is_valid(query);
 
 	/* Remove the entry from the table of contents */
 	if (apfs_node_has_fixed_kv_size(node)) {
@@ -928,6 +945,11 @@ int apfs_btree_remove(struct apfs_query *query)
 	apfs_node_free_range(node, query->off, query->len);
 
 	--node->records;
+	if (node->records == 0) {
+		/* All descendants are gone, root is the whole tree */
+		node_raw->btn_level = 0;
+		node->flags |= APFS_BTNODE_LEAF;
+	}
 	apfs_update_node(node);
 
 	--query->index;
@@ -935,7 +957,123 @@ int apfs_btree_remove(struct apfs_query *query)
 }
 
 /**
- * apfs_btree_replace - Replace a record in a b-tree
+ * apfs_btree_remove - Remove a record from a b-tree leaf
+ * @query:	exact query that found the record
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+int apfs_btree_remove(struct apfs_query *query)
+{
+	struct super_block *sb = NULL;
+	struct apfs_node *root = NULL, *leaf = NULL;
+	int err;
+
+	root = apfs_query_root(query);
+	ASSERT(apfs_node_is_root(root));
+	leaf = query->node;
+	ASSERT(apfs_node_is_leaf(leaf));
+	sb = root->object.sb;
+
+	while (true) {
+		err = __apfs_btree_remove(query);
+		if (err != -EAGAIN) {
+			if (err)
+				return err;
+			break;
+		}
+		err = apfs_query_refresh(query, root, false /* nodata */);
+		if (err) {
+			apfs_err(sb, "query refresh failed");
+			return err;
+		}
+	}
+
+	apfs_assert_query_is_valid(query);
+	apfs_btree_change_rec_count(query, -1 /* change */, 0 /* key_len */, 0 /* val_len */);
+	return 0;
+}
+
+/**
+ * __apfs_btree_replace - Replace a record in a b-tree (at any level)
+ * @query:	exact query that found the record
+ * @key:	new on-disk record key (NULL if unchanged)
+ * @key_len:	length of @key
+ * @val:	new on-disk record value (NULL if unchanged)
+ * @val_len:	length of @val
+ *
+ * It's important that the order of the records is not changed by the new @key.
+ * This function is not needed to replace an old value with a new one of the
+ * same length: it can just be overwritten in place.
+ *
+ * Returns 0 on success, and @query is left pointing to the same record; returns
+ * a negative error code in case of failure, which may be -EAGAIN if a split
+ * happened and the caller must retry.
+ */
+static int __apfs_btree_replace(struct apfs_query *query, void *key, int key_len, void *val, int val_len)
+{
+	struct apfs_node *node = query->node;
+	struct super_block *sb = node->object.sb;
+	struct apfs_btree_node_phys *node_raw;
+	int needed_room;
+	int err;
+
+	ASSERT(key || val);
+	apfs_assert_query_is_valid(query);
+
+	err = apfs_query_join_transaction(query);
+	if (err) {
+		apfs_err(sb, "query join failed");
+		return err;
+	}
+
+	node = query->node;
+	node_raw = (void *)node->object.data;
+	apfs_assert_in_transaction(sb, &node_raw->btn_o);
+
+	needed_room = key_len + val_len;
+	/* We can reuse the space of the replaced key/value */
+	if (key)
+		needed_room -= query->key_len;
+	if (val)
+		needed_room -= query->len;
+
+	if (!apfs_node_has_room(node, needed_room, true /* replace */)) {
+		if (node->records == 1) {
+			apfs_alert(sb, "no room in empty node?");
+			return -EFSCORRUPTED;
+		}
+		err = apfs_node_split(query);
+		if (err && err != -EAGAIN) {
+			apfs_err(sb, "node split failed");
+			return err;
+		}
+		return -EAGAIN;
+	}
+
+	apfs_assert_query_is_valid(query);
+
+	/* The first key in a node must match the parent record's */
+	if (key && query->parent && query->index == 0) {
+		err = __apfs_btree_replace(query->parent, key, key_len, NULL /* val */, 0 /* val_len */);
+		if (err) {
+			if (err != -EAGAIN)
+				apfs_err(sb, "parent update failed");
+			return err;
+		}
+	}
+
+	apfs_assert_query_is_valid(query);
+
+	err = apfs_node_replace(query, key, key_len, val, val_len);
+	if (err) {
+		apfs_err(sb, "node record replacement failed");
+		return err;
+	}
+	return 0;
+}
+
+/**
+ * apfs_btree_replace - Replace a record in a b-tree leaf
  * @query:	exact query that found the record
  * @key:	new on-disk record key (NULL if unchanged)
  * @key_len:	length of @key
@@ -949,80 +1087,33 @@ int apfs_btree_remove(struct apfs_query *query)
  * Returns 0 on success, and @query is left pointing to the same record; returns
  * a negative error code in case of failure.
  */
-int apfs_btree_replace(struct apfs_query *query, void *key, int key_len,
-		       void *val, int val_len)
+int apfs_btree_replace(struct apfs_query *query, void *key, int key_len, void *val, int val_len)
 {
-	struct apfs_node *node = query->node;
-	struct super_block *sb = node->object.sb;
-	struct apfs_btree_node_phys *node_raw;
-	int needed_room;
+	struct super_block *sb = NULL;
+	struct apfs_node *root = NULL, *leaf = NULL;
 	int err;
 
-	ASSERT(key || val);
+	root = apfs_query_root(query);
+	ASSERT(apfs_node_is_root(root));
+	leaf = query->node;
+	ASSERT(apfs_node_is_leaf(leaf));
+	sb = root->object.sb;
 
-	/* Do this first, or node splits may cause @query->parent to be gone */
-	if (apfs_node_is_leaf(node)) {
-		if (apfs_query_is_orphan(query)) {
-			err = apfs_query_refresh(query);
+	while (true) {
+		err = __apfs_btree_replace(query, key, key_len, val, val_len);
+		if (err != -EAGAIN) {
 			if (err)
 				return err;
+			break;
 		}
-		apfs_btree_change_rec_count(query, 0 /* change */,
-					    key_len, val_len);
-	}
-
-	err = apfs_query_join_transaction(query);
-	if (err) {
-		apfs_err(sb, "query join failed");
-		return err;
-	}
-
-again:
-	node = query->node;
-	node_raw = (void *)node->object.data;
-	apfs_assert_in_transaction(sb, &node_raw->btn_o);
-
-	/* The first key in a node must match the parent record's */
-	if (key && query->parent && query->index == 0) {
-		err = apfs_btree_replace(query->parent, key, key_len,
-					 NULL /* val */, 0 /* val_len */);
+		err = apfs_query_refresh(query, root, false /* nodata */);
 		if (err) {
-			apfs_err(sb, "parent update failed");
+			apfs_err(sb, "query refresh failed");
 			return err;
 		}
 	}
 
-	needed_room = key_len + val_len;
-	/* We can reuse the space of the replaced key/value */
-	if (key)
-		needed_room -= query->key_len;
-	if (val)
-		needed_room -= query->len;
-
-	if (!apfs_node_has_room(node, needed_room, true /* replace */)) {
-		if (!query->parent && !apfs_node_is_root(node)) {
-			if (node->records == 1) {
-				/* Node is defragmented, ENOSPC is absurd */
-				apfs_alert(sb, "absurd ENOSPC in empty node");
-				return -EFSCORRUPTED;
-			}
-			err = apfs_query_refresh(query);
-			if (err) {
-				apfs_err(sb, "query refresh failed");
-				return err;
-			}
-		}
-		err = apfs_node_split(query);
-		if (err) {
-			apfs_err(sb, "node split failed");
-			return err;
-		}
-		goto again;
-	}
-	err = apfs_node_replace(query, key, key_len, val, val_len);
-	if (err) {
-		apfs_err(sb, "node record replacement failed");
-		return err;
-	}
+	apfs_assert_query_is_valid(query);
+	apfs_btree_change_rec_count(query, 0 /* change */, key_len, val_len);
 	return 0;
 }

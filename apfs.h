@@ -841,6 +841,7 @@ extern int apfs_omap_lookup_newest_block(struct super_block *sb, struct apfs_oma
 extern int apfs_create_omap_rec(struct super_block *sb, u64 oid, u64 bno);
 extern int apfs_delete_omap_rec(struct super_block *sb, u64 oid);
 extern int apfs_query_join_transaction(struct apfs_query *query);
+extern int __apfs_btree_insert(struct apfs_query *query, void *key, int key_len, void *val, int val_len);
 extern int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
 			     void *val, int val_len);
 extern int apfs_btree_remove(struct apfs_query *query);
@@ -1101,6 +1102,18 @@ extern const struct inode_operations apfs_symlink_inode_operations;
 
 /* xattr.c */
 extern const struct xattr_handler *apfs_xattr_handlers[];
+
+/**
+ * apfs_assert_query_is_valid - Assert that all of a query's ancestors are set
+ * @query: the query to check
+ *
+ * A query may lose some of its ancestors during a node split, but nothing
+ * should be done to such a query until it gets refreshed.
+ */
+static inline void apfs_assert_query_is_valid(const struct apfs_query *query)
+{
+	ASSERT(apfs_node_is_root(apfs_query_root(query)));
+}
 
 /*
  * TODO: the following are modified variants of buffer head functions that will
