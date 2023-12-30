@@ -1645,8 +1645,19 @@ int apfs_node_replace(struct apfs_query *query, void *key, int key_len, void *va
 	int old_key_free_len, old_val_free_len;
 	int key_off = 0, val_off = 0, err = 0;
 	bool defragged = false;
+	int qtree = query->flags & APFS_QUERY_TREE_MASK;
 
 	apfs_assert_in_transaction(sb, &node_raw->btn_o);
+
+	/*
+	 * Free queues are weird because their tables of contents don't report
+	 * record lengths, as if they were fixed, but some of the leaf values
+	 * are actually "ghosts", that is, zero-length. Supporting replace of
+	 * such records would require some changes, and so far I've had no need
+	 * for it.
+	 */
+	(void)qtree;
+	ASSERT(!(qtree == APFS_QUERY_FREE_QUEUE && apfs_node_is_leaf(node)));
 
 retry:
 	old_free = node->free;
@@ -1715,6 +1726,17 @@ defrag:
 		err = -ENOSPC;
 		goto fail;
 	}
+
+	/* Crush the replaced entry, so that defragmentation is complete */
+	if (apfs_node_has_fixed_kv_size(node)) {
+		apfs_alert(sb, "failed to replace a fixed size record");
+		return -EFSCORRUPTED;
+	}
+	if (key)
+		query->key_len = 0;
+	if (val)
+		query->len = 0;
+	apfs_node_update_toc_entry(query);
 
 	err = apfs_defragment_node(node);
 	if (err) {
