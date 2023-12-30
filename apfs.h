@@ -1007,6 +1007,7 @@ extern int apfs_node_split(struct apfs_query *query);
 extern int apfs_node_locate_key(struct apfs_node *node, int index, int *off);
 extern void apfs_node_free(struct apfs_node *node);
 extern void apfs_node_free_range(struct apfs_node *node, u16 off, u16 len);
+extern bool apfs_node_has_room(struct apfs_node *node, int length, bool replace);
 extern int apfs_node_replace(struct apfs_query *query, void *key, int key_len, void *val, int val_len);
 extern int apfs_node_insert(struct apfs_query *query, void *key, int key_len, void *val, int val_len);
 extern int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len, void *val, int val_len);

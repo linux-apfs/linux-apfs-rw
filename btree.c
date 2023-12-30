@@ -779,6 +779,7 @@ int apfs_btree_insert(struct apfs_query *query, void *key, int key_len,
 	struct apfs_node *node = query->node;
 	struct super_block *sb = node->object.sb;
 	struct apfs_btree_node_phys *node_raw;
+	int needed_room;
 	int err;
 
 	/* Do this first, or node splits may cause @query->parent to be gone */
@@ -797,8 +798,8 @@ again:
 	node_raw = (void *)node->object.data;
 	apfs_assert_in_transaction(node->object.sb, &node_raw->btn_o);
 
-	err = apfs_node_insert(query, key, key_len, val, val_len);
-	if (err == -ENOSPC) {
+	needed_room = key_len + val_len;
+	if (!apfs_node_has_room(node, needed_room, false /* replace */)) {
 		if (!query->parent && !apfs_node_is_root(node)) {
 			err = apfs_query_refresh(query);
 			if (err) {
@@ -816,7 +817,9 @@ again:
 			return err;
 		}
 		goto again;
-	} else if (err) {
+	}
+	err = apfs_node_insert(query, key, key_len, val, val_len);
+	if (err) {
 		apfs_err(sb, "node record insertion failed");
 		return err;
 	}
@@ -948,6 +951,7 @@ int apfs_btree_replace(struct apfs_query *query, void *key, int key_len,
 	struct apfs_node *node = query->node;
 	struct super_block *sb = node->object.sb;
 	struct apfs_btree_node_phys *node_raw;
+	int needed_room;
 	int err;
 
 	ASSERT(key || val);
@@ -984,8 +988,14 @@ again:
 		}
 	}
 
-	err = apfs_node_replace(query, key, key_len, val, val_len);
-	if (err == -ENOSPC) {
+	needed_room = key_len + val_len;
+	/* We can reuse the space of the replaced key/value */
+	if (key)
+		needed_room -= query->key_len;
+	if (val)
+		needed_room -= query->len;
+
+	if (!apfs_node_has_room(node, needed_room, true /* replace */)) {
 		if (!query->parent && !apfs_node_is_root(node)) {
 			if (node->records == 1) {
 				/* Node is defragmented, ENOSPC is absurd */
@@ -1005,5 +1015,10 @@ again:
 		}
 		goto again;
 	}
-	return err;
+	err = apfs_node_replace(query, key, key_len, val, val_len);
+	if (err) {
+		apfs_err(sb, "node record replacement failed");
+		return err;
+	}
+	return 0;
 }
