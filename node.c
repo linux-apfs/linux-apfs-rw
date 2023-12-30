@@ -39,7 +39,11 @@ static bool apfs_node_is_valid(struct super_block *sb,
 
 void apfs_node_free(struct apfs_node *node)
 {
-	struct apfs_object *obj = &node->object;
+	struct apfs_object *obj = NULL;
+
+	if (!node)
+		return;
+	obj = &node->object;
 
 	if (obj->o_bh) {
 		obj->data = NULL;
