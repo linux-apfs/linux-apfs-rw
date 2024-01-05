@@ -111,9 +111,13 @@ static struct apfs_query *apfs_dentry_lookup(struct inode *dir,
 
 	/*
 	 * Distinct filenames in the same directory may (rarely) share the same
-	 * hash.  The query code cannot handle that because their order in the
-	 * b-tree would	depend on their unnormalized original names.  Just get
+	 * hash. The query code cannot handle that because their order in the
+	 * b-tree would	depend on their unnormalized original names. Just get
 	 * all the candidates and check them one by one.
+	 *
+	 * This is very wasteful for normalization-sensitive filesystems: there
+	 * are no hashes so we just check every single file in the directory for
+	 * no reason. This would be easy to avoid but does it matter? (TODO)
 	 */
 	query->flags |= APFS_QUERY_CAT | APFS_QUERY_ANY_NAME | APFS_QUERY_EXACT;
 	do {
@@ -125,6 +129,14 @@ static struct apfs_query *apfs_dentry_lookup(struct inode *dir,
 			goto fail;
 	} while (unlikely(apfs_filename_cmp(sb, child->name, child->len, drec->name, drec->name_len)));
 
+	/*
+	 * We may need to refresh the query later, but the refresh code doesn't
+	 * know how to deal with hash collisions. Instead set the key to the
+	 * unnormalized name and pretend that this was never a multiple query
+	 * in the first place.
+	 */
+	query->key.name = drec->name;
+	query->flags &= ~(APFS_QUERY_MULTIPLE | APFS_QUERY_DONE | APFS_QUERY_NEXT);
 	return query;
 
 fail:
