@@ -1907,12 +1907,14 @@ defrag:
  */
 int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len, void *val, int val_len)
 {
-	struct apfs_node *prev_node = query->node;
-	struct super_block *sb = prev_node->object.sb;
-	struct apfs_node *new_node = NULL;
+	struct super_block *sb = NULL;
+	struct apfs_node *new_node = NULL, *prev_node = NULL;
 	struct apfs_btree_node_phys *prev_raw = NULL;
 	struct apfs_btree_node_phys *new_raw = NULL;
 	int err;
+
+	prev_node = query->node;
+	sb = prev_node->object.sb;
 
 	ASSERT(query->parent);
 	ASSERT(prev_node->records == 1);
@@ -1953,32 +1955,41 @@ int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len
 	new_raw->btn_level = prev_raw->btn_level;
 	apfs_update_node(new_node);
 
-	prev_node = NULL;
-	prev_raw = NULL;
-	apfs_node_free(query->node);
-
 	query->node = new_node;
+	new_node = NULL;
 	query->index = -1;
 	err = apfs_node_insert(query, key, key_len, val, val_len);
 	if (err) {
 		apfs_err(sb, "node record insertion failed");
-		return err;
+		goto fail;
 	}
 
-	err = apfs_attach_child(query->parent, new_node);
+	err = apfs_attach_child(query->parent, query->node);
 	if (err) {
 		if (err != -EAGAIN) {
 			apfs_err(sb, "child attachment failed");
-			return err;
+			goto fail;
 		}
-		err = apfs_delete_node(new_node, query->flags & APFS_QUERY_TREE_MASK);
+		err = apfs_delete_node(query->node, query->flags & APFS_QUERY_TREE_MASK);
 		if (err) {
 			apfs_err(sb, "node cleanup failed for query retry");
-			return err;
+			goto fail;
 		}
-		return -EAGAIN;
-	}
 
+		/*
+		 * The query must remain pointing to the original node for the
+		 * refresh to take place. The index will not matter though.
+		 */
+		new_node = query->node;
+		query->node = prev_node;
+		prev_node = NULL;
+		err = -EAGAIN;
+		goto fail;
+	}
 	apfs_btree_change_node_count(query->parent, 1 /* change */);
-	return 0;
+
+fail:
+	apfs_node_free(prev_node);
+	apfs_node_free(new_node);
+	return err;
 }
