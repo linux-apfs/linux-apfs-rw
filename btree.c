@@ -728,7 +728,11 @@ static int apfs_query_refresh(struct apfs_query *old_query, struct apfs_node *ro
 	old_query->parent = new_query->parent;
 	new_query->parent = NULL;
 
-	/* The records may have moved around so update this too */
+	/*
+	 * The records may have moved around so update this too. TODO: rework
+	 * the query struct so this stuff is not needed.
+	 */
+	ASSERT(old_query->node->object.oid == new_query->node->object.oid);
 	old_query->index = new_query->index;
 	old_query->key_off = new_query->key_off;
 	old_query->key_len = new_query->key_len;
