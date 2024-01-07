@@ -1266,9 +1266,9 @@ int apfs_node_split(struct apfs_query *query)
 
 	new_node = apfs_create_node(sb, storage);
 	if (IS_ERR(new_node)) {
-		new_node = NULL;
 		apfs_err(sb, "node creation failed");
 		err = PTR_ERR(new_node);
+		new_node = NULL;
 		goto out;
 	}
 	new_node->tree_type = old_node->tree_type;
