@@ -113,11 +113,8 @@ static struct buffer_head *apfs_read_super_copy(struct super_block *sb)
 		apfs_err(sb, "not an apfs filesystem");
 		goto fail;
 	}
-	if (!apfs_obj_verify_csum(sb, bh)) {
-		apfs_err(sb, "inconsistent container superblock");
-		err = -EFSBADCRC;
-		goto fail;
-	}
+	if (!apfs_obj_verify_csum(sb, bh))
+		apfs_notice(sb, "backup superblock seems corrupted");
 	return bh;
 
 fail:
