@@ -269,6 +269,9 @@ static void apfs_update_software_info(struct super_block *sb)
 	ASSERT(strlen(APFS_MODULE_ID_STRING) < APFS_MODIFIED_NAMELEN);
 	mod_by = raw->apfs_modified_by;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	sbi->sbi_bdev_handle = sb->s_bdev_handle;
+#endif
 	/* This check could be optimized away, but does it matter? */
 	if (!strcmp(mod_by->id, APFS_MODULE_ID_STRING))
 		return;
@@ -313,7 +316,10 @@ static inline void apfs_unmap_main_super(struct apfs_sb_info *sbi)
 	obj->o_bh = NULL;
 	obj = NULL;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	if (!IS_ERR_OR_NULL(sbi->sbi_bdev_handle))
+		bdev_release(sbi->sbi_bdev_handle);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 	blkdev_put(nxi->nx_bdev, &apfs_fs_type);
 #else
 	blkdev_put(nxi->nx_bdev, mode);
@@ -1559,13 +1565,19 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 
 	nxi = apfs_nx_find_by_dev(dev);
 	if (!nxi) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+		struct bdev_handle *handle;
+#endif
 		struct block_device *bdev;
 
 		nxi = kzalloc(sizeof(*nxi), GFP_KERNEL);
 		if (!nxi)
 			return -ENOMEM;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+		handle = bdev_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
+		bdev = handle->bdev;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 		bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type, NULL);
 #else
 		bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type);

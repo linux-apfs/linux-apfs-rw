@@ -290,6 +290,10 @@ struct apfs_sb_info {
 	struct list_head list;		/* List of mounted volumes in container */
 	struct apfs_superblock *s_vsb_raw; /* On-disk volume sb */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	struct bdev_handle *sbi_bdev_handle;
+#endif
+
 	dev_t s_anon_dev; /* Anonymous device for this volume-snapshot */
 
 	char *s_snap_name; /* Label for the mounted snapshot */
