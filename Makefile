@@ -15,7 +15,6 @@ apfs-y := btree.o compress.o dir.o extents.o file.o inode.o key.o libzbitmap.o \
 	  spaceman.o super.o symlink.o transaction.o unicode.o xattr.o xfield.o
 
 default:
-	@printf '#define GIT_COMMIT\t"%s"\n' $(GIT_COMMIT) > version.h
 	make -C $(KERNEL_DIR) M=$(PWD)
 install:
 	make -C $(KERNEL_DIR) M=$(PWD) modules_install
