@@ -5,6 +5,9 @@
 
 #include "apfs.h"
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+#include <linux/splice.h>
+#endif
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 17, 0)
 typedef int vm_fault_t;
 #endif
@@ -152,6 +155,16 @@ int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 	return apfs_sync_fs(sb, true /* wait */);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+static ssize_t apfs_copy_file_range(struct file *src_file, loff_t src_off,
+				    struct file *dst_file, loff_t dst_off,
+				    size_t len, unsigned int flags)
+{
+	return (splice_copy_file_range(src_file, src_off,
+		dst_file, dst_off, len));
+}
+#endif
+
 const struct file_operations apfs_file_operations = {
 	.llseek			= generic_file_llseek,
 	.read_iter		= generic_file_read_iter,
@@ -161,7 +174,9 @@ const struct file_operations apfs_file_operations = {
 	.fsync			= apfs_fsync,
 	.unlocked_ioctl		= apfs_file_ioctl,
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	.copy_file_range	= apfs_copy_file_range,
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)
 	.copy_file_range	= generic_copy_file_range,
 #endif
 
