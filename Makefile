@@ -6,7 +6,6 @@
 KERNELRELEASE ?= $(shell uname -r)
 KERNEL_DIR    ?= /lib/modules/$(KERNELRELEASE)/build
 PWD           := $(shell pwd)
-GIT_COMMIT    = $(shell git describe HEAD | tail -c 9)
 
 obj-m = apfs.o
 apfs-y := btree.o compress.o dir.o extents.o file.o inode.o key.o libzbitmap.o \
@@ -15,7 +14,7 @@ apfs-y := btree.o compress.o dir.o extents.o file.o inode.o key.o libzbitmap.o \
 	  spaceman.o super.o symlink.o transaction.o unicode.o xattr.o xfield.o
 
 default:
-	@printf '#define GIT_COMMIT\t"%s"\n' $(GIT_COMMIT) > version.h
+	./genver.sh
 	make -C $(KERNEL_DIR) M=$(PWD)
 install:
 	make -C $(KERNEL_DIR) M=$(PWD) modules_install
