@@ -22,7 +22,8 @@ This module is the result of reverse engineering and testing has been limited.
 If you make use of the write support, expect data corruption. Please report any
 issues that you find, but I can't promise a quick resolution at this stage.
 
-Encryption is not yet implemented even in read-only mode.
+Encryption is not yet implemented even in read-only mode, and nether are fusion
+drives.
 
 Build
 =====
