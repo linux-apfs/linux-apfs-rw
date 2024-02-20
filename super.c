@@ -152,6 +152,8 @@ out_unlock:
 	mutex_unlock(&nxs_mutex);
 }
 
+static int apfs_check_nx_features(struct super_block *sb);
+
 /**
  * apfs_map_main_super - Find the container superblock and map it into memory
  * @sb:	superblock structure
@@ -240,7 +242,7 @@ static int apfs_map_main_super(struct super_block *sb)
 	nxi->nx_blocksize = sb->s_blocksize;
 	nxi->nx_blocksize_bits = sb->s_blocksize_bits;
 
-	return 0;
+	return apfs_check_nx_features(sb);
 
 fail:
 	brelse(bh);
@@ -1203,26 +1205,26 @@ out:
 }
 
 /**
- * apfs_check_features - Check for unsupported features in the filesystem
+ * apfs_check_nx_features - Check for unsupported features in the container
  * @sb: superblock structure
  *
  * Returns -EINVAL if unsupported incompatible features are found, otherwise
  * returns 0.
  */
-static int apfs_check_features(struct super_block *sb)
+static int apfs_check_nx_features(struct super_block *sb)
 {
-	struct apfs_nx_superblock *msb_raw = APFS_NXI(sb)->nx_raw;
-	struct apfs_superblock *vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	struct apfs_nx_superblock *msb_raw = NULL;
 	u64 features;
 
-	ASSERT(msb_raw);
-	ASSERT(vsb_raw);
+	msb_raw = APFS_NXI(sb)->nx_raw;
+	if (!msb_raw) {
+		apfs_alert(sb, "feature checks are misplaced");
+		return -EINVAL;
+	}
 
 	features = le64_to_cpu(msb_raw->nx_incompatible_features);
 	if (features & ~APFS_NX_SUPPORTED_INCOMPAT_MASK) {
-		apfs_warn(sb,
-			  "unknown incompatible container features (0x%llx)",
-			  features);
+		apfs_warn(sb, "unknown incompatible container features (0x%llx)", features);
 		return -EINVAL;
 	}
 	if (features & APFS_NX_INCOMPAT_FUSION) {
@@ -1230,10 +1232,38 @@ static int apfs_check_features(struct super_block *sb)
 		return -EINVAL;
 	}
 
+	features = le64_to_cpu(msb_raw->nx_readonly_compatible_features);
+	if (features & ~APFS_NX_SUPPORTED_ROCOMPAT_MASK) {
+		apfs_warn(sb, "unknown read-only compatible container features (0x%llx)", features);
+		if (!sb_rdonly(sb)) {
+			apfs_warn(sb, "container can't be mounted read-write");
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
+/**
+ * apfs_check_vol_features - Check for unsupported features in the volume
+ * @sb: superblock structure
+ *
+ * Returns -EINVAL if unsupported incompatible features are found, otherwise
+ * returns 0.
+ */
+static int apfs_check_vol_features(struct super_block *sb)
+{
+	struct apfs_superblock *vsb_raw = NULL;
+	u64 features;
+
+	vsb_raw = APFS_SB(sb)->s_vsb_raw;
+	if (!vsb_raw) {
+		apfs_alert(sb, "feature checks are misplaced");
+		return -EINVAL;
+	}
+
 	features = le64_to_cpu(vsb_raw->apfs_incompatible_features);
 	if (features & ~APFS_SUPPORTED_INCOMPAT_MASK) {
-		apfs_warn(sb, "unknown incompatible volume features (0x%llx)",
-			  features);
+		apfs_warn(sb, "unknown incompatible volume features (0x%llx)", features);
 		return -EINVAL;
 	}
 	if (features & APFS_INCOMPAT_DATALESS_SNAPS) {
@@ -1265,29 +1295,14 @@ static int apfs_check_features(struct super_block *sb)
 	if (!(features & APFS_FS_UNENCRYPTED))
 		apfs_warn(sb, "volume is encrypted, may not be read correctly");
 
-	features = le64_to_cpu(msb_raw->nx_readonly_compatible_features);
-	if (features & ~APFS_NX_SUPPORTED_ROCOMPAT_MASK) {
-		apfs_warn(sb,
-		     "unknown read-only compatible container features (0x%llx)",
-		     features);
-		if (!sb_rdonly(sb)) {
-			apfs_warn(sb, "container can't be mounted read-write");
-			return -EINVAL;
-		}
-	}
-
 	features = le64_to_cpu(vsb_raw->apfs_readonly_compatible_features);
 	if (features & ~APFS_SUPPORTED_ROCOMPAT_MASK) {
-		apfs_warn(sb,
-			"unknown read-only compatible volume features (0x%llx)",
-			features);
+		apfs_warn(sb, "unknown read-only compatible volume features (0x%llx)", features);
 		if (!sb_rdonly(sb)) {
 			apfs_warn(sb, "volume can't be mounted read-write");
 			return -EINVAL;
 		}
 	}
-
-	/* TODO: add checks for encryption, snapshots? */
 	return 0;
 }
 
@@ -1385,7 +1400,7 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 	if (err)
 		return err;
 
-	err = apfs_check_features(sb);
+	err = apfs_check_vol_features(sb);
 	if (err)
 		goto failed_omap;
 
