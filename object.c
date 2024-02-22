@@ -37,131 +37,129 @@ static u64 apfs_fletcher64(void *addr, size_t len)
 
 int apfs_obj_verify_csum(struct super_block *sb, struct buffer_head *bh)
 {
-	struct apfs_obj_phys *obj = (struct apfs_obj_phys *)bh->b_data;
-
 	/* The checksum may be stale until the transaction is committed */
 	if (buffer_trans(bh))
 		return 1;
+	return apfs_multiblock_verify_csum(bh->b_data, sb->s_blocksize);
+}
 
-	return  (le64_to_cpu(obj->o_cksum) ==
-		 apfs_fletcher64((char *) obj + APFS_MAX_CKSUM_SIZE,
-				 sb->s_blocksize - APFS_MAX_CKSUM_SIZE));
+/**
+ * apfs_multiblock_verify_csum - Verify an object's checksum
+ * @object:	the object to verify
+ * @size:	size of the object in bytes (may be multiple blocks)
+ *
+ * Returns 1 on success, 0 on failure.
+ */
+int apfs_multiblock_verify_csum(char *object, u32 size)
+{
+	struct apfs_obj_phys *obj = (struct apfs_obj_phys *)object;
+	u64 actual_csum, header_csum;
+
+	header_csum = le64_to_cpu(obj->o_cksum);
+	actual_csum = apfs_fletcher64(object + APFS_MAX_CKSUM_SIZE, size - APFS_MAX_CKSUM_SIZE);
+	return header_csum == actual_csum;
 }
 
 /**
  * apfs_obj_set_csum - Set the fletcher checksum in an object header
  * @sb:		superblock structure
  * @obj:	the object header
+ *
+ * The object must have a length of a single block.
  */
 void apfs_obj_set_csum(struct super_block *sb, struct apfs_obj_phys *obj)
 {
-	u64 cksum = apfs_fletcher64((char *)obj + APFS_MAX_CKSUM_SIZE,
-				    sb->s_blocksize - APFS_MAX_CKSUM_SIZE);
+	apfs_multiblock_set_csum((char *)obj, sb->s_blocksize);
+}
 
+/**
+ * apfs_multiblock_set_csum - Set an object's checksum
+ * @object:	the object to checksum
+ * @size:	size of the object in bytes (may be multiple blocks)
+ */
+void apfs_multiblock_set_csum(char *object, u32 size)
+{
+	struct apfs_obj_phys *obj = (struct apfs_obj_phys *)object;
+	u64 cksum;
+
+	cksum = apfs_fletcher64(object + APFS_MAX_CKSUM_SIZE, size - APFS_MAX_CKSUM_SIZE);
 	obj->o_cksum = cpu_to_le64(cksum);
 }
 
 /**
- * apfs_cpm_lookup_oid - Search a checkpoint-mapping block for a given oid
- * @sb:		superblock structure
- * @cpm:	checkpoint-mapping block (on disk)
- * @oid:	the ephemeral object id to look up
- * @bno:	on return, the block number for the object
- *
- * Returns -EFSCORRUPTED in case of corruption, or -EAGAIN if @oid is not
- * listed in @cpm; returns 0 on success.
- */
-static int apfs_cpm_lookup_oid(struct super_block *sb,
-			       struct apfs_checkpoint_map_phys *cpm,
-			       u64 oid, u64 *bno)
-{
-	u32 map_count = le32_to_cpu(cpm->cpm_count);
-	int i;
-
-	if (map_count > apfs_max_maps_per_block(sb)) {
-		apfs_err(sb, "block has too many maps (%d)", map_count);
-		return -EFSCORRUPTED;
-	}
-
-	for (i = 0; i < map_count; ++i) {
-		struct apfs_checkpoint_mapping *map = &cpm->cpm_map[i];
-
-		if (le64_to_cpu(map->cpm_oid) == oid) {
-			*bno = le64_to_cpu(map->cpm_paddr);
-			return 0;
-		}
-	}
-	return -EAGAIN; /* The mapping may still be in the next block */
-}
-
-/**
- * apfs_read_cpm_block - Read the checkpoint mapping block
- * @sb:	super block structure
- *
- * Only a single cpm block is supported for now. Returns the buffer head for
- * the block on success, or NULL in case of failure.
- */
-static struct buffer_head *apfs_read_cpm_block(struct super_block *sb)
-{
-	struct apfs_nx_superblock *raw_sb = APFS_NXI(sb)->nx_raw;
-	u64 desc_base = le64_to_cpu(raw_sb->nx_xp_desc_base);
-	u32 desc_index = le32_to_cpu(raw_sb->nx_xp_desc_index);
-	u32 desc_blks = le32_to_cpu(raw_sb->nx_xp_desc_blocks);
-	u32 desc_len = le32_to_cpu(raw_sb->nx_xp_desc_len);
-	u64 cpm_bno;
-
-	if (!desc_blks || desc_len < 2)
-		return NULL;
-
-	/* Last block in area is superblock; we want the last mapping block */
-	cpm_bno = desc_base + (desc_index + desc_len - 2) % desc_blks;
-	return apfs_sb_bread(sb, cpm_bno);
-}
-
-/**
- * apfs_create_cpoint_map - Create a checkpoint mapping
+ * apfs_create_cpm_block - Create a new checkpoint-mapping block
  * @sb:		filesystem superblock
- * @oid:	ephemeral object id
- * @bno:	block number
+ * @bno:	block number to use
+ * @bh_p:	on return, the buffer head for the block
  *
- * Only mappings for free queue nodes are supported for now.  Returns 0 on
- * success or a negative error code in case of failure.
+ * Returns 0 on success or a negative error code in case of failure.
  */
-int apfs_create_cpoint_map(struct super_block *sb, u64 oid, u64 bno)
+int apfs_create_cpm_block(struct super_block *sb, u64 bno, struct buffer_head **bh_p)
 {
-	struct buffer_head *bh;
-	struct apfs_checkpoint_map_phys *cpm;
-	struct apfs_checkpoint_mapping *map;
-	u32 cpm_count;
-	int err = 0;
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_checkpoint_map_phys *cpm = NULL;
+	struct buffer_head *bh = NULL;
+	int err;
 
-	bh = apfs_read_cpm_block(sb);
-	if (!bh)
+	bh = apfs_getblk(sb, bno);
+	if (!bh) {
+		apfs_err(sb, "failed to map cpm block");
 		return -EIO;
-	cpm = (struct apfs_checkpoint_map_phys *)bh->b_data;
+	}
+	err = apfs_transaction_join(sb, bh);
+	if (err) {
+		brelse(bh);
+		return err;
+	}
+	set_buffer_csum(bh);
+
+	cpm = (void *)bh->b_data;
+	memset(cpm, 0, sb->s_blocksize);
+	cpm->cpm_o.o_oid = cpu_to_le64(bno);
+	cpm->cpm_o.o_xid = cpu_to_le64(nxi->nx_xid);
+	cpm->cpm_o.o_type = cpu_to_le32(APFS_OBJ_PHYSICAL | APFS_OBJECT_TYPE_CHECKPOINT_MAP);
+	cpm->cpm_o.o_subtype = cpu_to_le32(APFS_OBJECT_TYPE_INVALID);
+
+	/* For now: the caller will have to update these fields */
+	cpm->cpm_flags = cpu_to_le32(APFS_CHECKPOINT_MAP_LAST);
+	cpm->cpm_count = 0;
+
+	*bh_p = bh;
+	return 0;
+}
+
+/**
+ * apfs_create_cpoint_map - Create a checkpoint mapping for an object
+ * @sb:		filesystem superblock
+ * @cpm:	checkpoint mapping block to use
+ * @obj:	header for the ephemeral object
+ * @bno:	block number for the ephemeral object
+ * @size:	size of the ephemeral object in bytes
+ *
+ * Returns 0 on success or a negative error code in case of failure, which may
+ * be -ENOSPC if @cpm is full.
+ */
+int apfs_create_cpoint_map(struct super_block *sb, struct apfs_checkpoint_map_phys *cpm, struct apfs_obj_phys *obj, u64 bno, u32 size)
+{
+	struct apfs_checkpoint_mapping *map = NULL;
+	u32 cpm_count;
+
 	apfs_assert_in_transaction(sb, &cpm->cpm_o);
 
 	cpm_count = le32_to_cpu(cpm->cpm_count);
-	if (cpm_count >= apfs_max_maps_per_block(sb)) { /* TODO */
-		apfs_warn(sb, "creation of cpm blocks not yet supported");
-		err = -EOPNOTSUPP;
-		goto fail;
-	}
+	if (cpm_count >= apfs_max_maps_per_block(sb))
+		return -ENOSPC;
 	map = &cpm->cpm_map[cpm_count];
 	le32_add_cpu(&cpm->cpm_count, 1);
 
-	map->cpm_type = cpu_to_le32(APFS_OBJ_EPHEMERAL |
-				    APFS_OBJECT_TYPE_BTREE_NODE);
-	map->cpm_subtype = cpu_to_le32(APFS_OBJECT_TYPE_SPACEMAN_FREE_QUEUE);
-	map->cpm_size = cpu_to_le32(sb->s_blocksize);
+	map->cpm_type = obj->o_type;
+	map->cpm_subtype = obj->o_subtype;
+	map->cpm_size = cpu_to_le32(size);
 	map->cpm_pad = 0;
 	map->cpm_fs_oid = 0;
-	map->cpm_oid = cpu_to_le64(oid);
+	map->cpm_oid = obj->o_oid;
 	map->cpm_paddr = cpu_to_le64(bno);
-
-fail:
-	brelse(bh);
-	return err;
+	return 0;
 }
 
 /**
@@ -197,120 +195,23 @@ u64 apfs_data_index_to_bno(struct super_block *sb, u32 index)
 }
 
 /**
- * apfs_remove_cpoint_map - Remove a checkpoint mapping
- * @sb:		filesystem superblock
- * @bno:	block number to delete
- *
- * Only mappings for free queue nodes are supported for now. Blocks that come
- * after the deleted one are assumed to shift back one place. Returns 0 on
- * success or a negative error code in case of failure.
- */
-int apfs_remove_cpoint_map(struct super_block *sb, u64 bno)
-{
-	struct buffer_head *bh;
-	struct apfs_checkpoint_map_phys *cpm;
-	struct apfs_checkpoint_mapping *map, *maps_start, *maps_end;
-	struct apfs_checkpoint_mapping *bno_map = NULL;
-	u32 cpm_count;
-	u32 bno_off;
-	int err = 0;
-
-	bh = apfs_read_cpm_block(sb);
-	if (!bh) {
-		apfs_err(sb, "failed to read cpm block");
-		return -EIO;
-	}
-	cpm = (struct apfs_checkpoint_map_phys *)bh->b_data;
-	apfs_assert_in_transaction(sb, &cpm->cpm_o);
-
-	/* TODO: multiple cpm blocks? */
-	cpm_count = le32_to_cpu(cpm->cpm_count);
-	if (cpm_count > apfs_max_maps_per_block(sb)) {
-		apfs_err(sb, "block has too many maps (%d)", cpm_count);
-		err = -EFSCORRUPTED;
-		goto fail;
-	}
-	maps_start = &cpm->cpm_map[0];
-	maps_end = &cpm->cpm_map[cpm_count];
-
-	bno_off = apfs_index_in_data_area(sb, bno);
-	for (map = maps_start; map < maps_end; ++map) {
-		u32 curr_off;
-
-		if (le64_to_cpu(map->cpm_paddr) == bno)
-			bno_map = map;
-
-		curr_off = apfs_index_in_data_area(sb, le64_to_cpu(map->cpm_paddr));
-		if (curr_off > bno_off)
-			map->cpm_paddr = cpu_to_le64(apfs_data_index_to_bno(sb, curr_off - 1));
-	}
-	if (!bno_map) {
-		apfs_err(sb, "no mapping for bno 0x%llx", bno);
-		err = -EFSCORRUPTED;
-		goto fail;
-	}
-	memmove(bno_map, bno_map + 1, (maps_end - bno_map - 1) * sizeof(*bno_map));
-	le32_add_cpu(&cpm->cpm_count, -1);
-
-fail:
-	brelse(bh);
-	return err;
-}
-
-/**
- * apfs_read_ephemeral_object - Find and map an ephemeral object
+ * apfs_ephemeral_object_lookup - Find an ephemeral object info in memory
  * @sb:		superblock structure
  * @oid:	ephemeral object id
  *
- * Returns the mapped buffer head for the object, or an error pointer in case
+ * Returns a pointer to the object info on success, or an error pointer in case
  * of failure.
  */
-struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb, u64 oid)
+struct apfs_ephemeral_object_info *apfs_ephemeral_object_lookup(struct super_block *sb, u64 oid)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
-	u64 desc_base = le64_to_cpu(raw_sb->nx_xp_desc_base);
-	u32 desc_index = le32_to_cpu(raw_sb->nx_xp_desc_index);
-	u32 desc_blks = le32_to_cpu(raw_sb->nx_xp_desc_blocks);
-	u32 desc_len = le32_to_cpu(raw_sb->nx_xp_desc_len);
-	u32 i;
+	struct apfs_ephemeral_object_info *list = NULL;
+	int i;
 
-	if (!desc_blks || !desc_len) {
-		apfs_err(sb, "no blocks in checkpoint descriptor area");
-		return ERR_PTR(-EFSCORRUPTED);
-	}
-
-	/* Last block in the area is superblock; the rest are mapping blocks */
-	for (i = 0; i < desc_len - 1; ++i) {
-		struct buffer_head *bh;
-		struct apfs_checkpoint_map_phys *cpm;
-		u64 cpm_bno = desc_base + (desc_index + i) % desc_blks;
-		u64 obj_bno;
-		int err;
-
-		bh = apfs_sb_bread(sb, cpm_bno);
-		if (!bh) {
-			apfs_err(sb, "failed to read cpm block");
-			return ERR_PTR(-EIO);
-		}
-		cpm = (struct apfs_checkpoint_map_phys *)bh->b_data;
-
-		err = apfs_cpm_lookup_oid(sb, cpm, oid, &obj_bno);
-		brelse(bh);
-		cpm = NULL;
-		if (err == -EAGAIN) /* Search the next mapping block */
-			continue;
-		if (err) {
-			apfs_err(sb, "cpm lookup failed for oid 0x%llx", oid);
-			return ERR_PTR(err);
-		}
-
-		bh = apfs_sb_bread(sb, obj_bno);
-		if (!bh) {
-			apfs_err(sb, "failed to read ephemeral block");
-			return ERR_PTR(-EIO);
-		}
-		return bh;
+	list = nxi->nx_eph_list;
+	for (i = 0; i < nxi->nx_eph_count; ++i) {
+		if (list[i].oid == oid)
+			return &list[i];
 	}
 	apfs_err(sb, "no mapping for oid 0x%llx", oid);
 	return ERR_PTR(-EFSCORRUPTED);

@@ -46,13 +46,13 @@ void apfs_node_free(struct apfs_node *node)
 	obj = &node->object;
 
 	if (obj->o_bh) {
-		obj->data = NULL;
 		brelse(obj->o_bh);
 		obj->o_bh = NULL;
-	} else {
+	} else if (!obj->ephemeral) {
+		/* Ephemeral data always remains in memory */
 		kfree(obj->data);
-		obj->data = NULL;
 	}
+	obj->data = NULL;
 
 	kfree(node);
 }
@@ -75,9 +75,10 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct buffer_head *bh = NULL;
-	struct apfs_btree_node_phys *raw;
-	struct apfs_node *node;
-	struct apfs_nloc *free_head;
+	struct apfs_ephemeral_object_info *eph_info = NULL;
+	struct apfs_btree_node_phys *raw = NULL;
+	struct apfs_node *node = NULL;
+	struct apfs_nloc *free_head = NULL;
 	u64 bno;
 	int err;
 
@@ -95,6 +96,8 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 			apfs_err(sb, "object read failed for bno 0x%llx", bno);
 			return (void *)bh;
 		}
+		bno = bh->b_blocknr;
+		raw = (struct apfs_btree_node_phys *)bh->b_data;
 		break;
 	case APFS_OBJ_PHYSICAL:
 		bh = apfs_read_object_block(sb, oid, write, false /* preserve */);
@@ -102,21 +105,30 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 			apfs_err(sb, "object read failed for bno 0x%llx", oid);
 			return (void *)bh;
 		}
-		oid = bh->b_blocknr;
+		bno = oid = bh->b_blocknr;
+		raw = (struct apfs_btree_node_phys *)bh->b_data;
 		break;
 	case APFS_OBJ_EPHEMERAL:
-		/* Ephemeral objects are checkpoint data, so ignore 'write' */
-		bh = apfs_read_ephemeral_object(sb, oid);
-		if (IS_ERR(bh)) {
-			apfs_err(sb, "ephemeral read failed for oid 0x%llx", oid);
-			return (void *)bh;
+		/* Ephemeral objects are already in memory */
+		eph_info = apfs_ephemeral_object_lookup(sb, oid);
+		if (IS_ERR(eph_info)) {
+			apfs_err(sb, "no ephemeral node for oid 0x%llx", oid);
+			return (void *)eph_info;
 		}
+		if (eph_info->size != sb->s_blocksize) {
+			apfs_err(sb, "unsupported size for ephemeral node (%u)", eph_info->size);
+			return ERR_PTR(-EOPNOTSUPP);
+		}
+		bno = 0; /* In memory, so meaningless */
+		raw = eph_info->object;
+		/* Only for consistency, will happen again on commit */
+		if (write)
+			raw->btn_o.o_xid = cpu_to_le64(nxi->nx_xid);
 		break;
 	default:
 		apfs_alert(sb, "invalid storage type %u - bug!", storage);
 		return ERR_PTR(-EINVAL);
 	}
-	raw = (struct apfs_btree_node_phys *) bh->b_data;
 
 	node = kmalloc(sizeof(*node), GFP_KERNEL);
 	if (!node) {
@@ -138,19 +150,21 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 	node->val_free_list_len = le16_to_cpu(free_head->len);
 
 	node->object.sb = sb;
-	node->object.block_nr = bh->b_blocknr;
+	node->object.block_nr = bno;
 	node->object.oid = oid;
 	node->object.o_bh = bh;
-	node->object.data = bh->b_data;
+	node->object.data = (char *)raw;
+	node->object.ephemeral = !bh;
 
-	if (nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, bh)) {
+	/* Ephemeral objects already got checked on mount */
+	if (!node->object.ephemeral && nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, bh)) {
 		/* TODO: don't check this twice for virtual/physical objects */
-		apfs_err(sb, "bad checksum for node in block 0x%llx", (unsigned long long)bh->b_blocknr);
+		apfs_err(sb, "bad checksum for node in block 0x%llx", (unsigned long long)bno);
 		apfs_node_free(node);
 		return ERR_PTR(-EFSBADCRC);
 	}
 	if (!apfs_node_is_valid(sb, node)) {
-		apfs_err(sb, "bad node in block 0x%llx", (unsigned long long)bh->b_blocknr);
+		apfs_err(sb, "bad node in block 0x%llx", (unsigned long long)bno);
 		apfs_node_free(node);
 		return ERR_PTR(-EFSCORRUPTED);
 	}
@@ -332,9 +346,10 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_superblock *msb_raw = nxi->nx_raw;
 	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
-	struct apfs_node *node;
-	struct buffer_head *bh;
-	struct apfs_btree_node_phys *raw;
+	struct apfs_ephemeral_object_info *eph_info = NULL;
+	struct apfs_node *node = NULL;
+	struct buffer_head *bh = NULL;
+	struct apfs_btree_node_phys *raw = NULL;
 	u64 bno, oid;
 	int err;
 
@@ -370,29 +385,38 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 		oid = bno;
 		break;
 	case APFS_OBJ_EPHEMERAL:
-		apfs_cpoint_data_allocate(sb, &bno);
-		oid = le64_to_cpu(msb_raw->nx_next_oid);
-		le64_add_cpu(&msb_raw->nx_next_oid, 1);
-
-		err = apfs_create_cpoint_map(sb, oid, bno);
-		if (err) {
-			apfs_err(sb, "checkpoint map creation failed (0x%llx-0x%llx)", oid, bno);
-			return ERR_PTR(err);
+		if (nxi->nx_eph_count >= APFS_EPHEMERAL_LIST_LIMIT) {
+			apfs_err(sb, "creating too many ephemeral objects?");
+			return ERR_PTR(-EOPNOTSUPP);
 		}
+		eph_info = &nxi->nx_eph_list[nxi->nx_eph_count++];
+		eph_info->object = kzalloc(sb->s_blocksize, GFP_KERNEL);
+		if (!eph_info->object)
+			return ERR_PTR(-ENOMEM);
+		eph_info->size = sb->s_blocksize;
+		oid = eph_info->oid = le64_to_cpu(msb_raw->nx_next_oid);
+		le64_add_cpu(&msb_raw->nx_next_oid, 1);
 		break;
 	default:
 		apfs_alert(sb, "invalid storage type %u - bug!", storage);
 		return ERR_PTR(-EINVAL);
 	}
 
-	bh = apfs_getblk(sb, bno);
-	if (!bh)
-		return ERR_PTR(-EIO);
-	raw = (void *)bh->b_data;
-	err = apfs_transaction_join(sb, bh);
-	if (err)
-		goto fail;
-	set_buffer_csum(bh);
+	if (storage == APFS_OBJ_EPHEMERAL) {
+		bh = NULL;
+		bno = 0;
+		raw = eph_info->object;
+	} else {
+		bh = apfs_getblk(sb, bno);
+		if (!bh)
+			return ERR_PTR(-EIO);
+		bno = bh->b_blocknr;
+		raw = (void *)bh->b_data;
+		err = apfs_transaction_join(sb, bh);
+		if (err)
+			goto fail;
+		set_buffer_csum(bh);
+	}
 
 	/* Set most of the object header, but the subtype is up to the caller */
 	raw->btn_o.o_oid = cpu_to_le64(oid);
@@ -420,14 +444,20 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
 	}
 
 	node->object.sb = sb;
-	node->object.block_nr = bh->b_blocknr;
+	node->object.block_nr = bno;
 	node->object.oid = oid;
 	node->object.o_bh = bh;
-	node->object.data = bh->b_data;
+	node->object.data = (char *)raw;
+	node->object.ephemeral = !bh;
 	return node;
 
 fail:
-	brelse(bh);
+	if (storage == APFS_OBJ_EPHEMERAL)
+		kfree(raw);
+	else
+		brelse(bh);
+	raw = NULL;
+	bh = NULL;
 	return ERR_PTR(err);
 }
 
@@ -442,9 +472,11 @@ fail:
 int apfs_delete_node(struct apfs_node *node, int type)
 {
 	struct super_block *sb = node->object.sb;
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_superblock *vsb_raw;
 	u64 oid = node->object.oid;
 	u64 bno = node->object.block_nr;
+	struct apfs_ephemeral_object_info *eph_info = NULL, *eph_info_end = NULL;
 	int err;
 
 	switch (type) {
@@ -479,16 +511,17 @@ int apfs_delete_node(struct apfs_node *node, int type)
 		le64_add_cpu(&vsb_raw->apfs_total_blocks_freed, 1);
 		return 0;
 	case APFS_QUERY_FREE_QUEUE:
-		err = apfs_cpoint_data_free(sb, bno);
-		if (err) {
-			apfs_err(sb, "failed to free checkpoint block 0x%llx", bno);
-			return err;
+		eph_info_end = &nxi->nx_eph_list[nxi->nx_eph_count];
+		eph_info = apfs_ephemeral_object_lookup(sb, node->object.oid);
+		if (IS_ERR(eph_info)) {
+			apfs_alert(sb, "can't find ephemeral object to delete");
+			return PTR_ERR(eph_info);
 		}
-		err = apfs_remove_cpoint_map(sb, bno);
-		if (err) {
-			apfs_err(sb, "checkpoint map removal failed (0x%llx)", bno);
-			return err;
-		}
+		kfree(eph_info->object);
+		eph_info->object = NULL;
+		memmove(eph_info, eph_info + 1, (char *)eph_info_end - (char *)(eph_info + 1));
+		eph_info_end->object = NULL;
+		--nxi->nx_eph_count;
 		return 0;
 	default:
 		apfs_alert(sb, "new query type must implement node deletion (%d)", type);
@@ -538,9 +571,10 @@ void apfs_update_node(struct apfs_node *node)
 	if (!free_head->len)
 		free_head->off = cpu_to_le16(APFS_BTOFF_INVALID);
 
-	(void)bh;
-	ASSERT(buffer_trans(bh));
-	ASSERT(buffer_csum(bh));
+	if (bh) {
+		ASSERT(buffer_trans(bh));
+		ASSERT(buffer_csum(bh));
+	}
 }
 
 /**
@@ -1193,6 +1227,7 @@ static int apfs_node_temp_dup(const struct apfs_node *original, struct apfs_node
 	*dup = *original;
 	dup->object.o_bh = NULL;
 	dup->object.data = NULL;
+	dup->object.ephemeral = false;
 
 	buffer = kmalloc(sb->s_blocksize, GFP_KERNEL);
 	if (!buffer) {

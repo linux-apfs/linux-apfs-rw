@@ -86,9 +86,9 @@ static int apfs_read_spaceman_dev(struct super_block *sb,
 	spaceman->sm_free_count = le64_to_cpu(dev->sm_free_count);
 	spaceman->sm_addr_offset = le32_to_cpu(dev->sm_addr_offset);
 
-	/* Check that all the cib addresses fit in the spaceman block */
+	/* Check that all the cib addresses fit in the spaceman object */
 	if ((long long)spaceman->sm_addr_offset +
-	    (long long)spaceman->sm_cib_count * sizeof(u64) > sb->s_blocksize) {
+	    (long long)spaceman->sm_cib_count * sizeof(u64) > spaceman->sm_size) {
 		apfs_err(sb, "too many cibs (%u)", spaceman->sm_cib_count);
 		return -EFSCORRUPTED;
 	}
@@ -108,9 +108,9 @@ static __le16 *apfs_spaceman_get_16(struct super_block *sb, size_t off)
 	struct apfs_spaceman *spaceman = APFS_SM(sb);
 	struct apfs_spaceman_phys *sm_raw = spaceman->sm_raw;
 
-	if (off > sb->s_blocksize)
+	if (off > spaceman->sm_size)
 		return NULL;
-	if (off + sizeof(__le16) > sb->s_blocksize)
+	if (off + sizeof(__le16) > spaceman->sm_size)
 		return NULL;
 	return (void *)sm_raw + off;
 }
@@ -127,9 +127,9 @@ static __le64 *apfs_spaceman_get_64(struct super_block *sb, size_t off)
 	struct apfs_spaceman *spaceman = APFS_SM(sb);
 	struct apfs_spaceman_phys *sm_raw = spaceman->sm_raw;
 
-	if (off > sb->s_blocksize)
+	if (off > spaceman->sm_size)
 		return NULL;
-	if (off + sizeof(__le64) > sb->s_blocksize)
+	if (off + sizeof(__le64) > spaceman->sm_size)
 		return NULL;
 	return (void *)sm_raw + off;
 }
@@ -164,15 +164,15 @@ static int apfs_update_ip_bm_free_next(struct super_block *sb)
 	struct apfs_spaceman *spaceman = APFS_SM(sb);
 	struct apfs_spaceman_phys *raw = spaceman->sm_raw;
 	u32 free_next_off = le32_to_cpu(raw->sm_ip_bm_free_next_offset);
-	int bmap_count = le32_to_cpu(raw->sm_ip_bm_block_count);
+	int bmap_count = le32_to_cpu(raw->sm_ip_bm_block_count); /* TODO: this can overflow! */
 	__le16 *free_next;
 	int i;
 
-	if (free_next_off > sb->s_blocksize) {
+	if (free_next_off > spaceman->sm_size) {
 		apfs_err(sb, "offset out of bounds (%u)", free_next_off);
 		return -EFSCORRUPTED;
 	}
-	if (free_next_off + bmap_count * sizeof(*free_next) > sb->s_blocksize) {
+	if (free_next_off + bmap_count * sizeof(*free_next) > spaceman->sm_size) {
 		apfs_err(sb, "free next out of bounds (%u-%u)", free_next_off, bmap_count * (u32)sizeof(*free_next));
 		return -EFSCORRUPTED;
 	}
@@ -532,8 +532,6 @@ static int apfs_flush_free_queue(struct super_block *sb, unsigned int qid)
 			break;
 	}
 
-	set_buffer_csum(sm->sm_bh);
-
 fail:
 	apfs_node_free(fq_root);
 	return err;
@@ -588,7 +586,7 @@ int apfs_read_spaceman(struct super_block *sb)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
 	struct apfs_spaceman *spaceman = NULL;
-	struct buffer_head *sm_bh;
+	struct apfs_ephemeral_object_info *sm_eph_info = NULL;
 	struct apfs_spaceman_phys *sm_raw;
 	u32 sm_flags;
 	u64 oid = le64_to_cpu(raw_sb->nx_spaceman_oid);
@@ -597,12 +595,13 @@ int apfs_read_spaceman(struct super_block *sb)
 	if (sb->s_flags & SB_RDONLY) /* The space manager won't be needed */
 		return 0;
 
-	sm_bh = apfs_read_ephemeral_object(sb, oid);
-	if (IS_ERR(sm_bh)) {
-		apfs_err(sb, "ephemeral read failed for oid 0x%llx", oid);
-		return PTR_ERR(sm_bh);
+	sm_eph_info = apfs_ephemeral_object_lookup(sb, oid);
+	if (IS_ERR(sm_eph_info)) {
+		apfs_err(sb, "no spaceman object for oid 0x%llx", oid);
+		return PTR_ERR(sm_eph_info);
 	}
-	sm_raw = (struct apfs_spaceman_phys *)sm_bh->b_data;
+	sm_raw = (struct apfs_spaceman_phys *)sm_eph_info->object;
+	sm_raw->sm_o.o_xid = cpu_to_le64(nxi->nx_xid);
 
 	spaceman = apfs_allocate_spaceman(sb, le32_to_cpu(sm_raw->sm_ip_bm_size_in_blocks));
 	if (IS_ERR(spaceman)) {
@@ -610,6 +609,8 @@ int apfs_read_spaceman(struct super_block *sb)
 		err = PTR_ERR(spaceman);
 		goto fail;
 	}
+	spaceman->sm_raw = sm_raw;
+	spaceman->sm_size = sm_eph_info->size;
 
 	spaceman->sm_free_cache_base = spaceman->sm_free_cache_blkcnt = 0;
 
@@ -634,8 +635,6 @@ int apfs_read_spaceman(struct super_block *sb)
 		goto fail;
 	}
 
-	spaceman->sm_bh = sm_bh;
-	spaceman->sm_raw = sm_raw;
 	err = apfs_rotate_ip_bitmaps(sb);
 	if (err) {
 		apfs_err(sb, "failed to rotate ip bitmaps");
@@ -654,8 +653,6 @@ int apfs_read_spaceman(struct super_block *sb)
 	return 0;
 
 fail:
-	brelse(sm_bh);
-	spaceman->sm_bh = sm_bh = NULL;
 	spaceman->sm_raw = NULL;
 	return err;
 }
@@ -857,7 +854,6 @@ int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count)
 	if (!fq->sfq_oldest_xid)
 		fq->sfq_oldest_xid = cpu_to_le64(nxi->nx_xid);
 	le64_add_cpu(&fq->sfq_count, count);
-	set_buffer_csum(sm->sm_bh);
 
 fail:
 	apfs_free_query(query);
@@ -1182,7 +1178,6 @@ int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backward
 			apfs_spaceman_write_cib_addr(sb, index, cib_bh->b_blocknr);
 			/* The free block count has changed */
 			apfs_write_spaceman(sm);
-			set_buffer_csum(sm->sm_bh);
 		}
 		brelse(cib_bh);
 		if (err == -ENOSPC) /* This cib is full */
@@ -1245,7 +1240,6 @@ static int apfs_main_free(struct super_block *sb, u64 bno)
 		apfs_spaceman_write_cib_addr(sb, cib_idx, cib_bh->b_blocknr);
 		/* The free block count has changed */
 		apfs_write_spaceman(sm);
-		set_buffer_csum(sm->sm_bh);
 	}
 	brelse(cib_bh);
 	if (err)

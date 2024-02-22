@@ -589,11 +589,22 @@ int apfs_query_join_transaction(struct apfs_query *query)
 	struct super_block *sb = node->object.sb;
 	u64 oid = node->object.oid;
 	u32 storage = apfs_query_storage(query);
+	struct apfs_obj_phys *raw = NULL;
+
+	/*
+	 * Ephemeral objects are checkpoint data, and all of their xids get
+	 * updated on commit. There is no real need to do it here as well, but
+	 * it's better for consistency with the other object types.
+	 */
+	if (storage == APFS_OBJ_EPHEMERAL) {
+		ASSERT(node->object.ephemeral);
+		raw = (void *)node->object.data;
+		raw->o_xid = cpu_to_le64(APFS_NXI(sb)->nx_xid);
+		return 0;
+	}
 
 	if (buffer_trans(node->object.o_bh)) /* Already in the transaction */
 		return 0;
-	/* Ephemeral objects are always checkpoint data */
-	ASSERT(storage != APFS_OBJ_EPHEMERAL);
 	/* Root nodes should join the transaction before the query is created */
 	ASSERT(!apfs_node_is_root(node));
 

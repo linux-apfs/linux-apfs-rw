@@ -8,354 +8,6 @@
 #include "apfs.h"
 
 /**
- * apfs_cpoint_init_area - Initialize the new blocks of a checkpoint area
- * @sb:		superblock structure
- * @base:	first block of the area
- * @blks:	block count for the area
- * @next:	first block for the new checkpoint
- * @len:	block count for the new checkpoint
- *
- * Copies the blocks belonging to the last checkpoint to the area assigned for
- * the new one, updating their xids, oids and checksums.  Returns 0 on success,
- * or a negative error code in case of failure.
- */
-static int apfs_cpoint_init_area(struct super_block *sb, u64 base, u32 blks,
-				 u32 next, u32 len)
-{
-	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	u32 i;
-
-	for (i = 0; i < len; ++i) {
-		struct buffer_head *new_bh, *old_bh;
-		struct apfs_obj_phys *new_obj;
-		u32 new_index = (next + i) % blks;
-		u32 old_index = (blks + new_index - len) % blks;
-		u32 type;
-		int err;
-
-		new_bh = apfs_getblk(sb, base + new_index);
-		old_bh = apfs_sb_bread(sb, base + old_index);
-		if (!new_bh || !old_bh) {
-			apfs_err(sb, "unable to read the checkpoint areas");
-			brelse(new_bh);
-			brelse(old_bh);
-			return -EINVAL;
-		}
-		memcpy(new_bh->b_data, old_bh->b_data, sb->s_blocksize);
-		brelse(old_bh);
-
-		if (nxi->nx_flags & APFS_CHECK_NODES && !apfs_obj_verify_csum(sb, new_bh)) {
-			apfs_err(sb, "bad checksum for checkpoint area block");
-			brelse(new_bh);
-			return -EFSBADCRC;
-		}
-
-		new_obj = (struct apfs_obj_phys *)new_bh->b_data;
-		type = le32_to_cpu(new_obj->o_type);
-		if ((type & APFS_OBJ_STORAGETYPE_MASK) == APFS_OBJ_PHYSICAL)
-			new_obj->o_oid = cpu_to_le64(new_bh->b_blocknr);
-
-		ASSERT(nxi->nx_xid == le64_to_cpu(new_obj->o_xid) + 1);
-		new_obj->o_xid = cpu_to_le64(nxi->nx_xid);
-		err = apfs_transaction_join(sb, new_bh);
-		if (err) {
-			brelse(new_bh);
-			return err;
-		}
-
-		/* The transaction isn't over, don't commit the superblock */
-		if ((type & APFS_OBJECT_TYPE_MASK) !=
-		    APFS_OBJECT_TYPE_NX_SUPERBLOCK)
-			set_buffer_csum(new_bh);
-
-		new_obj = NULL;
-		brelse(new_bh);
-	}
-	return 0;
-}
-
-/**
- * apfs_cpoint_init_desc - Initialize the descriptor area for a new checkpoint
- * @sb: superblock structure
- *
- * Copies the latest descriptor and mapping blocks into the new checkpoint;
- * updates both the on-disk and in-memory superblocks to refer to the new
- * transaction.  Returns 0 on success, or a negative error code in case of
- * failure.
- */
-static int apfs_cpoint_init_desc(struct super_block *sb)
-{
-	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
-	struct buffer_head *new_sb_bh = NULL;
-	u64 desc_base = le64_to_cpu(raw_sb->nx_xp_desc_base);
-	u32 desc_next = le32_to_cpu(raw_sb->nx_xp_desc_next);
-	u32 desc_blks = le32_to_cpu(raw_sb->nx_xp_desc_blocks);
-	u32 desc_len = le32_to_cpu(raw_sb->nx_xp_desc_len);
-	u32 new_sb_index;
-	int err;
-
-	if (!desc_blks || !desc_len) {
-		apfs_err(sb, "bad checkpoint descriptor area");
-		return -EFSCORRUPTED;
-	}
-
-	err = apfs_cpoint_init_area(sb, desc_base, desc_blks,
-				    desc_next, desc_len);
-	if (err) {
-		apfs_err(sb, "failed to init area");
-		return err;
-	}
-
-	/* Now update the superblock with the new checkpoint */
-
-	new_sb_index = (desc_next + desc_len - 1) % desc_blks;
-	new_sb_bh = apfs_sb_bread(sb, desc_base + new_sb_index);
-	if (!new_sb_bh) {
-		apfs_err(sb, "unable to read the new checkpoint superblock");
-		brelse(new_sb_bh);
-		return -EINVAL;
-	}
-
-	brelse(nxi->nx_object.o_bh);
-	nxi->nx_object.o_bh = new_sb_bh;
-	nxi->nx_object.data = new_sb_bh->b_data;
-	raw_sb = (struct apfs_nx_superblock *)new_sb_bh->b_data;
-	nxi->nx_raw = raw_sb;
-	nxi->nx_object.block_nr = new_sb_bh->b_blocknr;
-
-	ASSERT(nxi->nx_xid == le64_to_cpu(raw_sb->nx_next_xid));
-	ASSERT(buffer_trans(new_sb_bh));
-	raw_sb->nx_next_xid = cpu_to_le64(nxi->nx_xid + 1);
-
-	/* Apparently the previous checkpoint gets invalidated right away */
-	raw_sb->nx_xp_desc_index = cpu_to_le32(desc_next);
-	desc_next = (new_sb_index + 1) % desc_blks;
-	raw_sb->nx_xp_desc_next = cpu_to_le32(desc_next);
-	return 0;
-}
-
-/**
- * apfs_cpoint_init_data - Initialize the data area for a new checkpoint
- * @sb: superblock structure
- *
- * Copies the latest data blocks into the new checkpoint, updating the fields
- * related to this change of location.  Returns 0 on success, or a negative
- * error code in case of failure.
- */
-static int apfs_cpoint_init_data(struct super_block *sb)
-{
-	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
-	u64 data_base = le64_to_cpu(raw_sb->nx_xp_data_base);
-	u32 data_next = le32_to_cpu(raw_sb->nx_xp_data_next);
-	u32 data_blks = le32_to_cpu(raw_sb->nx_xp_data_blocks);
-	u32 data_len = le32_to_cpu(raw_sb->nx_xp_data_len);
-	int err;
-
-	if (!data_blks || !data_len) {
-		apfs_err(sb, "bad checkpoint data area");
-		return -EFSCORRUPTED;
-	}
-
-	err = apfs_cpoint_init_area(sb, data_base, data_blks,
-				    data_next, data_len);
-	if (err) {
-		apfs_err(sb, "failed to init area");
-		return err;
-	}
-
-	/* Apparently the previous checkpoint gets invalidated right away */
-	apfs_assert_in_transaction(sb, &raw_sb->nx_o);
-	raw_sb->nx_xp_data_index = cpu_to_le32(data_next);
-	data_next = (data_next + data_len) % data_blks;
-	raw_sb->nx_xp_data_next = cpu_to_le32(data_next);
-	return 0;
-}
-
-/**
- * apfs_update_mapping - Update a single checkpoint mapping
- * @sb:		superblock structure
- * @map:	checkpoint mapping to update
- *
- * Remaps @map to point to the address of the same ephemeral object in the next
- * checkpoint data area.
- */
-static void apfs_update_mapping(struct super_block *sb,
-				struct apfs_checkpoint_mapping *map)
-{
-	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
-	u64 data_base = le64_to_cpu(raw_sb->nx_xp_data_base);
-	u32 data_blks = le32_to_cpu(raw_sb->nx_xp_data_blocks);
-	u32 data_len = le32_to_cpu(raw_sb->nx_xp_data_len);
-	u64 old_paddr, new_paddr;
-	u32 old_index, new_index;
-
-	old_paddr = le64_to_cpu(map->cpm_paddr);
-	old_index = old_paddr - data_base;
-	new_index = (old_index + data_len) % data_blks;
-	new_paddr = data_base + new_index;
-
-	map->cpm_paddr = cpu_to_le64(new_paddr);
-}
-
-/**
- * apfs_update_mapping_blocks - Update all checkpoint mappings
- * @sb: superblock structure
- *
- * Updates the mappings in the checkpoint descriptor area to point to the
- * address of the ephemeral objects for the new checkpoint.  Returns 0 on
- * success, or a negative error code in case of failure.
- */
-static int apfs_update_mapping_blocks(struct super_block *sb)
-{
-	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
-	u64 desc_base = le64_to_cpu(raw_sb->nx_xp_desc_base);
-	u32 desc_index = le32_to_cpu(raw_sb->nx_xp_desc_index);
-	u32 desc_blks = le32_to_cpu(raw_sb->nx_xp_desc_blocks);
-	u32 desc_len = le32_to_cpu(raw_sb->nx_xp_desc_len);
-	u32 i;
-
-	/* Last block in the area is superblock; the rest are mapping blocks */
-	for (i = 0; i < desc_len - 1; ++i) {
-		struct buffer_head *bh;
-		struct apfs_checkpoint_map_phys *cpm;
-		u32 desc_curr = (desc_index + i) % desc_blks;
-		u32 map_count;
-		int j;
-
-		bh = apfs_sb_bread(sb, desc_base + desc_curr);
-		if (!bh) {
-			apfs_err(sb, "failed to read cpm block");
-			return -EINVAL;
-		}
-		ASSERT(buffer_trans(bh));
-		cpm = (struct apfs_checkpoint_map_phys *)bh->b_data;
-		apfs_assert_in_transaction(sb, &cpm->cpm_o);
-
-		map_count = le32_to_cpu(cpm->cpm_count);
-		if (map_count > apfs_max_maps_per_block(sb)) {
-			apfs_err(sb, "block has too many maps (%d)", map_count);
-			brelse(bh);
-			return -EFSCORRUPTED;
-		}
-
-		for (j = 0; j < map_count; ++j)
-			apfs_update_mapping(sb, &cpm->cpm_map[j]);
-		set_buffer_csum(bh);
-		brelse(bh);
-	}
-	return 0;
-}
-
-/**
- * apfs_cpoint_data_allocate - Allocate a new block in the checkpoint data area
- * @sb:		superblock structure
- * @bno:	on return, the allocated block number
- */
-void apfs_cpoint_data_allocate(struct super_block *sb, u64 *bno)
-{
-	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
-	u64 data_base = le64_to_cpu(raw_sb->nx_xp_data_base);
-	u32 data_next = le32_to_cpu(raw_sb->nx_xp_data_next);
-	u32 data_blks = le32_to_cpu(raw_sb->nx_xp_data_blocks);
-	u32 data_len = le32_to_cpu(raw_sb->nx_xp_data_len);
-
-	*bno = data_base + data_next;
-	data_next = (data_next + 1) % data_blks;
-	data_len++;
-
-	apfs_assert_in_transaction(sb, &raw_sb->nx_o);
-	raw_sb->nx_xp_data_next = cpu_to_le32(data_next);
-	raw_sb->nx_xp_data_len = cpu_to_le32(data_len);
-}
-
-/**
- * apfs_cpoint_data_free - Free a block in the checkpoint data area
- * @sb:		superblock structure
- * @bno:	block number to free
- *
- * Returns 0 on sucess, or a negative error code in case of failure.
- */
-int apfs_cpoint_data_free(struct super_block *sb, u64 bno)
-{
-	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
-	u32 data_next = le32_to_cpu(raw_sb->nx_xp_data_next);
-	u32 data_blks = le32_to_cpu(raw_sb->nx_xp_data_blocks);
-	u32 data_len = le32_to_cpu(raw_sb->nx_xp_data_len);
-	u32 i, bno_i;
-
-	/*
-	 * We can't leave a hole in the data area, so we need to shift all
-	 * blocks that come after @bno one position back.
-	 */
-	bno_i = apfs_index_in_data_area(sb, bno);
-	for (i = bno_i; i < data_len - 1; ++i) {
-		struct buffer_head *old_bh, *new_bh;
-		int err;
-
-		new_bh = apfs_getblk(sb, apfs_data_index_to_bno(sb, i));
-		old_bh = apfs_sb_bread(sb, apfs_data_index_to_bno(sb, i + 1));
-		if (!new_bh || !old_bh) {
-			apfs_err(sb, "failed to map blocks in data area");
-			brelse(new_bh);
-			brelse(old_bh);
-			return -EIO;
-		}
-		/* I could also just remap the buffer heads... */
-		memcpy(new_bh->b_data, old_bh->b_data, sb->s_blocksize);
-
-		brelse(old_bh);
-		err = apfs_transaction_join(sb, new_bh); /* Not really needed */
-		brelse(new_bh);
-		if (err)
-			return err;
-	}
-
-	data_next = (data_blks + data_next - 1) % data_blks;
-	data_len--;
-
-	apfs_assert_in_transaction(sb, &raw_sb->nx_o);
-	raw_sb->nx_xp_data_next = cpu_to_le32(data_next);
-	raw_sb->nx_xp_data_len = cpu_to_le32(data_len);
-	return 0;
-}
-
-/**
- * apfs_checkpoint_start - Start the checkpoint for a new transaction
- * @sb:	superblock structure
- *
- * Sets the descriptor and data areas for a new checkpoint.  Returns 0 on
- * success, or a negative error code in case of failure.
- */
-static int apfs_checkpoint_start(struct super_block *sb)
-{
-	int err;
-
-	ASSERT(!(sb->s_flags & SB_RDONLY));
-
-	err = apfs_cpoint_init_desc(sb);
-	if (err) {
-		apfs_err(sb, "failed to init descriptor area");
-		return err;
-	}
-	err = apfs_cpoint_init_data(sb);
-	if (err) {
-		apfs_err(sb, "failed to init data area");
-		return err;
-	}
-	err = apfs_update_mapping_blocks(sb);
-	if (err)
-		apfs_err(sb, "failed to update checkpoint mappings");
-
-	return err;
-}
-
-/**
  * apfs_checkpoint_end - End the new checkpoint
  * @sb:	filesystem superblock
  *
@@ -367,24 +19,36 @@ static int apfs_checkpoint_end(struct super_block *sb)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_obj_phys *obj = &nxi->nx_raw->nx_o;
-	struct buffer_head *bh = nxi->nx_object.o_bh;
+	struct buffer_head *bh = NULL;
 	struct inode *bdev_inode = nxi->nx_bdev->bd_inode;
 	struct address_space *bdev_map = bdev_inode->i_mapping;
 	int err;
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 
+	bh = apfs_getblk(sb, nxi->nx_bno);
+	if (!bh) {
+		apfs_err(sb, "failed to map new checkpoint superblock");
+		return -EIO;
+	}
+	obj->o_xid = cpu_to_le64(nxi->nx_xid);
+	apfs_obj_set_csum(sb, obj);
+	memcpy(bh->b_data, obj, sb->s_blocksize);
+
 	err = filemap_write_and_wait(bdev_map);
 	if (err)
-		return err;
+		goto out;
 
-	apfs_obj_set_csum(sb, obj);
 	mark_buffer_dirty(bh);
 	err = sync_dirty_buffer(bh);
 	if (err)
-		return err;
+		goto out;
 
-	return filemap_write_and_wait(bdev_map);
+	err = filemap_write_and_wait(bdev_map);
+out:
+	brelse(bh);
+	bh = NULL;
+	return err;
 }
 
 /**
@@ -424,6 +88,181 @@ static bool apfs_transaction_has_room(struct super_block *sb, struct apfs_max_op
 }
 
 /**
+ * apfs_read_single_ephemeral_object - Read a single ephemeral object to memory
+ * @sb:		filesystem superblock
+ * @map:	checkpoint mapping for the object
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_read_single_ephemeral_object(struct super_block *sb, struct apfs_checkpoint_mapping *map)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_ephemeral_object_info *list = NULL;
+	struct buffer_head *bh = NULL;
+	char *object = NULL;
+	int count;
+	u32 size;
+	u64 bno, oid;
+	int err, i;
+
+	list = nxi->nx_eph_list;
+	count = nxi->nx_eph_count;
+	if (count >= APFS_EPHEMERAL_LIST_LIMIT) {
+		apfs_err(sb, "too many ephemeral objects?");
+		return -EOPNOTSUPP;
+	}
+
+	bno = le64_to_cpu(map->cpm_paddr);
+	oid = le64_to_cpu(map->cpm_oid);
+	size = le32_to_cpu(map->cpm_size);
+	if (size > sb->s_blocksize << 1) {
+		/*
+		 * No reason not to support bigger objects, but there has to be
+		 * a limit somewhere and this is all I've seen so far.
+		 */
+		apfs_warn(sb, "ephemeral object has more than 2 blocks");
+		return -EOPNOTSUPP;
+	}
+	if (!size || (size & (sb->s_blocksize - 1))) {
+		apfs_err(sb, "invalid object size (0x%x)", size);
+		return -EFSCORRUPTED;
+	}
+	object = kmalloc(size, GFP_KERNEL);
+	if (!object)
+		return -ENOMEM;
+
+	for (i = 0; i < size >> sb->s_blocksize_bits; ++i) {
+		bh = apfs_sb_bread(sb, bno + i);
+		if (!bh) {
+			apfs_err(sb, "failed to read ephemeral block");
+			err = -EIO;
+			goto fail;
+		}
+		memcpy(object + (i << sb->s_blocksize_bits), bh->b_data, sb->s_blocksize);
+		brelse(bh);
+		bh = NULL;
+	}
+
+	/*
+	 * The official reference requires that we always verify ephemeral
+	 * checksums on mount, so do it even if the user didn't ask. We should
+	 * actually try to mount an older checkpoint when this fails (TODO),
+	 * which I guess means that the official driver writes all checkpoint
+	 * blocks at once, instead of leaving the superblock for last like we
+	 * do.
+	 */
+	if (!apfs_multiblock_verify_csum(object, size)) {
+		apfs_err(sb, "bad checksum for ephemeral object 0x%llx", oid);
+		err = -EFSBADCRC;
+		goto fail;
+	}
+
+	list[count].oid = oid;
+	list[count].size = size;
+	list[count].object = object;
+	object = NULL;
+	nxi->nx_eph_count = count + 1;
+	return 0;
+
+fail:
+	kfree(object);
+	object = NULL;
+	return err;
+}
+
+/**
+ * apfs_read_single_cpm_block - Read all ephemeral objects in a cpm block
+ * @sb:		filesystem superblock
+ * @cpm_bno:	block number for the cpm block
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_read_single_cpm_block(struct super_block *sb, u64 cpm_bno)
+{
+	struct buffer_head *bh = NULL;
+	struct apfs_checkpoint_map_phys *cpm = NULL;
+	u32 map_count;
+	int err, i;
+
+	bh = apfs_sb_bread(sb, cpm_bno);
+	if (!bh) {
+		apfs_err(sb, "failed to read cpm block");
+		return -EIO;
+	}
+	if (!apfs_obj_verify_csum(sb, bh)) {
+		/*
+		 * The reference seems to imply that we need to check these on
+		 * mount, and retry an older checkpoint on failure (TODO).
+		 */
+		apfs_err(sb, "bad checksum for cpm block at 0x%llx", cpm_bno);
+		err = -EFSBADCRC;
+		goto out;
+	}
+	cpm = (struct apfs_checkpoint_map_phys *)bh->b_data;
+
+	map_count = le32_to_cpu(cpm->cpm_count);
+	if (map_count > apfs_max_maps_per_block(sb)) {
+		apfs_err(sb, "block has too many maps (%d)", map_count);
+		err = -EFSCORRUPTED;
+		goto out;
+	}
+
+	for (i = 0; i < map_count; ++i) {
+		err = apfs_read_single_ephemeral_object(sb, &cpm->cpm_map[i]);
+		if (err) {
+			apfs_err(sb, "failed to read ephemeral object %u", i);
+			goto out;
+		}
+	}
+
+out:
+	brelse(bh);
+	cpm = NULL;
+	return err;
+}
+
+/**
+ * apfs_read_ephemeral_objects - Read all ephemeral objects to memory
+ * @sb:	superblock structure
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_read_ephemeral_objects(struct super_block *sb)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
+	u64 desc_base;
+	u32 desc_index, desc_blks, desc_len, i;
+	int err;
+
+	if (nxi->nx_eph_list) {
+		apfs_alert(sb, "attempt to reread ephemeral object list");
+		return -EFSCORRUPTED;
+	}
+	nxi->nx_eph_list = kzalloc(APFS_EPHEMERAL_LIST_SIZE, GFP_KERNEL);
+	if (!nxi->nx_eph_list)
+		return -ENOMEM;
+	nxi->nx_eph_count = 0;
+
+	desc_base = le64_to_cpu(raw_sb->nx_xp_desc_base);
+	desc_index = le32_to_cpu(raw_sb->nx_xp_desc_index);
+	desc_blks = le32_to_cpu(raw_sb->nx_xp_desc_blocks);
+	desc_len = le32_to_cpu(raw_sb->nx_xp_desc_len);
+
+	/* Last block in the area is superblock; the rest are mapping blocks */
+	for (i = 0; i < desc_len - 1; ++i) {
+		u64 cpm_bno = desc_base + (desc_index + i) % desc_blks;
+
+		err = apfs_read_single_cpm_block(sb, cpm_bno);
+		if (err) {
+			apfs_err(sb, "failed to read cpm block %u", i);
+			return err;
+		}
+	}
+	return 0;
+}
+
+/**
  * apfs_transaction_start - Begin a new transaction
  * @sb:		superblock structure
  * @maxops:	maximum operations expected
@@ -449,23 +288,26 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 		return -EROFS;
 	}
 
-	/* TODO: rethink this now that transactions shouldn't fail */
-	if (!nx_trans->t_old_msb) {
-		/* Backup the old superblock buffers in case the transaction fails */
-		nx_trans->t_old_msb = nxi->nx_object.o_bh;
-		get_bh(nx_trans->t_old_msb);
+	/*
+	 * Ephemeral objects are read only once, kept in memory, and committed
+	 * to disk along with each transaction.
+	 */
+	if (!nxi->nx_eph_list) {
+		err = apfs_read_ephemeral_objects(sb);
+		if (err) {
+			mutex_unlock(&nxs_mutex);
+			up_write(&nxi->nx_big_sem);
+			apfs_err(sb, "failed to read the ephemeral objects");
+			return err;
+		}
+	}
 
+	if (nx_trans->t_starts_count == 0) {
 		++nxi->nx_xid;
+		nxi->nx_raw->nx_next_xid = cpu_to_le64(nxi->nx_xid + 1);
+
 		INIT_LIST_HEAD(&nx_trans->t_inodes);
 		INIT_LIST_HEAD(&nx_trans->t_buffers);
-		nx_trans->t_buffers_count = 0;
-		nx_trans->t_starts_count = 0;
-
-		err = apfs_checkpoint_start(sb);
-		if (err) {
-			apfs_err(sb, "failed to start a new checkpoint");
-			goto fail;
-		}
 
 		err = apfs_read_spaceman(sb);
 		if (err) {
@@ -538,7 +380,6 @@ int apfs_transaction_flush_all_inodes(struct super_block *sb)
 	int err = 0, curr_err;
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
-	ASSERT(nx_trans->t_old_msb);
 
 	while (!list_empty(&nx_trans->t_inodes)) {
 		struct apfs_inode_info *ai = NULL;
@@ -581,6 +422,173 @@ int apfs_transaction_flush_all_inodes(struct super_block *sb)
 }
 
 /**
+ * apfs_write_single_ephemeral_object - Write a single ephemeral object to bh's
+ * @sb:		filesystem superblock
+ * @obj_raw:	contents of the object
+ * @map:	checkpoint mapping for the object, already updated
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_write_single_ephemeral_object(struct super_block *sb, struct apfs_obj_phys *obj_raw, const struct apfs_checkpoint_mapping *map)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct buffer_head *bh = NULL;
+	u64 bno;
+	u32 size;
+	int err, i;
+
+	bno = le64_to_cpu(map->cpm_paddr);
+	size = le32_to_cpu(map->cpm_size);
+	obj_raw->o_xid = cpu_to_le64(nxi->nx_xid);
+	apfs_multiblock_set_csum((char *)obj_raw, size);
+
+	for (i = 0; i < size >> sb->s_blocksize_bits; ++i) {
+		bh = apfs_getblk(sb, bno + i);
+		if (!bh) {
+			apfs_err(sb, "failed to map ephemeral block");
+			return -EIO;
+		}
+		err = apfs_transaction_join(sb, bh);
+		if (err) {
+			brelse(bh);
+			bh = NULL;
+			return err;
+		}
+		memcpy(bh->b_data, (char *)obj_raw + (i << sb->s_blocksize_bits), sb->s_blocksize);
+		brelse(bh);
+		bh = NULL;
+	}
+	return 0;
+}
+
+/**
+ * apfs_write_ephemeral_objects - Write all ephemeral objects to bh's
+ * @sb: filesystem superblock
+ *
+ * Returns 0 on sucess, or a negative error code in case of failure.
+ */
+static int apfs_write_ephemeral_objects(struct super_block *sb)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
+	struct apfs_checkpoint_map_phys *cpm = NULL;
+	struct buffer_head *cpm_bh = NULL;
+	struct apfs_ephemeral_object_info *eph_info = NULL;
+	u64 cpm_bno;
+	u64 desc_base, data_base;
+	u32 desc_index, desc_blks, desc_len, desc_next;
+	u32 data_index, data_blks, data_len, data_next;
+	u32 desc_limit, data_limit;
+	u32 obj_blkcnt;
+	int err, i, cpm_start;
+
+	if (!nxi->nx_eph_list) {
+		apfs_alert(sb, "missing ephemeral object list");
+		return -EFSCORRUPTED;
+	}
+
+	desc_next = le32_to_cpu(raw_sb->nx_xp_desc_next);
+	desc_base = le64_to_cpu(raw_sb->nx_xp_desc_base);
+	desc_index = desc_next; /* New checkpoint */
+	desc_blks = le32_to_cpu(raw_sb->nx_xp_desc_blocks);
+	desc_len = 0; /* For now */
+
+	data_next = le32_to_cpu(raw_sb->nx_xp_data_next);
+	data_base = le64_to_cpu(raw_sb->nx_xp_data_base);
+	data_index = data_next; /* New checkpoint */
+	data_blks = le32_to_cpu(raw_sb->nx_xp_data_blocks);
+	data_len = 0; /* For now */
+
+	/*
+	 * The reference doesn't mention anything about this, but I need to
+	 * put some sort of a limit or else the rings could wrap around and
+	 * corrupt themselves.
+	 */
+	desc_limit = desc_blks >> 2;
+	data_limit = data_blks >> 2;
+
+	for (i = 0; i < nxi->nx_eph_count; ++i) {
+		if (data_len == data_limit) {
+			apfs_err(sb, "too many checkpoint data blocks");
+			return -EFSCORRUPTED;
+		}
+
+		if (!cpm) {
+			cpm_start = i;
+			if (desc_len == desc_limit) {
+				apfs_err(sb, "too many checkpoint descriptor blocks");
+				return -EFSCORRUPTED;
+			}
+			cpm_bno = desc_base + (desc_index + desc_len) % desc_blks;
+			err = apfs_create_cpm_block(sb, cpm_bno, &cpm_bh);
+			if (err) {
+				apfs_err(sb, "failed to create cpm block");
+				return err;
+			}
+			cpm = (void *)cpm_bh->b_data;
+			desc_len += 1;
+		}
+
+		eph_info = &nxi->nx_eph_list[i];
+		data_next = (data_index + data_len) % data_blks;
+		obj_blkcnt = eph_info->size >> sb->s_blocksize_bits;
+		if (obj_blkcnt > data_blks - data_next) {
+			/*
+			 * This multiblock object does not fit in what's left
+			 * of the ring buffer, so move it to the beginning and
+			 * leave some empty blocks.
+			 */
+			data_len += data_blks - data_next;
+			data_next = 0;
+		}
+
+		err = apfs_create_cpoint_map(sb, cpm, eph_info->object, data_base + data_next, eph_info->size);
+		if (err) {
+			if (err == -ENOSPC)
+				cpm->cpm_flags = 0; /* No longer the last */
+			brelse(cpm_bh);
+			cpm = NULL;
+			cpm_bh = NULL;
+			if (err == -ENOSPC) {
+				--i;
+				continue;
+			}
+			apfs_err(sb, "failed to create cpm map %d", i);
+			return err;
+		}
+		err = apfs_write_single_ephemeral_object(sb, eph_info->object, &cpm->cpm_map[i - cpm_start]);
+		if (err) {
+			brelse(cpm_bh);
+			cpm = NULL;
+			cpm_bh = NULL;
+			apfs_err(sb, "failed to write ephemeral object %d", i);
+			return err;
+		}
+		data_len += obj_blkcnt;
+	}
+
+	/*
+	 * The checkpoint superblock can't be set until the very end of the
+	 * transaction commit, but allocate its block here already.
+	 */
+	nxi->nx_bno = desc_base + (desc_index + desc_len) % desc_blks;
+	desc_len += 1;
+
+	desc_next = (desc_index + desc_len) % desc_blks;
+	data_next = (data_index + data_len) % data_blks;
+
+	raw_sb->nx_xp_desc_next = cpu_to_le32(desc_next);
+	raw_sb->nx_xp_desc_index = cpu_to_le32(desc_index);
+	raw_sb->nx_xp_desc_len = cpu_to_le32(desc_len);
+
+	raw_sb->nx_xp_data_next = cpu_to_le32(data_next);
+	raw_sb->nx_xp_data_index = cpu_to_le32(data_index);
+	raw_sb->nx_xp_data_len = cpu_to_le32(data_len);
+
+	return 0;
+}
+
+/**
  * apfs_transaction_commit_nx - Definitely commit the current transaction
  * @sb: superblock structure
  */
@@ -595,7 +603,6 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	u32 bmap_idx;
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
-	ASSERT(nx_trans->t_old_msb);
 
 	/* Before committing the bhs, write all inode metadata to them */
 	err = apfs_transaction_flush_all_inodes(sb);
@@ -606,7 +613,8 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 
 	/*
 	 * Now that nothing else will be freed, flush the last update to the
-	 * free queues so that it can be committed to disk with the other bhs
+	 * free queues so that it can be committed to disk along with all the
+	 * ephemeral objects.
 	 */
 	if (sm->sm_free_cache_base) {
 		err = apfs_free_queue_insert_nocache(sb, sm->sm_free_cache_base, sm->sm_free_cache_blkcnt);
@@ -616,6 +624,9 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		}
 		sm->sm_free_cache_base = sm->sm_free_cache_blkcnt = 0;
 	}
+	err = apfs_write_ephemeral_objects(sb);
+	if (err)
+		return err;
 
 	list_for_each_entry(bhi, &nx_trans->t_buffers, list) {
 		struct buffer_head *bh = bhi->bh;
@@ -681,10 +692,6 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		return err;
 	}
 
-	/* Success: forget the old container and volume superblocks */
-	brelse(nx_trans->t_old_msb);
-	nx_trans->t_old_msb = NULL;
-
 	list_for_each_entry(sbi, &nxi->vol_list, list) {
 		struct apfs_vol_transaction *vol_trans = &sbi->s_transaction;
 
@@ -707,8 +714,10 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		brelse(APFS_SM(sb)->sm_ip_bmaps[bmap_idx]);
 		APFS_SM(sb)->sm_ip_bmaps[bmap_idx] = NULL;
 	}
-	brelse(APFS_SM(sb)->sm_bh);
-	APFS_SM(sb)->sm_bh = NULL;
+	APFS_SM(sb)->sm_raw = NULL;
+
+	nx_trans->t_starts_count = 0;
+	nx_trans->t_buffers_count = 0;
 	return 0;
 }
 
@@ -814,7 +823,6 @@ void apfs_inode_join_transaction(struct super_block *sb, struct inode *inode)
 	struct apfs_inode_info *ai = APFS_I(inode);
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
-	ASSERT(nx_trans->t_old_msb);
 	lockdep_assert_held_write(&nxi->nx_big_sem);
 
 	if (!list_empty(&ai->i_list)) /* Already in the transaction */
@@ -836,7 +844,6 @@ int apfs_transaction_join(struct super_block *sb, struct buffer_head *bh)
 	struct apfs_bh_info *bhi;
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
-	ASSERT(nx_trans->t_old_msb);
 	lockdep_assert_held_write(&nxi->nx_big_sem);
 
 	if (buffer_trans(bh)) /* Already part of the only transaction */
@@ -892,7 +899,6 @@ void apfs_transaction_abort(struct super_block *sb)
 
 	if (sb->s_flags & SB_RDONLY) {
 		/* Transaction already aborted, do nothing */
-		ASSERT(!nx_trans->t_old_msb);
 		ASSERT(list_empty(&nx_trans->t_inodes));
 		ASSERT(list_empty(&nx_trans->t_buffers));
 		mutex_unlock(&nxs_mutex);
@@ -900,7 +906,6 @@ void apfs_transaction_abort(struct super_block *sb)
 		return;
 	}
 
-	ASSERT(nx_trans->t_old_msb);
 	nx_trans->t_state = 0;
 	apfs_err(sb, "aborting transaction");
 
@@ -919,14 +924,10 @@ void apfs_transaction_abort(struct super_block *sb)
 		kfree(bhi);
 	}
 
-	/* Restore the old container superblock */
-	brelse(nxi->nx_object.o_bh);
-	nxi->nx_object.o_bh = nx_trans->t_old_msb;
-	nxi->nx_object.data = nxi->nx_object.o_bh->b_data;
-	nxi->nx_object.block_nr = nx_trans->t_old_msb->b_blocknr;
-	nxi->nx_raw = (void *)nx_trans->t_old_msb->b_data;
-	nx_trans->t_old_msb = NULL;
-
+	/*
+	 * TODO: get rid of all this stuff, it makes little sense. Maybe do an
+	 * actual read-only remount?
+	 */
 	list_for_each_entry(sbi, &nxi->vol_list, list) {
 		struct apfs_vol_transaction *vol_trans = &sbi->s_transaction;
 
@@ -958,8 +959,7 @@ void apfs_transaction_abort(struct super_block *sb)
 			brelse(sm->sm_ip_bmaps[bmap_idx]);
 			sm->sm_ip_bmaps[bmap_idx] = NULL;
 		}
-		brelse(sm->sm_bh);
-		sm->sm_bh = NULL;
+		APFS_SM(sb)->sm_raw = NULL;
 	}
 
 	/*

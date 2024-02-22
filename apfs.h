@@ -64,6 +64,7 @@ struct apfs_object {
 	 */
 	struct buffer_head *o_bh;
 	char *data; /* The raw object */
+	bool ephemeral; /* Is this an ephemeral object? */
 };
 
 /* Constants used in managing the size of a node's table of contents */
@@ -121,8 +122,8 @@ static inline bool apfs_node_has_fixed_kv_size(struct apfs_node *node)
  */
 struct apfs_spaceman {
 	struct apfs_spaceman_phys *sm_raw; /* On-disk spaceman structure */
-	struct buffer_head	  *sm_bh;  /* Buffer head for @sm_raw */
 	struct apfs_nxsb_info	  *sm_nxi; /* Container superblock */
+	u32			  sm_size; /* Size of @sm_raw in bytes */
 
 	u32 sm_blocks_per_chunk;	/* Blocks covered by a bitmap block */
 	u32 sm_chunks_per_cib;		/* Chunk count in a chunk-info block */
@@ -163,7 +164,6 @@ struct apfs_spaceman {
  * Structure that keeps track of a container transaction.
  */
 struct apfs_nx_transaction {
-	struct buffer_head *t_old_msb;  /* Main superblock being replaced */
 	unsigned int t_state;
 
 	struct list_head t_inodes;	/* List of inodes in the transaction */
@@ -204,6 +204,23 @@ struct apfs_max_ops {
 	int blks;	/* Maximum extent blocks that may need changing */
 };
 
+/*
+ * List entry for an in-memory ephemeral object
+ */
+struct apfs_ephemeral_object_info {
+	u64	oid;		/* Ephemeral object id */
+	u32	size;		/* Size of the object in bytes */
+	void	*object;	/* In-memory address of the object */
+};
+
+/*
+ * We allocate a fixed space for the list of ephemeral objects. I don't
+ * actually know how big this should be allowed to get, but all the objects
+ * must be written down with each transaction commit, so probably not too big.
+ */
+#define APFS_EPHEMERAL_LIST_SIZE	32768
+#define APFS_EPHEMERAL_LIST_LIMIT	(APFS_EPHEMERAL_LIST_SIZE / sizeof(struct apfs_ephemeral_object_info))
+
 /* Mount option flags for a container */
 #define APFS_CHECK_NODES	1
 #define APFS_READWRITE		2
@@ -214,8 +231,12 @@ struct apfs_max_ops {
 struct apfs_nxsb_info {
 	struct block_device *nx_bdev; /* Device for the container */
 	struct apfs_nx_superblock *nx_raw; /* On-disk main sb */
-	struct apfs_object nx_object; /* Main superblock object */
+	u64 nx_bno; /* Current block number for the checkpoint superblock */
 	u64 nx_xid; /* Latest transaction id */
+
+	/* List of ephemeral objects in memory (except the superblock) */
+	struct apfs_ephemeral_object_info *nx_eph_list;
+	int nx_eph_count;
 
 	struct list_head vol_list;	/* List of mounted volumes in container */
 
@@ -1017,12 +1038,12 @@ extern int apfs_make_empty_btree_root(struct super_block *sb, u32 subtype, u64 *
 
 /* object.c */
 extern int apfs_obj_verify_csum(struct super_block *sb, struct buffer_head *bh);
-extern void apfs_obj_set_csum(struct super_block *sb,
-			      struct apfs_obj_phys *obj);
-extern int apfs_create_cpoint_map(struct super_block *sb, u64 oid, u64 bno);
-extern int apfs_remove_cpoint_map(struct super_block *sb, u64 bno);
-extern struct buffer_head *apfs_read_ephemeral_object(struct super_block *sb,
-						      u64 oid);
+extern void apfs_obj_set_csum(struct super_block *sb, struct apfs_obj_phys *obj);
+extern int apfs_multiblock_verify_csum(char *object, u32 size);
+extern void apfs_multiblock_set_csum(char *object, u32 size);
+extern int apfs_create_cpm_block(struct super_block *sb, u64 bno, struct buffer_head **bh_p);
+extern int apfs_create_cpoint_map(struct super_block *sb, struct apfs_checkpoint_map_phys *cpm, struct apfs_obj_phys *obj, u64 bno, u32 size);
+extern struct apfs_ephemeral_object_info *apfs_ephemeral_object_lookup(struct super_block *sb, u64 oid);
 extern struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool write, bool preserve);
 extern u32 apfs_index_in_data_area(struct super_block *sb, u64 bno);
 extern u64 apfs_data_index_to_bno(struct super_block *sb, u32 index);
@@ -1046,7 +1067,6 @@ extern int apfs_read_catalog(struct super_block *sb, bool write);
 extern int apfs_sync_fs(struct super_block *sb, int wait);
 
 /* transaction.c */
-extern void apfs_cpoint_data_allocate(struct super_block *sb, u64 *bno);
 extern int apfs_cpoint_data_free(struct super_block *sb, u64 bno);
 extern int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops);
 extern int apfs_transaction_commit(struct super_block *sb);

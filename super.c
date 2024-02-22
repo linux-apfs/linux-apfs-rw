@@ -155,13 +155,13 @@ out_unlock:
 static int apfs_check_nx_features(struct super_block *sb);
 
 /**
- * apfs_map_main_super - Find the container superblock and map it into memory
+ * apfs_read_main_super - Find the container superblock and read it into memory
  * @sb:	superblock structure
  *
  * Returns a negative error code in case of failure.  On success, returns 0
- * and sets the nx_raw, nx_object and nx_xid fields of APFS_NXI(@sb).
+ * and sets the nx_raw and nx_xid fields of APFS_NXI(@sb).
  */
-static int apfs_map_main_super(struct super_block *sb)
+static int apfs_read_main_super(struct super_block *sb)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct buffer_head *bh;
@@ -230,20 +230,20 @@ static int apfs_map_main_super(struct super_block *sb)
 		desc_bh = NULL;
 	}
 
+	nxi->nx_raw = kmalloc(sb->s_blocksize, GFP_KERNEL);
+	if (!nxi->nx_raw) {
+		err = -ENOMEM;
+		goto fail;
+	}
+	memcpy(nxi->nx_raw, bh->b_data, sb->s_blocksize);
+	nxi->nx_bno = bno;
 	nxi->nx_xid = xid;
-	nxi->nx_raw = msb_raw;
-	nxi->nx_object.sb = sb; /* XXX: these "objects" never made any sense */
-	nxi->nx_object.block_nr = bno;
-	nxi->nx_object.oid = le64_to_cpu(msb_raw->nx_o.o_oid);
-	nxi->nx_object.o_bh = bh;
-	nxi->nx_object.data = bh->b_data;
 
 	/* For now we only support blocksize < PAGE_SIZE */
 	nxi->nx_blocksize = sb->s_blocksize;
 	nxi->nx_blocksize_bits = sb->s_blocksize_bits;
 
-	return apfs_check_nx_features(sb);
-
+	err = apfs_check_nx_features(sb);
 fail:
 	brelse(bh);
 	return err;
@@ -282,18 +282,19 @@ static void apfs_update_software_info(struct super_block *sb)
 static struct file_system_type apfs_fs_type;
 
 /**
- * apfs_unmap_main_super - Clean up apfs_map_main_super()
+ * apfs_free_main_super - Clean up apfs_read_main_super()
  * @sbi:	in-memory superblock info
  *
  * It also cleans up after apfs_attach_nxi(), so the name is no longer accurate.
  */
-static inline void apfs_unmap_main_super(struct apfs_sb_info *sbi)
+static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 {
 	struct apfs_nxsb_info *nxi = sbi->s_nxi;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	fmode_t mode = FMODE_READ | FMODE_EXCL;
 #endif
-	struct apfs_object *obj = NULL;
+	struct apfs_ephemeral_object_info *eph_list = NULL;
+	int i;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	if (nxi->nx_flags & APFS_READWRITE)
@@ -306,11 +307,20 @@ static inline void apfs_unmap_main_super(struct apfs_sb_info *sbi)
 	if (--nxi->nx_refcnt)
 		goto out;
 
-	obj = &nxi->nx_object;
-	obj->data = NULL;
-	brelse(obj->o_bh);
-	obj->o_bh = NULL;
-	obj = NULL;
+	/* Clean up all the ephemeral objects in memory */
+	eph_list = nxi->nx_eph_list;
+	if (eph_list) {
+		for (i = 0; i < nxi->nx_eph_count; ++i) {
+			kfree(eph_list[i].object);
+			eph_list[i].object = NULL;
+		}
+		kfree(eph_list);
+		eph_list = nxi->nx_eph_list = NULL;
+		nxi->nx_eph_count = 0;
+	}
+
+	kfree(nxi->nx_raw);
+	nxi->nx_raw = NULL;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 	blkdev_put(nxi->nx_bdev, &apfs_fs_type);
@@ -715,7 +725,7 @@ fail:
 	mutex_lock(&nxs_mutex);
 	apfs_put_omap(sbi->s_omap);
 	sbi->s_omap = NULL;
-	apfs_unmap_main_super(sbi);
+	apfs_free_main_super(sbi);
 	mutex_unlock(&nxs_mutex);
 
 	sb->s_fs_info = NULL;
@@ -1650,13 +1660,13 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 			goto out_deactivate_super;
 		}
 		/* Only one superblock per volume */
-		apfs_unmap_main_super(sbi);
+		apfs_free_main_super(sbi);
 		kfree(sbi->s_snap_name);
 		sbi->s_snap_name = NULL;
 		kfree(sbi);
 		sbi = NULL;
 	} else {
-		error = apfs_map_main_super(sb);
+		error = apfs_read_main_super(sb);
 		if (error)
 			goto out_deactivate_super;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
@@ -1675,7 +1685,7 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 out_deactivate_super:
 	deactivate_locked_super(sb);
 out_unmap_super:
-	apfs_unmap_main_super(sbi);
+	apfs_free_main_super(sbi);
 out_free_sbi:
 	kfree(sbi->s_snap_name);
 	kfree(sbi);
