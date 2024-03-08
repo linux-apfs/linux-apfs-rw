@@ -804,6 +804,42 @@ static int apfs_key_from_query(struct apfs_query *query, struct apfs_key *key)
 }
 
 /**
+ * apfs_node_prev - Find the previous record in the current node
+ * @sb:		filesystem superblock
+ * @query:	query in execution
+ *
+ * Returns 0 on success, -EAGAIN if the previous record is in another node,
+ * -ENODATA if no more records exist, or another negative error code in case
+ * of failure.
+ *
+ * The meaning of "next" and "previous" is reverted here, because regular
+ * multiple always start with the final record, and then they go backwards.
+ * TODO: consider renaming this for clarity.
+ */
+static int apfs_node_prev(struct super_block *sb, struct apfs_query *query)
+{
+	struct apfs_node *node = query->node;
+
+	if (query->index + 1 == node->records) {
+		/* The next record may be in another node */
+		return -EAGAIN;
+	}
+	++query->index;
+
+	query->key_len = apfs_node_locate_key(node, query->index, &query->key_off);
+	if (query->key_len == 0) {
+		apfs_err(sb, "bad key for index %d", query->index);
+		return -EFSCORRUPTED;
+	}
+	query->len = apfs_node_locate_data(node, query->index, &query->off);
+	if (query->len == 0) {
+		apfs_err(sb, "bad value for index %d", query->index);
+		return -EFSCORRUPTED;
+	}
+	return 0;
+}
+
+/**
  * apfs_node_next - Find the next matching record in the current node
  * @sb:		filesystem superblock
  * @query:	multiple query in execution
@@ -892,6 +928,8 @@ int apfs_node_query(struct super_block *sb, struct apfs_query *query)
 	int cmp;
 	int err;
 
+	if (query->flags & APFS_QUERY_PREV)
+		return apfs_node_prev(sb, query);
 	if (query->flags & APFS_QUERY_NEXT)
 		return apfs_node_next(sb, query);
 

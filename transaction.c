@@ -404,16 +404,16 @@ int apfs_transaction_flush_all_inodes(struct super_block *sb)
 		mutex_unlock(&nxs_mutex);
 		up_write(&nxi->nx_big_sem);
 
-		/* Unlocked, so it may call ->evict_inode() */
+		/* Unlocked, so it may call evict() and wait for writeback */
 		iput(inode);
 
 		down_write(&nxi->nx_big_sem);
 		mutex_lock(&nxs_mutex);
 		nx_trans->t_state = 0;
 
-		/* Transaction aborted by ->evict_inode(), error code is lost */
+		/* Transaction aborted during writeback, error code is lost */
 		if (sb->s_flags & SB_RDONLY) {
-			apfs_err(sb, "abort during inode eviction");
+			apfs_err(sb, "abort during inode writeback");
 			return -EROFS;
 		}
 	}
@@ -736,7 +736,7 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 		return false;
 	}
 
-	/* Avoid nested commits on ->evict_inode() */
+	/* Avoid nested commits on inode writeback */
 	if (nx_trans->t_state & APFS_NX_TRANS_COMMITTING)
 		return false;
 
@@ -971,7 +971,6 @@ void apfs_transaction_abort(struct super_block *sb)
 	mutex_unlock(&nxs_mutex);
 	up_write(&nxi->nx_big_sem);
 
-	/* ->evict_inode() will just fail if it starts a new transaction */
 	list_for_each_entry_safe(ai, ai_tmp, &nx_trans->t_inodes, i_list) {
 		list_del_init(&ai->i_list);
 		iput(&ai->vfs_inode);

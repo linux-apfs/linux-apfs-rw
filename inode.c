@@ -886,7 +886,9 @@ static struct apfs_query *apfs_inode_lookup(const struct inode *inode)
 	if (!ret)
 		return query;
 
-	apfs_err(sb, "query failed for id 0x%llx", apfs_ino(inode));
+	/* Don't complain if an orphan is already gone */
+	if (!current_work() || ret != -ENODATA)
+		apfs_err(sb, "query failed for id 0x%llx", apfs_ino(inode));
 	apfs_free_query(query);
 	return ERR_PTR(ret);
 }
@@ -1005,8 +1007,10 @@ struct inode *apfs_iget(struct super_block *sb, u64 cnid)
 	down_read(&nxi->nx_big_sem);
 	query = apfs_inode_lookup(inode);
 	if (IS_ERR(query)) {
-		apfs_err(sb, "lookup failed for ino 0x%llx", cnid);
 		err = PTR_ERR(query);
+		/* Don't complain if an orphan is already gone */
+		if (!current_work() || err != -ENODATA)
+			apfs_err(sb, "lookup failed for ino 0x%llx", cnid);
 		goto fail;
 	}
 	err = apfs_inode_from_query(query, inode);
@@ -1540,13 +1544,16 @@ int APFS_UPDATE_INODE_MAXOPS(void)
  * apfs_delete_inode - Delete an inode record
  * @inode: the vfs inode to delete
  *
- * Returns 0 on success or a negative error code in case of failure.
+ * Returns 0 on success or a negative error code in case of failure, which may
+ * be -EAGAIN if the inode was not deleted in full.
  */
 static int apfs_delete_inode(struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
+	struct apfs_inode_info *ai = APFS_I(inode);
 	struct apfs_dstream_info *dstream = NULL;
 	struct apfs_query *query;
+	u64 old_dstream_id;
 	int ret;
 
 	ret = apfs_delete_all_xattrs(inode);
@@ -1554,6 +1561,9 @@ static int apfs_delete_inode(struct inode *inode)
 		apfs_err(sb, "xattr deletion failed for ino 0x%llx", apfs_ino(inode));
 		return ret;
 	}
+
+	dstream = &ai->i_dstream;
+	old_dstream_id = dstream->ds_id;
 
 	/*
 	 * This is very wasteful since all the new extents and references will
@@ -1566,12 +1576,27 @@ static int apfs_delete_inode(struct inode *inode)
 		return ret;
 	}
 
-	/* TODO: truncate an orphan inode in multiple transactions */
-	dstream = &APFS_I(inode)->i_dstream;
-	ret = apfs_truncate(dstream, 0 /* new_size */);
+	/* TODO: what about partial deletion of xattrs? Is that allowed? */
+	ret = apfs_inode_delete_front(inode);
 	if (ret) {
-		apfs_err(sb, "truncation failed for ino 0x%llx", apfs_ino(inode));
-		return ret;
+		/*
+		 * If the inode had too many extents, only the first few get
+		 * deleted and the inode remains in the orphan list for now.
+		 * I don't know why the deletion starts at the front, but it
+		 * seems to be what the official driver does.
+		 */
+		if (ret != -EAGAIN) {
+			apfs_err(sb, "head deletion failed for ino 0x%llx", apfs_ino(inode));
+			return ret;
+		}
+		if (dstream->ds_id != old_dstream_id) {
+			ret = apfs_update_inode(inode, NULL /* new_name */);
+			if (ret) {
+				apfs_err(sb, "dstream id update failed for orphan 0x%llx", apfs_ino(inode));
+				return ret;
+			}
+		}
+		return -EAGAIN;
 	}
 
 	ret = apfs_put_dstream_rec(dstream);
@@ -1579,6 +1604,8 @@ static int apfs_delete_inode(struct inode *inode)
 		apfs_err(sb, "failed to put dstream for ino 0x%llx", apfs_ino(inode));
 		return ret;
 	}
+	dstream = NULL;
+	ai->i_has_dstream = false;
 
 	query = apfs_inode_lookup(inode);
 	if (IS_ERR(query)) {
@@ -1587,40 +1614,187 @@ static int apfs_delete_inode(struct inode *inode)
 	}
 	ret = apfs_btree_remove(query);
 	apfs_free_query(query);
-	if (ret)
+	if (ret) {
 		apfs_err(sb, "removal failed for ino 0x%llx", apfs_ino(inode));
+		return ret;
+	}
+
+	ai->i_cleaned = true;
 	return ret;
 }
 #define APFS_DELETE_INODE_MAXOPS	1
 
+/**
+ * apfs_clean_single_orphan - Clean the given orphan file
+ * @inode:	inode for the file to clean
+ *
+ * Returns 0 on success or a negative error code in case of failure, which may
+ * be -EAGAIN if the file could not be deleted in full.
+ */
+static int apfs_clean_single_orphan(struct inode *inode)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_max_ops maxops = {0}; /* TODO: rethink this stuff */
+	u64 ino = apfs_ino(inode);
+	bool eagain = false;
+	int err;
+
+	err = apfs_transaction_start(sb, maxops);
+	if (err)
+		return err;
+	err = apfs_delete_inode(inode);
+	if (err) {
+		if (err != -EAGAIN) {
+			apfs_err(sb, "failed to delete orphan 0x%llx", ino);
+			goto fail;
+		}
+		eagain = true;
+	} else {
+		err = apfs_delete_orphan_link(inode);
+		if (err) {
+			apfs_err(sb, "failed to unlink orphan 0x%llx", ino);
+			goto fail;
+		}
+	}
+	err = apfs_transaction_commit(sb);
+	if (err)
+		goto fail;
+	return eagain ? -EAGAIN : 0;
+
+fail:
+	apfs_transaction_abort(sb);
+	return err;
+}
+
+/**
+ * apfs_clean_any_orphan - Pick an orphan and delete as much as reasonable
+ * @sb:		filesystem superblock
+ *
+ * Returns 0 on success, or a negative error code in case of failure, which may
+ * be -ENODATA if there are no more orphan files or -EAGAIN if a file could not
+ * be deleted in full.
+ */
+static int apfs_clean_any_orphan(struct super_block *sb)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct inode *inode = NULL;
+	int err;
+	u64 ino;
+
+	down_read(&nxi->nx_big_sem);
+	err = apfs_any_orphan_ino(sb, &ino);
+	up_read(&nxi->nx_big_sem);
+	if (err) {
+		if (err == -ENODATA)
+			return -ENODATA;
+		apfs_err(sb, "failed to find orphan inode numbers");
+		return err;
+	}
+
+	inode = apfs_iget(sb, ino);
+	if (IS_ERR(inode)) {
+		err = PTR_ERR(inode);
+		if (err != -ENODATA) {
+			apfs_err(sb, "iget failed for orphan 0x%llx", ino);
+			return err;
+		}
+		/*
+		 * This happens rarely for files with no extents, if we hit a
+		 * race with ->evict_inode(). Not a problem: the file is gone.
+		 */
+		apfs_notice(sb, "orphan 0x%llx not found (err:%d)", ino, err);
+		return 0;
+	}
+
+	if (atomic_read(&inode->i_count) > 1)
+		goto out;
+	err = apfs_clean_single_orphan(inode);
+	if (err && err != -EAGAIN) {
+		apfs_err(sb, "failed to clean orphan 0x%llx", ino);
+		goto out;
+	}
+out:
+	iput(inode);
+	return err;
+}
+
+/**
+ * apfs_clean_orphans - Delete as many orphan files as is reasonable
+ * @sb: filesystem superblock
+ *
+ * Returns 0 on success or a negative error code in case of failure.
+ */
+static int apfs_clean_orphans(struct super_block *sb)
+{
+	int ret, i;
+
+	for (i = 0; i < 100; ++i) {
+		ret = apfs_clean_any_orphan(sb);
+		if (ret) {
+			if (ret == -ENODATA)
+				return 0;
+			if (ret == -EAGAIN)
+				break;
+			apfs_err(sb, "failed to delete an orphan file");
+			return ret;
+		}
+	}
+
+	/*
+	 * If a file is too big, or if there are too many files, take a break
+	 * and continue later.
+	 */
+	if (atomic_read(&sb->s_active) != 0)
+		schedule_work(&APFS_SB(sb)->s_orphan_cleanup_work);
+	return 0;
+}
+
 void apfs_evict_inode(struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
-	struct apfs_max_ops maxops;
+	struct apfs_inode_info *ai = APFS_I(inode);
+	int err;
 
-	if (is_bad_inode(inode) || inode->i_nlink)
-		goto out_clear;
+	if (is_bad_inode(inode) || inode->i_nlink || ai->i_cleaned)
+		goto out;
 
-	maxops.cat = APFS_DELETE_INODE_MAXOPS + APFS_DELETE_ORPHAN_LINK_MAXOPS();
-	maxops.blks = 0;
+	if (!ai->i_has_dstream || ai->i_dstream.ds_size == 0) {
+		/* For files with no extents, scheduled cleanup wastes time */
+		err = apfs_clean_single_orphan(inode);
+		if (err)
+			apfs_err(sb, "failed to clean orphan 0x%llx (err:%d)", apfs_ino(inode), err);
+		goto out;
+	}
 
-	if (apfs_transaction_start(sb, maxops))
-		goto out_report;
-	if (apfs_delete_inode(inode))
-		goto out_abort;
-	if (apfs_delete_orphan_link(inode))
-		goto out_abort;
-	if (apfs_transaction_commit(sb))
-		goto out_abort;
-	goto out_clear;
-
-out_abort:
-	apfs_transaction_abort(sb);
-out_report:
-	apfs_err(sb, "failed to delete orphan inode 0x%llx", apfs_ino(inode));
-out_clear:
+	/*
+	 * If the inode still has extents then schedule cleanup for the rest
+	 * of it. Not during unmount though: completing all cleanup could take
+	 * a while so just leave future mounts to handle the orphans.
+	 */
+	if (atomic_read(&sb->s_active))
+		schedule_work(&APFS_SB(sb)->s_orphan_cleanup_work);
+out:
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);
+}
+
+void apfs_orphan_cleanup_work(struct work_struct *work)
+{
+	struct super_block *sb = NULL;
+	struct apfs_sb_info *sbi = NULL;
+	struct inode *priv = NULL;
+
+	sbi = container_of(work, struct apfs_sb_info, s_orphan_cleanup_work);
+	priv = sbi->s_private_dir;
+	sb = priv->i_sb;
+
+	if (sb->s_flags & SB_RDONLY) {
+		apfs_alert(sb, "attempt to flush orphans in read-only mount");
+		return;
+	}
+
+	if (apfs_clean_orphans(sb))
+		apfs_err(sb, "orphan cleanup failed");
 }
 
 /**

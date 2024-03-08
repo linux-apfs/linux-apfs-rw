@@ -398,8 +398,6 @@ struct apfs_query *apfs_alloc_query(struct apfs_node *node,
 
 	/* To be released by free_query. */
 	query->node = node;
-	/* Start the search with the last record and go backwards */
-	query->index = node->records;
 
 	if (parent) {
 		query->key = parent->key;
@@ -407,6 +405,15 @@ struct apfs_query *apfs_alloc_query(struct apfs_node *node,
 		query->parent = parent;
 		query->depth = parent->depth + 1;
 	}
+
+	/*
+	 * We start the search with the last record and go backwards, but
+	 * some queries later use the PREV flag later to list them in order.
+	 */
+	if (query->flags & APFS_QUERY_PREV)
+		query->index = -1;
+	else
+		query->index = node->records;
 
 	return query;
 }
@@ -1143,4 +1150,25 @@ int apfs_btree_replace(struct apfs_query *query, void *key, int key_len, void *v
 	apfs_assert_query_is_valid(query);
 	apfs_btree_change_rec_count(query, 0 /* change */, key_len, val_len);
 	return 0;
+}
+
+/**
+ * apfs_query_direct_forward - Set a query to start listing records forwards
+ * @query: a successfully executed query
+ *
+ * Multiple queries list records backwards, but queries marked with this
+ * function after execution will go in the opposite direction.
+ */
+void apfs_query_direct_forward(struct apfs_query *query)
+{
+	if (query->flags & APFS_QUERY_PREV)
+		return;
+
+	apfs_assert_query_is_valid(query);
+	ASSERT(apfs_node_is_leaf(query->node));
+
+	while (query) {
+		query->flags |= APFS_QUERY_PREV;
+		query = query->parent;
+	}
 }

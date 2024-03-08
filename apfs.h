@@ -335,6 +335,7 @@ struct apfs_sb_info {
 	int s_trans_buffers_max;
 
 	struct inode *s_private_dir;	/* Inode for the private directory */
+	struct work_struct s_orphan_cleanup_work;
 };
 
 static inline struct apfs_sb_info *APFS_SB(struct super_block *sb)
@@ -626,20 +627,21 @@ static inline u64 apfs_cat_cnid(struct apfs_key_header *key)
 }
 
 /* Flags for the query structure */
-#define APFS_QUERY_TREE_MASK	00177	/* Which b-tree we query */
-#define APFS_QUERY_OMAP		00001	/* This is a b-tree object map query */
-#define APFS_QUERY_CAT		00002	/* This is a catalog tree query */
-#define APFS_QUERY_FREE_QUEUE	00004	/* This is a free queue query */
-#define APFS_QUERY_EXTENTREF	00010	/* This is an extent reference query */
-#define APFS_QUERY_FEXT		00020	/* This is a fext tree query */
-#define APFS_QUERY_SNAP_META	00040	/* This is a snapshot meta query */
-#define APFS_QUERY_OMAP_SNAP	00100	/* This is an omap snapshots query */
-#define APFS_QUERY_NEXT		00200	/* Find next of multiple matches */
-#define APFS_QUERY_EXACT	00400	/* Search for an exact match */
-#define APFS_QUERY_DONE		01000	/* The search at this level is over */
-#define APFS_QUERY_ANY_NAME	02000	/* Multiple search for any name */
-#define APFS_QUERY_ANY_NUMBER	04000	/* Multiple search for any number */
+#define APFS_QUERY_TREE_MASK	000177	/* Which b-tree we query */
+#define APFS_QUERY_OMAP		000001	/* This is a b-tree object map query */
+#define APFS_QUERY_CAT		000002	/* This is a catalog tree query */
+#define APFS_QUERY_FREE_QUEUE	000004	/* This is a free queue query */
+#define APFS_QUERY_EXTENTREF	000010	/* This is an extent reference query */
+#define APFS_QUERY_FEXT		000020	/* This is a fext tree query */
+#define APFS_QUERY_SNAP_META	000040	/* This is a snapshot meta query */
+#define APFS_QUERY_OMAP_SNAP	000100	/* This is an omap snapshots query */
+#define APFS_QUERY_NEXT		000200	/* Find next of multiple matches */
+#define APFS_QUERY_EXACT	000400	/* Search for an exact match */
+#define APFS_QUERY_DONE		001000	/* The search at this level is over */
+#define APFS_QUERY_ANY_NAME	002000	/* Multiple search for any name */
+#define APFS_QUERY_ANY_NUMBER	004000	/* Multiple search for any number */
 #define APFS_QUERY_MULTIPLE	(APFS_QUERY_ANY_NAME | APFS_QUERY_ANY_NUMBER)
+#define APFS_QUERY_PREV		010000	/* Find previous record */
 
 /*
  * Structure used to retrieve data from an APFS B-Tree. For now only used
@@ -754,6 +756,8 @@ struct apfs_inode_info {
 
 	bool			 i_has_dstream;	 /* Is there a dstream record? */
 	struct apfs_dstream_info i_dstream;	 /* Dstream data, if any */
+
+	bool			i_cleaned;	 /* Orphan data already deleted */
 
 	struct inode vfs_inode;
 };
@@ -872,6 +876,7 @@ extern int apfs_btree_remove(struct apfs_query *query);
 extern void apfs_btree_change_node_count(struct apfs_query *query, int change);
 extern int apfs_btree_replace(struct apfs_query *query, void *key, int key_len,
 			      void *val, int val_len);
+extern void apfs_query_direct_forward(struct apfs_query *query);
 
 /* compress.c */
 extern int apfs_compress_get_size(struct inode *inode, loff_t *size);
@@ -919,6 +924,7 @@ extern int apfs_unlink(struct inode *dir, struct dentry *dentry);
 extern int apfs_rmdir(struct inode *dir, struct dentry *dentry);
 extern int apfs_delete_orphan_link(struct inode *inode);
 extern int APFS_DELETE_ORPHAN_LINK_MAXOPS(void);
+extern u64 apfs_any_orphan_ino(struct super_block *sb, u64 *ino_p);
 
 /* extents.c */
 extern int apfs_extent_from_query(struct apfs_query *query,
@@ -934,6 +940,7 @@ extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			      struct buffer_head *bh_result, int create);
 extern int APFS_GET_NEW_BLOCK_MAXOPS(void);
 extern int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size);
+extern int apfs_inode_delete_front(struct inode *inode);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 extern loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags);
 #else
@@ -951,6 +958,7 @@ extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 extern struct inode *apfs_iget(struct super_block *sb, u64 cnid);
 extern int apfs_update_inode(struct inode *inode, char *new_name);
 extern int APFS_UPDATE_INODE_MAXOPS(void);
+extern void apfs_orphan_cleanup_work(struct work_struct *work);
 extern void apfs_evict_inode(struct inode *inode);
 extern struct inode *apfs_new_inode(struct inode *dir, umode_t mode,
 				    dev_t rdev);

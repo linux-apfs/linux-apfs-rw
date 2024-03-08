@@ -1625,6 +1625,125 @@ int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size)
 	return apfs_create_hole(dstream, old_blks, new_blks);
 }
 
+/**
+ * apfs_dstream_delete_front - Deletes as many leading extents as possible
+ * @sb:		filesystem superblock
+ * @ds_id:	id for the dstream to delete
+ *
+ * Returns 0 on success, or a negative error code in case of failure, which may
+ * be -ENODATA if there are no more extents, or -EAGAIN if the free queue is
+ * getting too full.
+ */
+static int apfs_dstream_delete_front(struct super_block *sb, u64 ds_id)
+{
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_spaceman *sm = APFS_SM(sb);
+	struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
+	struct apfs_spaceman_free_queue *fq = NULL;
+	struct apfs_query *query = NULL;
+	struct apfs_file_extent head;
+	bool first_match = true;
+	int ret;
+
+	fq = &sm_raw->sm_fq[APFS_SFQ_MAIN];
+	if (le64_to_cpu(fq->sfq_count) > TRANSACTION_MAIN_QUEUE_MAX)
+		return -EAGAIN;
+
+	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+	apfs_init_file_extent_key(ds_id, 0, &query->key);
+	query->flags = APFS_QUERY_CAT;
+
+next_extent:
+	ret = apfs_btree_query(sb, &query);
+	if (ret && ret != -ENODATA) {
+		apfs_err(sb, "query failed for first extent of id 0x%llx", ds_id);
+		goto out;
+	}
+	apfs_query_direct_forward(query);
+	if (!apfs_query_found_extent(query)) {
+		/*
+		 * After the original lookup, the query may not be set to the
+		 * first extent, but instead to the record that comes right
+		 * before.
+		 */
+		if (first_match) {
+			first_match = false;
+			goto next_extent;
+		}
+		ret = -ENODATA;
+		goto out;
+	}
+	first_match = false;
+
+	ret = apfs_extent_from_query(query, &head);
+	if (ret) {
+		apfs_err(sb, "bad head extent record on dstream 0x%llx", ds_id);
+		goto out;
+	}
+	ret = apfs_btree_remove(query);
+	if (ret) {
+		apfs_err(sb, "removal failed for id 0x%llx, addr 0x%llx", ds_id, head.logical_addr);
+		goto out;
+	}
+
+	/*
+	 * The official fsck doesn't complain about wrong sparse byte counts
+	 * for orphans, so I guess we don't need to update them here
+	 */
+	if (!apfs_ext_is_hole(&head)) {
+		ret = apfs_range_put_reference(sb, head.phys_block_num, head.len);
+		if (ret) {
+			apfs_err(sb, "failed to put range 0x%llx-0x%llx", head.phys_block_num, head.len);
+			goto out;
+		}
+		ret = apfs_crypto_adj_refcnt(sb, head.crypto_id, -1);
+		if (ret) {
+			apfs_err(sb, "failed to take crypto id 0x%llx", head.crypto_id);
+			goto out;
+		}
+	}
+
+	if (le64_to_cpu(fq->sfq_count) <= TRANSACTION_MAIN_QUEUE_MAX)
+		goto next_extent;
+	ret = -EAGAIN;
+out:
+	apfs_free_query(query);
+	return ret;
+}
+
+/**
+ * apfs_inode_delete_front - Deletes as many leading extents as possible
+ * @inode:	inode to delete
+ *
+ * Tries to delete all extents for @inode, in which case it returns 0. If the
+ * free queue is getting too full, deletes as much as is reasonable and returns
+ * -EAGAIN. May return other negative error codes as well.
+ */
+int apfs_inode_delete_front(struct inode *inode)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_dstream_info *dstream = NULL;
+	struct apfs_inode_info *ai = APFS_I(inode);
+	int ret;
+
+	if (!ai->i_has_dstream)
+		return 0;
+
+	dstream = &ai->i_dstream;
+	ret = apfs_flush_extent_cache(dstream);
+	if (ret) {
+		apfs_err(sb, "extent cache flush failed for dstream 0x%llx", dstream->ds_id);
+		return ret;
+	}
+
+	ret = apfs_dstream_delete_front(sb, dstream->ds_id);
+	if (ret == -ENODATA)
+		return 0;
+	return ret;
+}
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags)
 #else

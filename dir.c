@@ -1158,13 +1158,13 @@ fail:
 
 /**
  * apfs_orphan_name - Get the name for an orphan inode's invisible link
- * @inode: the vfs inode
- * @qname: on return, the name assigned to the link
+ * @ino:	the inode number
+ * @qname:	on return, the name assigned to the link
  *
  * Returns 0 on success; the caller must remember to free @qname->name after
  * use.  Returns a negative error code in case of failure.
  */
-static int apfs_orphan_name(struct inode *inode, struct qstr *qname)
+static int apfs_orphan_name(u64 ino, struct qstr *qname)
 {
 	int max_len;
 	char *name;
@@ -1174,7 +1174,7 @@ static int apfs_orphan_name(struct inode *inode, struct qstr *qname)
 	name = kmalloc(max_len, GFP_KERNEL);
 	if (!name)
 		return -ENOMEM;
-	qname->len = snprintf(name, max_len, "0x%llx-dead", apfs_ino(inode));
+	qname->len = snprintf(name, max_len, "0x%llx-dead", ino);
 	qname->name = name;
 	return 0;
 }
@@ -1193,7 +1193,7 @@ static int apfs_create_orphan_link(struct inode *inode)
 	struct qstr qname;
 	int err = 0;
 
-	err = apfs_orphan_name(inode, &qname);
+	err = apfs_orphan_name(apfs_ino(inode), &qname);
 	if (err)
 		return err;
 	err = apfs_create_dentry_rec(inode, &qname, apfs_ino(priv_dir), 0 /* sibling_id */);
@@ -1236,7 +1236,7 @@ int apfs_delete_orphan_link(struct inode *inode)
 	struct apfs_drec drec;
 	int err;
 
-	err = apfs_orphan_name(inode, &qname);
+	err = apfs_orphan_name(apfs_ino(inode), &qname);
 	if (err)
 		return err;
 
@@ -1479,5 +1479,66 @@ out_undo_unlink_new:
 		__apfs_undo_unlink(new_dentry);
 out_abort:
 	apfs_transaction_abort(sb);
+	return err;
+}
+
+/**
+ * apfs_any_orphan_ino - Find the inode number for any orphaned regular file
+ * @sb:		filesytem superblock
+ * @ino_p:	on return, the inode number found
+ *
+ * Returns 0 on success, or a negative error code in case of failure, which may
+ * be -ENODATA if there are no orphan files.
+ */
+u64 apfs_any_orphan_ino(struct super_block *sb, u64 *ino_p)
+{
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_query *query = NULL;
+	struct apfs_drec drec = {0};
+	struct qstr qname = {0};
+	bool hashed = apfs_is_normalization_insensitive(sb);
+	bool found = false;
+	int err;
+
+	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
+	if (!query)
+		return -ENOMEM;
+	apfs_init_drec_key(sb, APFS_PRIV_DIR_INO_NUM, NULL /* name */, 0 /* name_len */, &query->key);
+	query->flags = APFS_QUERY_CAT | APFS_QUERY_MULTIPLE | APFS_QUERY_EXACT;
+
+	while (!found) {
+		err = apfs_btree_query(sb, &query);
+		if (err) {
+			if (err == -ENODATA)
+				goto out;
+			apfs_err(sb, "drec query failed for private dir");
+			goto out;
+		}
+		err = apfs_drec_from_query(query, &drec, hashed);
+		if (err) {
+			apfs_alert(sb, "bad dentry record in private dir");
+			goto out;
+		}
+
+		/* These files are deleted immediately by ->evict_inode() */
+		if (drec.type != DT_REG)
+			continue;
+
+		/*
+		 * Confirm that this is an orphan file, because the official
+		 * reference allows other uses for the private directory.
+		 */
+		err = apfs_orphan_name(drec.ino, &qname);
+		if (err)
+			goto out;
+		found = strcmp(drec.name, qname.name) == 0;
+		kfree(qname.name);
+		qname.name = NULL;
+	}
+	*ino_p = drec.ino;
+
+out:
+	apfs_free_query(query);
+	query = NULL;
 	return err;
 }

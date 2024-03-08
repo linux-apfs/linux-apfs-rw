@@ -686,7 +686,10 @@ static void apfs_put_super(struct super_block *sb)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 
-	/* Update the volume's unmount time */
+	/* Cleanups won't reschedule themselves during unmount */
+	flush_work(&sbi->s_orphan_cleanup_work);
+
+	/* Stop flushing orphans and update the volume's unmount time */
 	if (!(sb->s_flags & SB_RDONLY)) {
 		struct apfs_superblock *vsb_raw;
 		struct buffer_head *vsb_bh;
@@ -765,6 +768,7 @@ static struct inode *apfs_alloc_inode(struct super_block *sb)
 	dstream->ds_ext_dirty = false;
 	ai->i_nchildren = 0;
 	INIT_LIST_HEAD(&ai->i_list);
+	ai->i_cleaned = false;
 	return &ai->vfs_inode;
 }
 
@@ -1390,7 +1394,7 @@ static void apfs_set_trans_buffer_limit(struct super_block *sb)
 static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct inode *root;
+	struct inode *root = NULL, *priv = NULL;
 	int err;
 
 	ASSERT(sbi);
@@ -1454,11 +1458,19 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 		err = PTR_ERR(root);
 		goto failed_mount;
 	}
+
 	sb->s_root = d_make_root(root);
 	if (!sb->s_root) {
 		apfs_err(sb, "unable to get root dentry");
 		err = -ENOMEM;
 		goto failed_mount;
+	}
+
+	INIT_WORK(&sbi->s_orphan_cleanup_work, apfs_orphan_cleanup_work);
+	if (!(sb->s_flags & SB_RDONLY)) {
+		priv = sbi->s_private_dir;
+		if (APFS_I(priv)->i_nchildren)
+			schedule_work(&sbi->s_orphan_cleanup_work);
 	}
 	return 0;
 
