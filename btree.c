@@ -514,7 +514,8 @@ next_node:
 		 * than enough to map every block.
 		 */
 		apfs_err(sb, "btree is too high");
-		return -EFSCORRUPTED;
+		err = -EFSCORRUPTED;
+		goto fail;
 	}
 
 	err = apfs_node_query(sb, *query);
@@ -526,12 +527,16 @@ next_node:
 		err = apfs_query_set_before_first(sb, query);
 		if (err) {
 			apfs_err(sb, "failed to set before the first record");
-			return err;
+			goto fail;
 		}
-		return -ENODATA;
+		err = -ENODATA;
+		goto fail;
 	} else if (err == -EAGAIN) {
-		if (!(*query)->parent) /* We are at the root of the tree */
-			return -ENODATA;
+		if (!(*query)->parent) {
+			/* We are at the root of the tree */
+			err = -ENODATA;
+			goto fail;
+		}
 
 		/* Move back up one level and continue the query */
 		parent = (*query)->parent;
@@ -540,7 +545,7 @@ next_node:
 		*query = parent;
 		goto next_node;
 	} else if (err) {
-		return err;
+		goto fail;
 	}
 	if (apfs_node_is_leaf((*query)->node)) /* All done */
 		return 0;
@@ -549,14 +554,15 @@ next_node:
 	if (err) {
 		apfs_alert(sb, "bad index block: 0x%llx",
 			   (*query)->node->object.block_nr);
-		return err;
+		goto fail;
 	}
 
 	/* Now go a level deeper and search the child */
 	node = apfs_read_node(sb, child_id, storage, false /* write */);
 	if (IS_ERR(node)) {
 		apfs_err(sb, "failed to read node 0x%llx", child_id);
-		return PTR_ERR(node);
+		err = PTR_ERR(node);
+		goto fail;
 	}
 
 	if (node->object.oid != child_id)
@@ -571,10 +577,16 @@ next_node:
 	if (!*query) {
 		apfs_node_free(node);
 		*query = parent;
-		return -ENOMEM;
+		err = -ENOMEM;
+		goto fail;
 	}
 	node = NULL;
 	goto next_node;
+
+fail:
+	/* Don't leave stale record info here or some callers will use it */
+	(*query)->key_len = (*query)->len = 0;
+	return err;
 }
 
 static int __apfs_btree_replace(struct apfs_query *query, void *key, int key_len, void *val, int val_len);
