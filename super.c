@@ -793,6 +793,10 @@ static void init_once(void *p)
 	inode_init_once(&ai->vfs_inode);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+#define SLAB_MEM_SPREAD	0
+#endif
+
 static int __init init_inodecache(void)
 {
 	apfs_inode_cachep = kmem_cache_create("apfs_inode_cache",
