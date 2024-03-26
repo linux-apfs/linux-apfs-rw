@@ -230,7 +230,9 @@ struct apfs_ephemeral_object_info {
  */
 struct apfs_nxsb_info {
 	struct block_device *nx_bdev; /* Device for the container */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	struct file *nx_bdev_file;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 	struct bdev_handle *nx_bdev_handle;
 #endif
 	struct apfs_nx_superblock *nx_raw; /* On-disk main sb */
