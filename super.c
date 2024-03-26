@@ -1219,10 +1219,15 @@ static int parse_options(struct super_block *sb, char *options)
 
 out:
 	apfs_set_nx_flags(sb, nx_flags);
-	if ((nxi->nx_flags & APFS_READWRITE) && !(sb->s_flags & SB_RDONLY))
-		apfs_notice(sb, "experimental write support is enabled");
-	else
-		sb->s_flags |= SB_RDONLY;
+	if (!(sb->s_flags & SB_RDONLY)) {
+		if (nxi->nx_flags & APFS_READWRITE) {
+			apfs_notice(sb, "experimental write support is enabled");
+		} else {
+			apfs_warn(sb, "experimental writes disabled to avoid data loss");
+			apfs_warn(sb, "if you really want them, check the README");
+			sb->s_flags |= SB_RDONLY;
+		}
+	}
 	return 0;
 }
 
