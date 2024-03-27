@@ -417,16 +417,16 @@ static int apfs_compress_read_folio(struct file *filp, struct folio *folio)
 static int apfs_compress_readpage(struct file *filp, struct page *page)
 {
 #endif
-	void *addr = NULL;
+	char *addr = NULL;
 	ssize_t ret;
 	loff_t off;
 
 	/* Mostly copied from ext4_read_inline_page() */
 	off = page->index << PAGE_SHIFT;
-	addr = kmap_atomic(page);
+	addr = kmap(page);
 	ret = apfs_compress_file_read_page(filp, addr, off);
 	flush_dcache_page(page);
-	kunmap_atomic(addr);
+	kunmap(page);
 	if (ret >= 0) {
 		zero_user_segment(page, ret, PAGE_SIZE);
 		SetPageUptodate(page);
