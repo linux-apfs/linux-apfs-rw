@@ -465,9 +465,14 @@ static u64 apfs_free_queue_oldest_xid(struct apfs_node *root)
 	char *raw = root->object.data;
 	int len, off;
 
-	len = apfs_node_locate_key(root, 0, &off);
-	if (len != sizeof(*key)) /* No records in queue (or corruption) */
+	if (root->records == 0)
 		return 0;
+	len = apfs_node_locate_key(root, 0, &off);
+	if (len != sizeof(*key)) {
+		/* TODO: abort transaction */
+		apfs_err(root->object.sb, "bad key length (%d)", len);
+		return 0;
+	}
 	key = (struct apfs_spaceman_free_queue_key *)(raw + off);
 	return le64_to_cpu(key->sfqk_xid);
 }
