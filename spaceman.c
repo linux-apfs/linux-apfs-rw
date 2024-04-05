@@ -496,9 +496,18 @@ static int apfs_flush_free_queue(struct super_block *sb, unsigned int qid)
 		return PTR_ERR(fq_root);
 	}
 
-	/* Preserve a few transactions */
-	while (oldest + 4 < nxi->nx_xid) {
+	while (true) {
 		u64 sfq_count;
+
+		/*
+		 * Preserve a few transactions for the main free queue but only
+		 * one for the ip, otherwise it would fill up immediately for
+		 * tiny containers.
+		 */
+		if (qid == APFS_SFQ_MAIN && oldest + 4 >= nxi->nx_xid)
+			break;
+		if (qid == APFS_SFQ_IP && oldest + 1 >= nxi->nx_xid)
+			break;
 
 		while (true) {
 			u64 count = 0;
