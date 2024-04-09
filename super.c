@@ -322,7 +322,9 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 	kfree(nxi->nx_raw);
 	nxi->nx_raw = NULL;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	fput(nxi->nx_bdev_file);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 	bdev_release(nxi->nx_bdev_handle);
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 	blkdev_put(nxi->nx_bdev, &apfs_fs_type);
@@ -794,7 +796,10 @@ static int __init init_inodecache(void)
 	apfs_inode_cachep = kmem_cache_create("apfs_inode_cache",
 					     sizeof(struct apfs_inode_info),
 					     0, (SLAB_RECLAIM_ACCOUNT|
-						SLAB_MEM_SPREAD|SLAB_ACCOUNT),
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 9, 0)
+						SLAB_MEM_SPREAD|
+#endif
+						SLAB_ACCOUNT),
 					     init_once);
 	if (apfs_inode_cachep == NULL)
 		return -ENOMEM;
@@ -1583,7 +1588,9 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 
 	nxi = apfs_nx_find_by_dev(dev);
 	if (!nxi) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+		struct file *file;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 		struct bdev_handle *handle;
 #endif
 		struct block_device *bdev;
@@ -1592,7 +1599,15 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 		if (!nxi)
 			return -ENOMEM;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+		file = bdev_file_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
+		if (IS_ERR(file)) {
+			kfree(nxi);
+			return PTR_ERR(file);
+		}
+		nxi->nx_bdev_file = file;
+		bdev = file_bdev(file);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 		handle = bdev_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
 		if (IS_ERR(handle)) {
 			kfree(nxi);
