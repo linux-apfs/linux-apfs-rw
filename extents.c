@@ -387,7 +387,7 @@ static int apfs_shrink_extent_tail(struct apfs_query *query, struct apfs_dstream
 }
 
 /**
- * apfs_query_found_extent - Is this query pointing to an extent record?
+ * apfs_query_found_extent - Did this query find an extent with the right id?
  * @query: the (successful) query that found the record
  */
 static inline bool apfs_query_found_extent(struct apfs_query *query)
@@ -398,7 +398,12 @@ static inline bool apfs_query_found_extent(struct apfs_query *query)
 	if (query->key_len < sizeof(*hdr))
 		return false;
 	hdr = raw + query->key_off;
-	return apfs_cat_type(hdr) == APFS_TYPE_FILE_EXTENT;
+
+	if (apfs_cat_type(hdr) != APFS_TYPE_FILE_EXTENT)
+		return false;
+	if (apfs_cat_cnid(hdr) != query->key.id)
+		return false;
+	return true;
 }
 
 /**
