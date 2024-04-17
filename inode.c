@@ -1702,7 +1702,7 @@ static int apfs_clean_any_orphan(struct super_block *sb)
 		 * This happens rarely for files with no extents, if we hit a
 		 * race with ->evict_inode(). Not a problem: the file is gone.
 		 */
-		apfs_notice(sb, "orphan 0x%llx not found (err:%d)", ino, err);
+		apfs_notice(sb, "orphan 0x%llx not found", ino);
 		return 0;
 	}
 
@@ -1783,6 +1783,7 @@ void apfs_orphan_cleanup_work(struct work_struct *work)
 	struct super_block *sb = NULL;
 	struct apfs_sb_info *sbi = NULL;
 	struct inode *priv = NULL;
+	int err;
 
 	sbi = container_of(work, struct apfs_sb_info, s_orphan_cleanup_work);
 	priv = sbi->s_private_dir;
@@ -1793,8 +1794,9 @@ void apfs_orphan_cleanup_work(struct work_struct *work)
 		return;
 	}
 
-	if (apfs_clean_orphans(sb))
-		apfs_err(sb, "orphan cleanup failed");
+	err = apfs_clean_orphans(sb);
+	if (err)
+		apfs_err(sb, "orphan cleanup failed (err:%d)", err);
 }
 
 /**
