@@ -253,9 +253,8 @@ fail:
  * apfs_update_software_info - Write the module info to a modified volume
  * @sb: superblock structure
  *
- * Does nothing if the module information is already present at index zero of
- * the apfs_modified_by array.  Otherwise, writes it there after shifting the
- * rest of the entries to the right.
+ * Writes this module's information to index zero of the apfs_modified_by
+ * array, shifting the rest of the entries to the right.
  */
 static void apfs_update_software_info(struct super_block *sb)
 {
@@ -268,11 +267,7 @@ static void apfs_update_software_info(struct super_block *sb)
 	ASSERT(strlen(APFS_MODULE_ID_STRING) < APFS_MODIFIED_NAMELEN);
 	mod_by = raw->apfs_modified_by;
 
-	/* This check could be optimized away, but does it matter? */
-	if (!strcmp(mod_by->id, APFS_MODULE_ID_STRING))
-		return;
 	memmove(mod_by + 1, mod_by, (APFS_MAX_HIST - 1) * sizeof(*mod_by));
-
 	memset(mod_by->id, 0, sizeof(mod_by->id));
 	strscpy(mod_by->id, APFS_MODULE_ID_STRING, sizeof(mod_by->id));
 	mod_by->timestamp = cpu_to_le64(ktime_get_real_ns());
@@ -477,13 +472,7 @@ int apfs_map_volume_super(struct super_block *sb, bool write)
 	 * Snapshots could get mounted during a transaction, so the fletcher
 	 * checksum doesn't have to be valid.
 	 */
-	err = apfs_map_volume_super_bno(sb, vsb, !write && !sbi->s_snap_name);
-	if (err)
-		return err;
-
-	if (write)
-		apfs_update_software_info(sb);
-	return 0;
+	return apfs_map_volume_super_bno(sb, vsb, !write && !sbi->s_snap_name);
 
 fail:
 	brelse(bh);
@@ -691,7 +680,7 @@ static void apfs_put_super(struct super_block *sb)
 	/* Cleanups won't reschedule themselves during unmount */
 	flush_work(&sbi->s_orphan_cleanup_work);
 
-	/* Stop flushing orphans and update the volume's unmount time */
+	/* Stop flushing orphans and update the volume as needed */
 	if (!(sb->s_flags & SB_RDONLY)) {
 		struct apfs_superblock *vsb_raw;
 		struct buffer_head *vsb_bh;
@@ -705,6 +694,7 @@ static void apfs_put_super(struct super_block *sb)
 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
 		ASSERT(buffer_trans(vsb_bh));
 
+		apfs_update_software_info(sb);
 		vsb_raw->apfs_unmount_time = cpu_to_le64(ktime_get_real_ns());
 		set_buffer_csum(vsb_bh);
 
