@@ -1241,15 +1241,24 @@ struct apfs_superblock {
 
 	__le64 apfs_snap_meta_ext_oid;
 
-	char apfs_volume_group_id[UUID_SIZE];
+/*3F0*/	char apfs_volume_group_id[UUID_SIZE];
 
-	__le64 apfs_integrity_meta_oid;
+/*400*/	__le64 apfs_integrity_meta_oid;
 
 	__le64 apfs_fext_tree_oid;
-	__le32 apfs_fext_tree_type;
+/*410*/	__le32 apfs_fext_tree_type;
 
 	__le32 reserved_type;
 	__le64 reserved_oid;
+
+/*420*/	__le64 apfs_doc_id_index_xid;
+	__le32 apfs_doc_id_index_flags;
+	__le32 apfs_doc_id_tree_type;
+/*430*/	__le64 apfs_doc_id_tree_oid; /* Made-up name */
+	__le64 apfs_prev_doc_id_tree_oid;
+	__le64 apfs_doc_id_fixup_cursor;
+	__le64 apfs_sec_root_tree_oid;
+/*450*/	__le32 apfs_sec_root_tree_type;
 } __packed;
 
 /* Extended attributes constants */
