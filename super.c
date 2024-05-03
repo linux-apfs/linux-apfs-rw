@@ -1295,8 +1295,16 @@ static int apfs_check_vol_features(struct super_block *sb)
 		apfs_warn(sb, "incomplete restore is not supported");
 		return -EINVAL;
 	}
-	if (features & APFS_INCOMPAT_RESERVED_40) {
-		apfs_warn(sb, "reserved incompatible feature flag is set");
+	if (features & APFS_INCOMPAT_PFK) {
+		apfs_warn(sb, "PFK is not supported");
+		return -EINVAL;
+	}
+	if (features & APFS_INCOMPAT_EXTENT_PREALLOC_FLAG) {
+		apfs_warn(sb, "extent prealloc flag is not supported");
+		return -EINVAL;
+	}
+	if (features & APFS_INCOMPAT_SECONDARY_FSROOT) {
+		apfs_warn(sb, "secondary fsroot is not supported");
 		return -EINVAL;
 	}
 	if (features & APFS_INCOMPAT_SEALED_VOLUME) {
