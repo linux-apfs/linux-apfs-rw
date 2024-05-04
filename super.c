@@ -1299,10 +1299,6 @@ static int apfs_check_vol_features(struct super_block *sb)
 		apfs_warn(sb, "PFK is not supported");
 		return -EINVAL;
 	}
-	if (features & APFS_INCOMPAT_EXTENT_PREALLOC_FLAG) {
-		apfs_warn(sb, "extent prealloc flag is not supported");
-		return -EINVAL;
-	}
 	if (features & APFS_INCOMPAT_SECONDARY_FSROOT) {
 		apfs_warn(sb, "secondary fsroot is not supported");
 		return -EINVAL;
@@ -1314,6 +1310,16 @@ static int apfs_check_vol_features(struct super_block *sb)
 		}
 		apfs_info(sb, "volume is sealed");
 	}
+	/*
+	 * As far as I can see, all this feature seems to do is define a new
+	 * flag (which I call APFS_FILE_EXTENT_PREALLOCATED) for extents that
+	 * are fully after the end of their file. I don't get why this change
+	 * is incompatible instead of read-only compatible, so I fear I might
+	 * be missing something. I will never be certain though, so for now
+	 * allow the mount and hope for the best.
+	 */
+	if (features & APFS_INCOMPAT_EXTENT_PREALLOC_FLAG)
+		apfs_warn(sb, "extent prealloc flag is set");
 
 	features = le64_to_cpu(vsb_raw->apfs_fs_flags);
 	/* Some encrypted volumes are readable anyway */
