@@ -1651,7 +1651,7 @@ static int apfs_dstream_delete_front(struct super_block *sb, u64 ds_id)
 	int ret;
 
 	fq = &sm_raw->sm_fq[APFS_SFQ_MAIN];
-	if (le64_to_cpu(fq->sfq_count) > TRANSACTION_MAIN_QUEUE_MAX)
+	if (le64_to_cpu(fq->sfq_count) > APFS_TRANS_MAIN_QUEUE_MAX)
 		return -EAGAIN;
 
 	query = apfs_alloc_query(sbi->s_cat_root, NULL /* parent */);
@@ -1710,7 +1710,7 @@ next_extent:
 		}
 	}
 
-	if (le64_to_cpu(fq->sfq_count) <= TRANSACTION_MAIN_QUEUE_MAX)
+	if (le64_to_cpu(fq->sfq_count) <= APFS_TRANS_MAIN_QUEUE_MAX)
 		goto next_extent;
 	ret = -EAGAIN;
 out:

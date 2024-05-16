@@ -150,9 +150,9 @@ struct apfs_spaceman {
 	struct buffer_head *sm_ip_bmaps[];
 };
 
-#define TRANSACTION_MAIN_QUEUE_MAX	10000
-#define TRANSACTION_BUFFERS_MAX		65536
-#define TRANSACTION_STARTS_MAX		65536
+#define APFS_TRANS_MAIN_QUEUE_MAX	10000
+#define APFS_TRANS_BUFFERS_MAX		65536
+#define APFS_TRANS_STARTS_MAX		65536
 
 /* Possible states for the container transaction structure */
 #define APFS_NX_TRANS_FORCE_COMMIT	1	/* Commit guaranteed */

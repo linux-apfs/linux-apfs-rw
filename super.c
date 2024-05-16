@@ -1400,8 +1400,8 @@ static void apfs_set_trans_buffer_limit(struct super_block *sb)
 	 * commit often enough. This hack should make that happen in general,
 	 * but I still need to get the reclaim to work eventually (TODO).
 	 */
-	if (memsize_in_blocks >= 16 * TRANSACTION_BUFFERS_MAX)
-		sbi->s_trans_buffers_max = TRANSACTION_BUFFERS_MAX;
+	if (memsize_in_blocks >= 16 * APFS_TRANS_BUFFERS_MAX)
+		sbi->s_trans_buffers_max = APFS_TRANS_BUFFERS_MAX;
 	else
 		sbi->s_trans_buffers_max = memsize_in_blocks / 16;
 }

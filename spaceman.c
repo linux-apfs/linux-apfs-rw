@@ -548,7 +548,7 @@ static int apfs_flush_free_queue(struct super_block *sb, unsigned int qid, bool 
 		sfq_count = le64_to_cpu(fq->sfq_count);
 		if (qid == APFS_SFQ_IP && sfq_count * 6 <= le64_to_cpu(sm_raw->sm_ip_block_count))
 			break;
-		if (qid == APFS_SFQ_MAIN && sfq_count <= TRANSACTION_MAIN_QUEUE_MAX - 200)
+		if (qid == APFS_SFQ_MAIN && sfq_count <= APFS_TRANS_MAIN_QUEUE_MAX - 200)
 			break;
 	}
 
