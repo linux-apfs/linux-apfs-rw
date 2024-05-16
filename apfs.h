@@ -150,7 +150,7 @@ struct apfs_spaceman {
 	struct buffer_head *sm_ip_bmaps[];
 };
 
-#define TRANSACTION_MAIN_QUEUE_MAX	4096
+#define TRANSACTION_MAIN_QUEUE_MAX	10000
 #define TRANSACTION_BUFFERS_MAX		65536
 #define TRANSACTION_STARTS_MAX		65536
 
