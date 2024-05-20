@@ -402,14 +402,11 @@ int apfs_map_volume_super(struct super_block *sb, bool write)
 	struct apfs_omap *omap = NULL;
 	struct apfs_node *vnode;
 	struct buffer_head *bh;
-	struct apfs_vol_transaction *trans = &sbi->s_transaction;
 	u64 vol_id;
 	u64 vsb;
 	int err;
 
 	ASSERT(msb_raw);
-	ASSERT(trans->t_old_vsb == sbi->s_vobject.o_bh);
-	(void)trans;
 
 	/* Get the id for the requested volume number */
 	if (sbi->s_vol_nr >= APFS_NX_MAX_FILE_SYSTEMS) {

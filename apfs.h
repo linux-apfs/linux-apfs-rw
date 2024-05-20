@@ -172,16 +172,6 @@ struct apfs_nx_transaction {
 	int t_starts_count;		/* Count of starts for transaction */
 };
 
-/*
- * Structure that keeps track of a volume transaction.
- */
-struct apfs_vol_transaction {
-	struct buffer_head *t_old_vsb;  /* Volume superblock being replaced */
-
-	struct apfs_node t_old_omap_root; /* Omap root node being replaced */
-	struct apfs_node t_old_cat_root;  /* Catalog root node being replaced */
-};
-
 /* State bits for buffer heads in a transaction */
 #define BH_TRANS	BH_PrivateStart		/* Attached to a transaction */
 #define BH_CSUM		(BH_PrivateStart + 1)	/* Requires checksum update */
@@ -333,7 +323,6 @@ struct apfs_sb_info {
 
 	struct apfs_crypto_state_val *s_dflt_pfk; /* default per-file key */
 
-	struct apfs_vol_transaction s_transaction;
 	int s_trans_buffers_max;
 
 	struct inode *s_private_dir;	/* Inode for the private directory */

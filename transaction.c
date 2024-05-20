@@ -285,9 +285,7 @@ void apfs_transaction_init(struct apfs_nx_transaction *trans)
  */
 int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct apfs_vol_transaction *vol_trans = &sbi->s_transaction;
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	int err;
 
@@ -338,16 +336,7 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 		return -ENOSPC;
 	}
 
-	if (!vol_trans->t_old_vsb) {
-		vol_trans->t_old_vsb = sbi->s_vobject.o_bh;
-		get_bh(vol_trans->t_old_vsb);
-
-		/* Backup the old tree roots; the node struct issues make this ugly */
-		vol_trans->t_old_cat_root = *sbi->s_cat_root;
-		get_bh(vol_trans->t_old_cat_root.object.o_bh);
-		vol_trans->t_old_omap_root = *sbi->s_omap->omap_root;
-		get_bh(vol_trans->t_old_omap_root.object.o_bh);
-
+	if (nx_trans->t_starts_count == 0) {
 		err = apfs_map_volume_super(sb, true /* write */);
 		if (err) {
 			apfs_err(sb, "CoW failed for volume super");
@@ -606,7 +595,6 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 {
 	struct apfs_spaceman *sm = APFS_SM(sb);
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct apfs_sb_info *sbi;
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	struct apfs_bh_info *bhi, *tmp;
 	int err = 0;
@@ -700,24 +688,6 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	if (err) {
 		apfs_err(sb, "failed to end the checkpoint");
 		return err;
-	}
-
-	list_for_each_entry(sbi, &nxi->vol_list, list) {
-		struct apfs_vol_transaction *vol_trans = &sbi->s_transaction;
-
-		if (!vol_trans->t_old_vsb)
-			continue;
-
-		brelse(vol_trans->t_old_vsb);
-		vol_trans->t_old_vsb = NULL;
-
-		/* XXX: forget the buffers for the b-tree roots */
-		vol_trans->t_old_omap_root.object.data = NULL;
-		brelse(vol_trans->t_old_omap_root.object.o_bh);
-		vol_trans->t_old_omap_root.object.o_bh = NULL;
-		vol_trans->t_old_cat_root.object.data = NULL;
-		brelse(vol_trans->t_old_cat_root.object.o_bh);
-		vol_trans->t_old_cat_root.object.o_bh = NULL;
 	}
 
 	for (bmap_idx = 0; bmap_idx < APFS_SM(sb)->sm_ip_bmaps_count; ++bmap_idx) {
@@ -899,7 +869,6 @@ static void apfs_force_readonly(struct apfs_nxsb_info *nxi)
  */
 void apfs_transaction_abort(struct super_block *sb)
 {
-	struct apfs_sb_info *sbi;
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	struct apfs_bh_info *bhi, *tmp;
@@ -932,35 +901,6 @@ void apfs_transaction_abort(struct super_block *sb)
 
 		list_del(&bhi->list);
 		kfree(bhi);
-	}
-
-	/*
-	 * TODO: get rid of all this stuff, it makes little sense. Maybe do an
-	 * actual read-only remount?
-	 */
-	list_for_each_entry(sbi, &nxi->vol_list, list) {
-		struct apfs_vol_transaction *vol_trans = &sbi->s_transaction;
-
-		if (!vol_trans->t_old_vsb)
-			continue;
-
-		/* Restore volume state for all volumes */
-		brelse(sbi->s_vobject.o_bh);
-		sbi->s_vobject.o_bh = vol_trans->t_old_vsb;
-		sbi->s_vobject.data = sbi->s_vobject.o_bh->b_data;
-		sbi->s_vobject.block_nr = vol_trans->t_old_vsb->b_blocknr;
-		sbi->s_vsb_raw = (void *)vol_trans->t_old_vsb->b_data;
-		vol_trans->t_old_vsb = NULL;
-
-		/* XXX: restore the old b-tree root nodes */
-		brelse(sbi->s_omap->omap_root->object.o_bh);
-		*(sbi->s_omap->omap_root) = vol_trans->t_old_omap_root;
-		vol_trans->t_old_omap_root.object.o_bh = NULL;
-		vol_trans->t_old_omap_root.object.data = NULL;
-		brelse(sbi->s_cat_root->object.o_bh);
-		*(sbi->s_cat_root) = vol_trans->t_old_cat_root;
-		vol_trans->t_old_cat_root.object.o_bh = NULL;
-		vol_trans->t_old_cat_root.object.data = NULL;
 	}
 
 	sm = APFS_SM(sb);
