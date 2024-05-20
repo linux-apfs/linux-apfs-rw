@@ -263,6 +263,19 @@ static int apfs_read_ephemeral_objects(struct super_block *sb)
 }
 
 /**
+ * apfs_transaction_init - Initialize the transaction struct for the container
+ * @trans: the transaction structure
+ */
+void apfs_transaction_init(struct apfs_nx_transaction *trans)
+{
+	trans->t_state = 0;
+	INIT_LIST_HEAD(&trans->t_inodes);
+	INIT_LIST_HEAD(&trans->t_buffers);
+	trans->t_buffers_count = 0;
+	trans->t_starts_count = 0;
+}
+
+/**
  * apfs_transaction_start - Begin a new transaction
  * @sb:		superblock structure
  * @maxops:	maximum operations expected
@@ -305,9 +318,6 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 	if (nx_trans->t_starts_count == 0) {
 		++nxi->nx_xid;
 		nxi->nx_raw->nx_next_xid = cpu_to_le64(nxi->nx_xid + 1);
-
-		INIT_LIST_HEAD(&nx_trans->t_inodes);
-		INIT_LIST_HEAD(&nx_trans->t_buffers);
 
 		err = apfs_read_spaceman(sb);
 		if (err) {

@@ -1651,6 +1651,7 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 		init_rwsem(&nxi->nx_big_sem);
 		list_add(&nxi->nx_list, &nxs);
 		INIT_LIST_HEAD(&nxi->vol_list);
+		apfs_transaction_init(&nxi->nx_transaction);
 	}
 
 	list_add(&sbi->list, &nxi->vol_list);

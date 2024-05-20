@@ -1081,6 +1081,7 @@ extern int apfs_sync_fs(struct super_block *sb, int wait);
 
 /* transaction.c */
 extern int apfs_cpoint_data_free(struct super_block *sb, u64 bno);
+extern void apfs_transaction_init(struct apfs_nx_transaction *trans);
 extern int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops);
 extern int apfs_transaction_commit(struct super_block *sb);
 extern void apfs_inode_join_transaction(struct super_block *sb, struct inode *inode);
