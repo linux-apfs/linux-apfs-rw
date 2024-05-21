@@ -729,7 +729,7 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 		struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
 		struct apfs_spaceman_free_queue *fq_ip = &sm_raw->sm_fq[APFS_SFQ_IP];
 		struct apfs_spaceman_free_queue *fq_main = &sm_raw->sm_fq[APFS_SFQ_MAIN];
-		int buffers_max = APFS_SB(sb)->s_trans_buffers_max;
+		int buffers_max = nxi->nx_trans_buffers_max;
 		int starts_max = APFS_TRANS_STARTS_MAX;
 		int mq_max = APFS_TRANS_MAIN_QUEUE_MAX;
 

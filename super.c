@@ -1384,7 +1384,7 @@ static int apfs_setup_bdi(struct super_block *sb)
 
 static void apfs_set_trans_buffer_limit(struct super_block *sb)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	unsigned long memsize_in_blocks;
 	struct sysinfo info = {0};
 
@@ -1398,9 +1398,9 @@ static void apfs_set_trans_buffer_limit(struct super_block *sb)
 	 * but I still need to get the reclaim to work eventually (TODO).
 	 */
 	if (memsize_in_blocks >= 16 * APFS_TRANS_BUFFERS_MAX)
-		sbi->s_trans_buffers_max = APFS_TRANS_BUFFERS_MAX;
+		nxi->nx_trans_buffers_max = APFS_TRANS_BUFFERS_MAX;
 	else
-		sbi->s_trans_buffers_max = memsize_in_blocks / 16;
+		nxi->nx_trans_buffers_max = memsize_in_blocks / 16;
 }
 
 static int apfs_fill_super(struct super_block *sb, void *data, int silent)

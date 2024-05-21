@@ -244,6 +244,7 @@ struct apfs_nxsb_info {
 
 	struct apfs_spaceman *nx_spaceman;
 	struct apfs_nx_transaction nx_transaction;
+	int nx_trans_buffers_max;
 
 	/* For now, a single semaphore for every operation */
 	struct rw_semaphore nx_big_sem;
@@ -322,8 +323,6 @@ struct apfs_sb_info {
 	kgid_t s_gid;			/* gid to override on-disk gid */
 
 	struct apfs_crypto_state_val *s_dflt_pfk; /* default per-file key */
-
-	int s_trans_buffers_max;
 
 	struct inode *s_private_dir;	/* Inode for the private directory */
 	struct work_struct s_orphan_cleanup_work;
