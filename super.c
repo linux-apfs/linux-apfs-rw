@@ -673,9 +673,14 @@ int apfs_read_catalog(struct super_block *sb, bool write)
 static void apfs_put_super(struct super_block *sb)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_nx_transaction *trans = NULL;
 
 	/* Cleanups won't reschedule themselves during unmount */
 	flush_work(&sbi->s_orphan_cleanup_work);
+
+	/* We are about to commit anyway */
+	trans = &APFS_NXI(sb)->nx_transaction;
+	cancel_delayed_work_sync(&trans->t_work);
 
 	/* Stop flushing orphans and update the volume as needed */
 	if (!(sb->s_flags & SB_RDONLY)) {

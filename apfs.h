@@ -166,6 +166,9 @@ struct apfs_spaceman {
 struct apfs_nx_transaction {
 	unsigned int t_state;
 
+	struct delayed_work t_work;	/* Work task for transaction commits */
+	struct super_block *t_work_sb;	/* sb that last queued a commit */
+
 	struct list_head t_inodes;	/* List of inodes in the transaction */
 	struct list_head t_buffers;	/* List of buffers in the transaction */
 	size_t t_buffers_count;		/* Count of items on the list */

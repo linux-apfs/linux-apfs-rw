@@ -262,6 +262,41 @@ static int apfs_read_ephemeral_objects(struct super_block *sb)
 	return 0;
 }
 
+static void apfs_trans_commit_work(struct work_struct *work)
+{
+	struct super_block *sb = NULL;
+	struct apfs_nxsb_info *nxi = NULL;
+	struct apfs_nx_transaction *trans = NULL;
+	int err;
+
+	trans = container_of(to_delayed_work(work), struct apfs_nx_transaction, t_work);
+	nxi = container_of(trans, struct apfs_nxsb_info, nx_transaction);
+	sb = trans->t_work_sb;
+
+	/*
+	 * If sb is set then the transaction already started, there is no need
+	 * for apfs_transaction_start() here. It would be cleaner to call it
+	 * anyway (and check in there if sb is set), but maxops is a problem
+	 * because we don't need any space. I really need to rethink that stuff
+	 * (TODO).
+	 */
+	down_write(&nxi->nx_big_sem);
+	mutex_lock(&nxs_mutex);
+	if (!sb || sb->s_flags & SB_RDONLY) {
+		/* The commit already took place, or there was an abort */
+		mutex_unlock(&nxs_mutex);
+		up_write(&nxi->nx_big_sem);
+		return;
+	}
+
+	trans->t_state |= APFS_NX_TRANS_FORCE_COMMIT;
+	err = apfs_transaction_commit(sb);
+	if (err) {
+		apfs_err(sb, "queued commit failed (err:%d)", err);
+		apfs_transaction_abort(sb);
+	}
+}
+
 /**
  * apfs_transaction_init - Initialize the transaction struct for the container
  * @trans: the transaction structure
@@ -269,6 +304,7 @@ static int apfs_read_ephemeral_objects(struct super_block *sb)
 void apfs_transaction_init(struct apfs_nx_transaction *trans)
 {
 	trans->t_state = 0;
+	INIT_DELAYED_WORK(&trans->t_work, apfs_trans_commit_work);
 	INIT_LIST_HEAD(&trans->t_inodes);
 	INIT_LIST_HEAD(&trans->t_buffers);
 	trans->t_buffers_count = 0;
@@ -776,7 +812,10 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 int apfs_transaction_commit(struct super_block *sb)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_nx_transaction *trans = NULL;
 	int err = 0;
+
+	trans = &nxi->nx_transaction;
 
 	if (apfs_transaction_need_commit(sb)) {
 		err = apfs_transaction_commit_nx(sb);
@@ -784,6 +823,11 @@ int apfs_transaction_commit(struct super_block *sb)
 			apfs_err(sb, "transaction commit failed");
 			return err;
 		}
+		trans->t_work_sb = NULL;
+		cancel_delayed_work(&trans->t_work);
+	} else {
+		trans->t_work_sb = sb;
+		mod_delayed_work(system_wq, &trans->t_work, msecs_to_jiffies(100));
 	}
 
 	mutex_unlock(&nxs_mutex);
