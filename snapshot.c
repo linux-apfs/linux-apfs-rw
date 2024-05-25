@@ -149,9 +149,9 @@ static int apfs_create_snap_name_rec(struct apfs_node *snap_root, const char *na
 
 	err = apfs_btree_query(sb, &query);
 	if (err == 0) {
-		/* TODO: avoid transaction abort here */
-		apfs_info(sb, "a snapshot with that name already exists");
-		err = -EEXIST;
+		/* This should never happen here, the caller has checked */
+		apfs_alert(sb, "snapshot name record already exists");
+		err = -EFSCORRUPTED;
 		goto fail;
 	}
 	if (err != -ENODATA) {
@@ -333,6 +333,56 @@ static int apfs_update_omap_snapshots(struct super_block *sb)
 }
 
 /**
+ * apfs_snapshot_name_check - Check if a snapshot with the given name exists
+ * @sb:		filesystem superblock
+ * @name:	name to check
+ * @name_len:	length of @name
+ * @eexist:	on return, whether the name exists or not
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_snapshot_name_check(struct super_block *sb, const char *name, int name_len, bool *eexist)
+{
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_superblock *vsb_raw = sbi->s_vsb_raw;
+	struct apfs_node *snap_root = NULL;
+	struct apfs_query *query = NULL;
+	int err;
+
+	snap_root = apfs_read_node(sb, le64_to_cpu(vsb_raw->apfs_snap_meta_tree_oid), APFS_OBJ_PHYSICAL, false /* write */);
+	if (IS_ERR(snap_root)) {
+		apfs_err(sb, "failed to read snap meta root 0x%llx", le64_to_cpu(vsb_raw->apfs_snap_meta_tree_oid));
+		return PTR_ERR(snap_root);
+	}
+	vsb_raw = NULL;
+
+	query = apfs_alloc_query(snap_root, NULL /* parent */);
+	if (!query) {
+		err = -ENOMEM;
+		goto out;
+	}
+	apfs_init_snap_name_key(name, &query->key);
+	query->flags |= APFS_QUERY_SNAP_META | APFS_QUERY_EXACT;
+
+	err = apfs_btree_query(sb, &query);
+	if (err == 0) {
+		*eexist = true;
+	} else if (err == -ENODATA) {
+		*eexist = false;
+		err = 0;
+	} else {
+		apfs_err(sb, "query failed (%s)", name);
+	}
+
+out:
+	apfs_free_query(query);
+	query = NULL;
+	apfs_node_free(snap_root);
+	snap_root = NULL;
+	return err;
+}
+
+/**
  * apfs_do_ioc_takesnapshot - Actual work for apfs_ioc_take_snapshot()
  * @mntpoint:	inode of the mount point to snapshot
  * @name:	label for the snapshot
@@ -348,11 +398,30 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name, i
 	/* TODO: remember to update the maxops in the future */
 	struct apfs_max_ops maxops = {0};
 	u64 sblock_oid;
+	bool eexist = false;
 	int err;
 
 	err = apfs_transaction_start(sb, maxops);
 	if (err)
 		return err;
+
+	/*
+	 * This check can fail in normal operation, so run it before making any
+	 * changes and exit the transaction cleanly if necessary. The name
+	 * lookup will have to be repeated later, but it's ok because I don't
+	 * expect snapshot creation to be a bottleneck for anyone.
+	 */
+	err = apfs_snapshot_name_check(sb, name, name_len, &eexist);
+	if (err) {
+		apfs_err(sb, "snapshot name existence check failed");
+		goto fail;
+	}
+	if (eexist) {
+		err = apfs_transaction_commit(sb);
+		if (err)
+			goto fail;
+		return -EEXIST;
+	}
 
 	/*
 	 * Flush the extent caches to the extenref tree before it gets moved to
