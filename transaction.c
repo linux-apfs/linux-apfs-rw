@@ -20,8 +20,12 @@ static int apfs_checkpoint_end(struct super_block *sb)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_obj_phys *obj = &nxi->nx_raw->nx_o;
 	struct buffer_head *bh = NULL;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
+	struct address_space *bdev_map = nxi->nx_bdev->bd_mapping;
+#else
 	struct inode *bdev_inode = nxi->nx_bdev->bd_inode;
 	struct address_space *bdev_map = bdev_inode->i_mapping;
+#endif
 	int err;
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
