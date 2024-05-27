@@ -57,7 +57,11 @@ static struct apfs_nxsb_info *apfs_nx_find_by_dev(dev_t dev)
  */
 static int apfs_sb_set_blocksize(struct super_block *sb, int size)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
+	if (set_blocksize(APFS_NXI(sb)->nx_bdev_file, size))
+#else
 	if (set_blocksize(APFS_NXI(sb)->nx_bdev, size))
+#endif
 		return 0;
 	sb->s_blocksize = size;
 	sb->s_blocksize_bits = blksize_bits(size);
