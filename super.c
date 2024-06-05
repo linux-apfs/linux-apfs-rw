@@ -23,8 +23,26 @@
 #endif
 
 /* Keep a list of mounted containers, so that their volumes can share them */
-DEFINE_MUTEX(nxs_mutex);
 static LIST_HEAD(nxs);
+/*
+ * The main purpose of this mutex is to protect the list of containers and
+ * their reference counts, but it also has other uses during mounts/unmounts:
+ *   - it prevents new mounts from starting while an unmount is updating the
+ *     backup superblock (apfs_attach_nxi vs apfs_make_super_copy)
+ *   - it prevents a new container superblock read from starting while another
+ *     is taking place, which could cause leaks and other issues if both
+ *     containers are the same (apfs_read_main_super vs itself)
+ *   - it protects the list of volumes for each container, and keeps it
+ *     consistent with the reference count
+ *   - it prevents two different snapshots for a single volume from trying to
+ *     do the first read of their shared omap at the same time
+ *     (apfs_first_read_omap vs itself)
+ *   - it protects the reference count for that shared omap, keeping it
+ *     consistent with the number of volumes that are set with that omap
+ *   - it protects the container mount flags, so that they can only be set by
+ *     the first volume mount to attempt it (apfs_set_nx_flags vs itself)
+ */
+DEFINE_MUTEX(nxs_mutex);
 
 /**
  * apfs_nx_find_by_dev - Search for a device in the list of mounted containers
@@ -139,7 +157,11 @@ static void apfs_make_super_copy(struct super_block *sb)
 	if (!(nxi->nx_flags & APFS_READWRITE))
 		return;
 
-	/* Only update the backup once all volumes are unmounted */
+	/*
+	 * Only update the backup when the last volume is getting unmounted.
+	 * Of course a new mounter could still come along before we actually
+	 * release the nxi.
+	 */
 	mutex_lock(&nxs_mutex);
 	if (nxi->nx_refcnt > 1)
 		goto out_unlock;
@@ -157,6 +179,7 @@ out_unlock:
 }
 
 static int apfs_check_nx_features(struct super_block *sb);
+static void apfs_set_trans_buffer_limit(struct super_block *sb);
 
 /**
  * apfs_read_main_super - Find the container superblock and read it into memory
@@ -168,7 +191,7 @@ static int apfs_check_nx_features(struct super_block *sb);
 static int apfs_read_main_super(struct super_block *sb)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
-	struct buffer_head *bh;
+	struct buffer_head *bh = NULL;
 	struct buffer_head *desc_bh = NULL;
 	struct apfs_nx_superblock *msb_raw;
 	u64 xid, bno = APFS_NX_BLOCK_NUM;
@@ -177,19 +200,24 @@ static int apfs_read_main_super(struct super_block *sb)
 	int err = -EINVAL;
 	int i;
 
-	lockdep_assert_held(&nxs_mutex);
-	if (nxi->nx_refcnt > 1) {
+	mutex_lock(&nxs_mutex);
+
+	if (nxi->nx_blocksize) {
 		/* It's already mapped */
 		sb->s_blocksize = nxi->nx_blocksize;
 		sb->s_blocksize_bits = nxi->nx_blocksize_bits;
 		sb->s_magic = le32_to_cpu(nxi->nx_raw->nx_magic);
-		return 0;
+		err = 0;
+		goto out;
 	}
 
 	/* Read the superblock from the last clean unmount */
 	bh = apfs_read_super_copy(sb);
-	if (IS_ERR(bh))
-		return PTR_ERR(bh);
+	if (IS_ERR(bh)) {
+		err = PTR_ERR(bh);
+		bh = NULL;
+		goto out;
+	}
 	msb_raw = (struct apfs_nx_superblock *)bh->b_data;
 
 	/* We want to mount the latest valid checkpoint among the descriptors */
@@ -197,13 +225,13 @@ static int apfs_read_main_super(struct super_block *sb)
 	if (desc_base >> 63 != 0) {
 		/* The highest bit is set when checkpoints are not contiguous */
 		apfs_err(sb, "checkpoint descriptor tree not yet supported");
-		goto fail;
+		goto out;
 	}
 	desc_blocks = le32_to_cpu(msb_raw->nx_xp_desc_blocks);
 	if (desc_blocks > 10000) { /* Arbitrary loop limit, is it enough? */
 		apfs_err(sb, "too many checkpoint descriptors?");
 		err = -EFSCORRUPTED;
-		goto fail;
+		goto out;
 	}
 
 	/* Now we go through the checkpoints one by one */
@@ -215,7 +243,7 @@ static int apfs_read_main_super(struct super_block *sb)
 		desc_bh = apfs_sb_bread(sb, desc_base + i);
 		if (!desc_bh) {
 			apfs_err(sb, "unable to read checkpoint descriptor");
-			goto fail;
+			goto out;
 		}
 		desc_raw = (struct apfs_nx_superblock *)desc_bh->b_data;
 
@@ -237,7 +265,7 @@ static int apfs_read_main_super(struct super_block *sb)
 	nxi->nx_raw = kmalloc(sb->s_blocksize, GFP_KERNEL);
 	if (!nxi->nx_raw) {
 		err = -ENOMEM;
-		goto fail;
+		goto out;
 	}
 	memcpy(nxi->nx_raw, bh->b_data, sb->s_blocksize);
 	nxi->nx_bno = bno;
@@ -246,10 +274,12 @@ static int apfs_read_main_super(struct super_block *sb)
 	/* For now we only support blocksize < PAGE_SIZE */
 	nxi->nx_blocksize = sb->s_blocksize;
 	nxi->nx_blocksize_bits = sb->s_blocksize_bits;
+	apfs_set_trans_buffer_limit(sb);
 
 	err = apfs_check_nx_features(sb);
-fail:
+out:
 	brelse(bh);
+	mutex_unlock(&nxs_mutex);
 	return err;
 }
 
@@ -300,7 +330,7 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 		mode |= FMODE_WRITE;
 #endif
 
-	lockdep_assert_held(&nxs_mutex);
+	mutex_lock(&nxs_mutex);
 
 	list_del(&sbi->list);
 	if (--nxi->nx_refcnt)
@@ -337,6 +367,7 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 	kfree(nxi);
 out:
 	sbi->s_nxi = NULL;
+	mutex_unlock(&nxs_mutex);
 }
 
 /**
@@ -515,6 +546,14 @@ static struct apfs_omap *apfs_get_omap(struct super_block *sb)
 			continue;
 		if (curr->s_vol_nr == sbi->s_vol_nr) {
 			omap = curr->s_omap;
+			if (!omap) {
+				/*
+				 * This volume has already gone through
+				 * apfs_attach_nxi(), but its omap is either
+				 * not yet read or already put.
+				 */
+				continue;
+			}
 			cache = &omap->omap_cache;
 			++omap->omap_refcnt;
 			/* Right now the cache can't be shared like this */
@@ -598,51 +637,79 @@ fail:
  */
 static int apfs_first_read_omap(struct super_block *sb)
 {
-	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_sb_info *sbi = NULL;
 	struct apfs_omap *omap = NULL;
 	int err;
 
-	lockdep_assert_held(&nxs_mutex);
+	/*
+	 * For each volume, the first mount that gets here is responsible
+	 * for reading the omap. Other mounts (for other snapshots) just
+	 * go through the container's volume list to retrieve it. This results
+	 * in coarse locking as usual: with some thought it would be possible
+	 * to allow other volumes to read their own omaps at the same time,
+	 * but I don't see the point.
+	 */
+	mutex_lock(&nxs_mutex);
+
+	sbi = APFS_SB(sb);
 
 	/* The current transaction and all snapshots share a single omap */
 	omap = apfs_get_omap(sb);
 	if (omap) {
 		sbi->s_omap = omap;
-		return 0;
+		err = 0;
+		goto out;
 	}
 
 	omap = kzalloc(sizeof(*omap), GFP_KERNEL);
-	if (!omap)
-		return -ENOMEM;
+	if (!omap) {
+		err = -ENOMEM;
+		goto out;
+	}
 
 	sbi->s_omap = omap;
 	err = apfs_read_omap(sb, false /* write */);
 	if (err) {
 		kfree(omap);
 		sbi->s_omap = NULL;
-		return err;
+		goto out;
 	}
 
 	++omap->omap_refcnt;
-	return 0;
+	err = 0;
+out:
+	mutex_unlock(&nxs_mutex);
+	return err;
 }
 
 /**
- * apfs_put_omap - Release a reference to an object map
- * @omap: the object map
+ * apfs_unset_omap - Unset the object map in a superblock
+ * @sb: superblock structure
+ *
+ * Shrinks the omap reference, frees the omap if needed, and sets the field to
+ * NULL atomically in relation to apfs_first_read_omap(). So, no other mount
+ * can grab a new reference halfway through.
  */
-static void apfs_put_omap(struct apfs_omap *omap)
+static void apfs_unset_omap(struct super_block *sb)
 {
-	lockdep_assert_held(&nxs_mutex);
+	struct apfs_omap **omap_p = NULL;
+	struct apfs_omap *omap = NULL;
 
+	omap_p = &APFS_SB(sb)->s_omap;
+	omap = *omap_p;
 	if (!omap)
 		return;
 
+	mutex_lock(&nxs_mutex);
+
 	if (--omap->omap_refcnt != 0)
-		return;
+		goto out;
 
 	apfs_node_free(omap->omap_root);
 	kfree(omap);
+out:
+	*omap_p = NULL;
+	mutex_unlock(&nxs_mutex);
 }
 
 /**
@@ -691,9 +758,13 @@ static void apfs_put_super(struct super_block *sb)
 		struct apfs_superblock *vsb_raw;
 		struct buffer_head *vsb_bh;
 		struct apfs_max_ops maxops = {0};
+		int err;
 
-		if (apfs_transaction_start(sb, maxops))
+		err = apfs_transaction_start(sb, maxops);
+		if (err) {
+			apfs_err(sb, "unmount transaction start failed (err:%d)", err);
 			goto fail;
+		}
 		vsb_raw = sbi->s_vsb_raw;
 		vsb_bh = sbi->s_vobject.o_bh;
 
@@ -706,7 +777,9 @@ static void apfs_put_super(struct super_block *sb)
 
 		/* Guarantee commit */
 		sbi->s_nxi->nx_transaction.t_state |= APFS_NX_TRANS_FORCE_COMMIT;
-		if (apfs_transaction_commit(sb)) {
+		err = apfs_transaction_commit(sb);
+		if (err) {
+			apfs_err(sb, "unmount transaction commit failed (err:%d)", err);
 			apfs_transaction_abort(sb);
 			goto fail;
 		}
@@ -719,25 +792,18 @@ static void apfs_put_super(struct super_block *sb)
 	apfs_make_super_copy(sb);
 
 fail:
+	/*
+	 * This is essentially the cleanup for apfs_fill_super(). It goes here
+	 * because generic_shutdown_super() only calls ->put_super() when the
+	 * root dentry has been set, that is, when apfs_fill_super() succeeded.
+	 * The rest of the mount cleanup is done directly by ->kill_sb().
+	 */
 	iput(sbi->s_private_dir);
 	sbi->s_private_dir = NULL;
-
 	apfs_node_free(sbi->s_cat_root);
+	sbi->s_cat_root = NULL;
+	apfs_unset_omap(sb);
 	apfs_unmap_volume_super(sb);
-
-	mutex_lock(&nxs_mutex);
-	apfs_put_omap(sbi->s_omap);
-	sbi->s_omap = NULL;
-	apfs_free_main_super(sbi);
-	mutex_unlock(&nxs_mutex);
-
-	sb->s_fs_info = NULL;
-
-	kfree(sbi->s_snap_name);
-	sbi->s_snap_name = NULL;
-	if (sbi->s_dflt_pfk)
-		kfree(sbi->s_dflt_pfk);
-	kfree(sbi);
 }
 
 static struct kmem_cache *apfs_inode_cachep;
@@ -1071,13 +1137,16 @@ static void apfs_set_nx_flags(struct super_block *sb, unsigned int flags)
 {
 	struct apfs_nxsb_info *nxi = APFS_SB(sb)->s_nxi;
 
-	lockdep_assert_held(&nxs_mutex);
+	mutex_lock(&nxs_mutex);
 
-	/* The mount flags can only be set when the container is first mounted */
-	if (nxi->nx_refcnt == 1)
+	/* The first mount thet gets here decides the flags for its container */
+	flags |= APFS_FLAGS_SET;
+	if (!(nxi->nx_flags & APFS_FLAGS_SET))
 		nxi->nx_flags = flags;
 	else if (flags != nxi->nx_flags)
 		apfs_warn(sb, "ignoring mount flags - container already mounted");
+
+	mutex_unlock(&nxs_mutex);
 }
 
 /**
@@ -1146,8 +1215,6 @@ static int parse_options(struct super_block *sb, char *options)
 	int option;
 	int err = 0;
 	unsigned int nx_flags;
-
-	lockdep_assert_held(&nxs_mutex);
 
 	/* Set default values before parsing */
 	sbi->s_vol_nr = 0;
@@ -1418,24 +1485,31 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 	struct inode *root = NULL, *priv = NULL;
 	int err;
 
-	ASSERT(sbi);
-	lockdep_assert_held(&nxs_mutex);
+	/*
+	 * This function doesn't write anything to disk, that happens later
+	 * when an actual transaction begins. So, it's not generally a problem
+	 * if other mounts for the same container fill their own supers at the
+	 * same time (the few critical sections will be protected by
+	 * nxs_mutex), nor is it a problem if other mounted volumes want to
+	 * make reads while the mount is taking place. But we definitely don't
+	 * want any writes, or else we could find ourselves reading stale
+	 * blocks after CoW, among other issues.
+	 */
+	down_read(&APFS_NXI(sb)->nx_big_sem);
 
 	err = apfs_setup_bdi(sb);
 	if (err)
-		return err;
-
-	apfs_set_trans_buffer_limit(sb);
+		goto failed_volume;
 
 	sbi->s_uid = INVALID_UID;
 	sbi->s_gid = INVALID_GID;
 	err = parse_options(sb, data);
 	if (err)
-		return err;
+		goto failed_volume;
 
 	err = apfs_map_volume_super(sb, false /* write */);
 	if (err)
-		return err;
+		goto failed_volume;
 
 	err = apfs_check_vol_features(sb);
 	if (err)
@@ -1465,6 +1539,12 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_xattr = apfs_xattr_handlers;
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_time_gran = 1; /* Nanosecond granularity */
+
+	/*
+	 * At this point everything is already set up for the inode reads,
+	 * which take care of their own locking as always.
+	 */
+	up_read(&APFS_NXI(sb)->nx_big_sem);
 
 	sbi->s_private_dir = apfs_iget(sb, APFS_PRIV_DIR_INO_NUM);
 	if (IS_ERR(sbi->s_private_dir)) {
@@ -1499,12 +1579,14 @@ failed_mount:
 	iput(sbi->s_private_dir);
 failed_private_dir:
 	sbi->s_private_dir = NULL;
+	down_read(&APFS_NXI(sb)->nx_big_sem);
 	apfs_node_free(sbi->s_cat_root);
 failed_cat:
-	apfs_put_omap(sbi->s_omap);
-	sbi->s_omap = NULL;
+	apfs_unset_omap(sb);
 failed_omap:
 	apfs_unmap_volume_super(sb);
+failed_volume:
+	up_read(&APFS_NXI(sb)->nx_big_sem);
 	return err;
 }
 
@@ -1608,11 +1690,11 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 	dev_t dev = 0;
 	int ret;
 
-	lockdep_assert_held(&nxs_mutex);
+	mutex_lock(&nxs_mutex);
 
 	ret = apfs_lookup_bdev(dev_name, &dev);
 	if (ret)
-		return ret;
+		goto out;
 
 	nxi = apfs_nx_find_by_dev(dev);
 	if (!nxi) {
@@ -1624,14 +1706,17 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 		struct block_device *bdev = NULL;
 
 		nxi = kzalloc(sizeof(*nxi), GFP_KERNEL);
-		if (!nxi)
-			return -ENOMEM;
+		if (!nxi) {
+			ret = -ENOMEM;
+			goto out;
+		}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
 		file = bdev_file_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
 		if (IS_ERR(file)) {
 			kfree(nxi);
-			return PTR_ERR(file);
+			ret = PTR_ERR(file);
+			goto out;
 		}
 		nxi->nx_bdev_file = file;
 		bdev = file_bdev(file);
@@ -1639,7 +1724,8 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 		handle = bdev_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
 		if (IS_ERR(handle)) {
 			kfree(nxi);
-			return PTR_ERR(handle);
+			ret = PTR_ERR(handle);
+			goto out;
 		}
 		nxi->nx_bdev_handle = handle;
 		bdev = handle->bdev;
@@ -1650,7 +1736,8 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 #endif
 		if (IS_ERR(bdev)) {
 			kfree(nxi);
-			return PTR_ERR(bdev);
+			ret = PTR_ERR(bdev);
+			goto out;
 		}
 
 		nxi->nx_bdev = bdev;
@@ -1663,7 +1750,10 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 	list_add(&sbi->list, &nxi->vol_list);
 	sbi->s_nxi = nxi;
 	++nxi->nx_refcnt;
-	return 0;
+	ret = 0;
+out:
+	mutex_unlock(&nxs_mutex);
+	return ret;
 }
 
 /*
@@ -1672,7 +1762,6 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 				 const char *dev_name, void *data)
 {
-	struct apfs_nxsb_info *nxi;
 	struct super_block *sb;
 	struct apfs_sb_info *sbi;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
@@ -1682,13 +1771,9 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 #endif
 	int error = 0;
 
-	mutex_lock(&nxs_mutex);
-
 	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
-	if (!sbi) {
-		error = -ENOMEM;
-		goto out_unlock;
-	}
+	if (!sbi)
+		return ERR_PTR(-ENOMEM);
 	sbi->s_vol_nr = apfs_get_vol_number(data);
 	sbi->s_snap_name = apfs_get_snap_name(data);
 
@@ -1704,17 +1789,23 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	error = apfs_attach_nxi(sbi, dev_name, mode);
 	if (error)
 		goto out_free_sbi;
-	nxi = sbi->s_nxi;
 
 	/* TODO: lockfs stuff? Btrfs doesn't seem to care */
 	sb = sget(fs_type, apfs_test_super, apfs_set_super, flags | SB_NOSEC, sbi);
 	if (IS_ERR(sb))
 		goto out_unmap_super;
 
+	/*
+	 * I'm doing something hacky with s_dev inside ->kill_sb(), so I want
+	 * to find out as soon as possible if I messed it up.
+	 */
+	WARN_ON(sb->s_dev != APFS_NXI(sb)->nx_bdev->bd_dev);
+
 	if (sb->s_root) {
 		if ((flags ^ sb->s_flags) & SB_RDONLY) {
 			error = -EBUSY;
-			goto out_deactivate_super;
+			deactivate_locked_super(sb);
+			goto out_unmap_super;
 		}
 		/* Only one superblock per volume */
 		apfs_free_main_super(sbi);
@@ -1724,39 +1815,73 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 		sbi = NULL;
 	} else {
 		error = apfs_read_main_super(sb);
-		if (error)
-			goto out_deactivate_super;
+		if (error) {
+			deactivate_locked_super(sb);
+			return ERR_PTR(error);
+		}
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 		sb->s_mode = mode;
 #endif
 		snprintf(sb->s_id, sizeof(sb->s_id), "%xg", sb->s_dev);
 		error = apfs_fill_super(sb, data, flags & SB_SILENT ? 1 : 0);
-		if (error)
-			goto out_deactivate_super;
+		if (error) {
+			deactivate_locked_super(sb);
+			return ERR_PTR(error);
+		}
 		sb->s_flags |= SB_ACTIVE;
 	}
 
-	mutex_unlock(&nxs_mutex);
 	return dget(sb->s_root);
 
-out_deactivate_super:
-	deactivate_locked_super(sb);
 out_unmap_super:
 	apfs_free_main_super(sbi);
 out_free_sbi:
 	kfree(sbi->s_snap_name);
 	kfree(sbi);
-out_unlock:
-	mutex_unlock(&nxs_mutex);
 	return ERR_PTR(error);
+}
+
+/**
+ * apfs_free_sb_info - Free the sb info and release all remaining fields
+ * @sb: superblock structure
+ *
+ * This function does not include the cleanup for apfs_fill_super(), which
+ * already took place inside ->put_super() (or maybe inside apfs_fill_super()
+ * itself if the mount failed).
+ */
+static void apfs_free_sb_info(struct super_block *sb)
+{
+	struct apfs_sb_info *sbi = NULL;
+
+	sbi = APFS_SB(sb);
+	apfs_free_main_super(sbi);
+	sb->s_fs_info = NULL;
+
+	kfree(sbi->s_snap_name);
+	sbi->s_snap_name = NULL;
+	if (sbi->s_dflt_pfk)
+		kfree(sbi->s_dflt_pfk);
+	kfree(sbi);
+	sbi = NULL;
 }
 
 static void apfs_kill_sb(struct super_block *sb)
 {
-	dev_t anon_dev = APFS_SB(sb)->s_anon_dev;
+	struct apfs_sb_info *sbi = APFS_SB(sb);
 
-	generic_shutdown_super(sb);
-	free_anon_bdev(anon_dev);
+	/*
+	 * We need to delist the superblock before freeing its info to avoid a
+	 * race with apfs_test_super(), but we can't call kill_super_notify()
+	 * from the driver. The available wrapper is kill_anon_super(), but our
+	 * s_dev is set to the actual device (that gets freed later along with
+	 * the container), not to the anon device that we keep on the sbi. So,
+	 * we change that before the call; this is safe because other mounters
+	 * won't revive this super, even if apfs_test_super() succeeds.
+	 */
+	sb->s_dev = sbi->s_anon_dev;
+	kill_anon_super(sb);
+
+	apfs_free_sb_info(sb);
 }
 
 static struct file_system_type apfs_fs_type = {

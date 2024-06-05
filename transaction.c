@@ -285,10 +285,8 @@ static void apfs_trans_commit_work(struct work_struct *work)
 	 * (TODO).
 	 */
 	down_write(&nxi->nx_big_sem);
-	mutex_lock(&nxs_mutex);
 	if (!sb || sb->s_flags & SB_RDONLY) {
 		/* The commit already took place, or there was an abort */
-		mutex_unlock(&nxs_mutex);
 		up_write(&nxi->nx_big_sem);
 		return;
 	}
@@ -330,11 +328,9 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 	int err;
 
 	down_write(&nxi->nx_big_sem);
-	mutex_lock(&nxs_mutex); /* Don't mount during a transaction */
 
 	if (sb->s_flags & SB_RDONLY) {
 		/* A previous transaction has failed; this should be rare */
-		mutex_unlock(&nxs_mutex);
 		up_write(&nxi->nx_big_sem);
 		return -EROFS;
 	}
@@ -346,7 +342,6 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 	if (!nxi->nx_eph_list) {
 		err = apfs_read_ephemeral_objects(sb);
 		if (err) {
-			mutex_unlock(&nxs_mutex);
 			up_write(&nxi->nx_big_sem);
 			apfs_err(sb, "failed to read the ephemeral objects");
 			return err;
@@ -440,14 +435,12 @@ int apfs_transaction_flush_all_inodes(struct super_block *sb)
 		list_del_init(&ai->i_list);
 
 		nx_trans->t_state |= APFS_NX_TRANS_COMMITTING;
-		mutex_unlock(&nxs_mutex);
 		up_write(&nxi->nx_big_sem);
 
 		/* Unlocked, so it may call evict() and wait for writeback */
 		iput(inode);
 
 		down_write(&nxi->nx_big_sem);
-		mutex_lock(&nxs_mutex);
 		nx_trans->t_state = 0;
 
 		/* Transaction aborted during writeback, error code is lost */
@@ -855,7 +848,6 @@ int apfs_transaction_commit(struct super_block *sb)
 		mod_delayed_work(system_wq, &trans->t_work, msecs_to_jiffies(100));
 	}
 
-	mutex_unlock(&nxs_mutex);
 	up_write(&nxi->nx_big_sem);
 	return 0;
 }
@@ -949,7 +941,6 @@ void apfs_transaction_abort(struct super_block *sb)
 		/* Transaction already aborted, do nothing */
 		ASSERT(list_empty(&nx_trans->t_inodes));
 		ASSERT(list_empty(&nx_trans->t_buffers));
-		mutex_unlock(&nxs_mutex);
 		up_write(&nxi->nx_big_sem);
 		return;
 	}
@@ -987,7 +978,6 @@ void apfs_transaction_abort(struct super_block *sb)
 	 */
 	apfs_force_readonly(nxi);
 
-	mutex_unlock(&nxs_mutex);
 	up_write(&nxi->nx_big_sem);
 
 	list_for_each_entry_safe(ai, ai_tmp, &nx_trans->t_inodes, i_list) {

@@ -217,6 +217,11 @@ struct apfs_ephemeral_object_info {
 /* Mount option flags for a container */
 #define APFS_CHECK_NODES	1
 #define APFS_READWRITE		2
+/*
+ * Mount options for a container are decided on its first mount. This flag lets
+ * future mounts know that has happened already.
+ */
+#define APFS_FLAGS_SET		4
 
 /*
  * Container superblock data in memory
