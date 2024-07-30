@@ -706,19 +706,23 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		kfree(bhi);
 		bhi = NULL;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+		folio = page_folio(bh->b_page);
+		folio_get(folio);
+#else
+		page = bh->b_page;
+		get_page(page);
+#endif
+
 		is_metadata = buffer_csum(bh);
 		clear_buffer_csum(bh);
 		put_bh(bh);
 		bh = NULL;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
-		folio = page_folio(bh->b_page);
-		folio_get(folio);
 		folio_lock(folio);
 		folio_mkclean(folio);
 #else
-		page = bh->b_page;
-		get_page(page);
 		/* Future writes to mmapped areas should fault for CoW */
 		lock_page(page);
 		page_mkclean(page);
