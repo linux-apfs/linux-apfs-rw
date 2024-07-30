@@ -682,7 +682,11 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	}
 	list_for_each_entry_safe(bhi, tmp, &nx_trans->t_buffers, list) {
 		struct buffer_head *bh = bhi->bh;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+		struct folio *folio = NULL;
+#else
 		struct page *page = NULL;
+#endif
 		bool is_metadata;
 
 		ASSERT(buffer_trans(bh));
@@ -702,27 +706,40 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		kfree(bhi);
 		bhi = NULL;
 
-		page = bh->b_page;
-		get_page(page);
-
 		is_metadata = buffer_csum(bh);
 		clear_buffer_csum(bh);
 		put_bh(bh);
 		bh = NULL;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+		folio = page_folio(bh->b_page);
+		folio_get(folio);
+		folio_lock(folio);
+		folio_mkclean(folio);
+#else
+		page = bh->b_page;
+		get_page(page);
 		/* Future writes to mmapped areas should fault for CoW */
 		lock_page(page);
 		page_mkclean(page);
+#endif
 		/* XXX: otherwise, the page cache fills up and crashes the machine */
 		if (!is_metadata) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+			try_to_free_buffers(folio);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
 			try_to_free_buffers(page_folio(page));
 #else
 			try_to_free_buffers(page);
 #endif
 		}
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+		folio_unlock(folio);
+		folio_put(folio);
+#else
 		unlock_page(page);
 		put_page(page);
+#endif
 	}
 	err = apfs_checkpoint_end(sb);
 	if (err) {
