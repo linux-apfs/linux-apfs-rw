@@ -1792,8 +1792,10 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 
 	/* TODO: lockfs stuff? Btrfs doesn't seem to care */
 	sb = sget(fs_type, apfs_test_super, apfs_set_super, flags | SB_NOSEC, sbi);
-	if (IS_ERR(sb))
+	if (IS_ERR(sb)) {
+		error = PTR_ERR(sb);
 		goto out_unmap_super;
+	}
 
 	/*
 	 * I'm doing something hacky with s_dev inside ->kill_sb(), so I want
