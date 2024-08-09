@@ -421,6 +421,24 @@ fail:
 }
 
 /**
+ * apfs_alloc_omap - Allocate and initialize an object map struct
+ *
+ * Returns the struct, or NULL in case of allocation failure.
+ */
+static struct apfs_omap *apfs_alloc_omap(void)
+{
+	struct apfs_omap *omap = NULL;
+	struct apfs_omap_cache *cache = NULL;
+
+	omap = kzalloc(sizeof(*omap), GFP_KERNEL);
+	if (!omap)
+		return NULL;
+	cache = &omap->omap_cache;
+	spin_lock_init(&cache->lock);
+	return omap;
+}
+
+/**
  * apfs_map_volume_super - Find the volume superblock and map it into memory
  * @sb:		superblock structure
  * @write:	request write access?
@@ -483,7 +501,7 @@ int apfs_map_volume_super(struct super_block *sb, bool write)
 	brelse(bh);
 	bh = NULL;
 
-	omap = kzalloc(sizeof(*omap), GFP_KERNEL);
+	omap = apfs_alloc_omap();
 	if (!omap) {
 		apfs_node_free(vnode);
 		return -ENOMEM;
@@ -661,7 +679,7 @@ static int apfs_first_read_omap(struct super_block *sb)
 		goto out;
 	}
 
-	omap = kzalloc(sizeof(*omap), GFP_KERNEL);
+	omap = apfs_alloc_omap();
 	if (!omap) {
 		err = -ENOMEM;
 		goto out;
@@ -950,7 +968,7 @@ static int apfs_count_used_blocks(struct super_block *sb, u64 *count)
 		return PTR_ERR(vnode);
 	}
 
-	omap = kzalloc(sizeof(*omap), GFP_KERNEL);
+	omap = apfs_alloc_omap();
 	if (!omap) {
 		err = -ENOMEM;
 		goto fail;
