@@ -12,9 +12,12 @@
 #include <linux/types.h>
 #include <linux/nls.h>
 #include <linux/ctype.h>
+#include <linux/version.h>
 #include "unicode.h"
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
 #define MIN(X, Y)	((X) <= (Y) ? (X) : (Y))
+#endif
 
 /* The arrays of unicode data are defined at the bottom of the file */
 /* TODO: would a single trie with all the data be more efficient? */

@@ -8,7 +8,9 @@
 #include <linux/blk_types.h>
 #include "apfs.h"
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
 #define MAX(X, Y)	((X) <= (Y) ? (Y) : (X))
+#endif
 
 /**
  * apfs_ext_is_hole - Does this extent represent a hole in a sparse file?
