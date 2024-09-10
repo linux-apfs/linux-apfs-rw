@@ -1167,59 +1167,6 @@ static void apfs_set_nx_flags(struct super_block *sb, unsigned int flags)
 	mutex_unlock(&nxs_mutex);
 }
 
-/**
- * apfs_get_vol_number - Retrieve the volume number from the mount options
- * @options:	string of mount options
- *
- * On error, it will just return the default volume 0.
- */
-static unsigned int apfs_get_vol_number(char *options)
-{
-	char needle[] = "vol=";
-	char *volstr;
-	long vol;
-
-	if (!options)
-		return 0;
-
-	/* TODO: just parse all the options once... */
-	volstr = strstr(options, needle);
-	if (!volstr)
-		return 0;
-	volstr += sizeof(needle) - 1;
-
-	/* TODO: other bases? */
-	if (kstrtol(volstr, 10, &vol) < 0)
-		return 0;
-	return vol;
-}
-
-/**
- * apfs_get_snap_name - Duplicate the snapshot label from the mount options
- * @options:	string of mount options
- *
- * On error, it will just return the default NULL snapshot name. TODO: this is
- * actually a bit dangerous because a memory allocation failure might get the
- * same snapshot mounted twice, without a shared superblock.
- */
-static char *apfs_get_snap_name(char *options)
-{
-	char needle[] = "snap=";
-	char *name = NULL, *end = NULL;
-
-	if (!options)
-		return NULL;
-
-	name = strstr(options, needle);
-	if (!name)
-		return NULL;
-
-	name += sizeof(needle) - 1;
-	end = strchrnul(name, ',');
-
-	return kmemdup_nul(name, end - name, GFP_KERNEL);
-}
-
 /*
  * Many of the parse_options() functions in other file systems return 0
  * on error. This one returns an error code, and 0 on success.
@@ -1235,7 +1182,6 @@ static int parse_options(struct super_block *sb, char *options)
 	unsigned int nx_flags;
 
 	/* Set default values before parsing */
-	sbi->s_vol_nr = 0;
 	nx_flags = 0;
 
 	if (!options)
@@ -1283,15 +1229,8 @@ static int parse_options(struct super_block *sb, char *options)
 			}
 			break;
 		case Opt_vol:
-			err = match_int(&args[0], &sbi->s_vol_nr);
-			if (err)
-				return err;
-			break;
 		case Opt_snap:
-			kfree(sbi->s_snap_name);
-			sbi->s_snap_name = match_strdup(&args[0]);
-			if (!sbi->s_snap_name)
-				return -ENOMEM;
+			/* Already read early on mount */
 			break;
 		default:
 			return -EINVAL;
@@ -1774,6 +1713,71 @@ out:
 	return ret;
 }
 
+/**
+ * apfs_preparse_options - Parse the options used to identify a superblock
+ * @sbi:	superblock info
+ * @options:	options string to parse
+ *
+ * Returns 0 on success, or a negative error code in case of failure. Even on
+ * failure, the caller is responsible for freeing all superblock fields.
+ */
+static int apfs_preparse_options(struct apfs_sb_info *sbi, char *options)
+{
+	char *tofree = NULL;
+	char *p;
+	substring_t args[MAX_OPT_ARGS];
+	int err = 0;
+
+	/* Set default values before parsing */
+	sbi->s_vol_nr = 0;
+	sbi->s_snap_name = NULL;
+
+	if (!options)
+		return 0;
+
+	/* Later parse_options() will need the unmodified options string */
+	options = kstrdup(options, GFP_KERNEL);
+	if (!options)
+		return -ENOMEM;
+	tofree = options;
+
+	while ((p = strsep(&options, ",")) != NULL) {
+		int token;
+
+		if (!*p)
+			continue;
+		token = match_token(p, tokens, args);
+		switch (token) {
+		case Opt_vol:
+			err = match_int(&args[0], &sbi->s_vol_nr);
+			if (err)
+				goto out;
+			break;
+		case Opt_snap:
+			kfree(sbi->s_snap_name);
+			sbi->s_snap_name = match_strdup(&args[0]);
+			if (!sbi->s_snap_name) {
+				err = -ENOMEM;
+				goto out;
+			}
+			break;
+		case Opt_readwrite:
+		case Opt_cknodes:
+		case Opt_uid:
+		case Opt_gid:
+			/* Not needed for sget(), will be read later */
+			break;
+		default:
+			err = -EINVAL;
+			goto out;
+		}
+	}
+	err = 0;
+out:
+	kfree(tofree);
+	return err;
+}
+
 /*
  * This function is a copy of mount_bdev() that allows multiple mounts.
  */
@@ -1792,8 +1796,10 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
 	if (!sbi)
 		return ERR_PTR(-ENOMEM);
-	sbi->s_vol_nr = apfs_get_vol_number(data);
-	sbi->s_snap_name = apfs_get_snap_name(data);
+	/* Set up the fields that sget() will need to id the superblock */
+	error = apfs_preparse_options(sbi, data);
+	if (error)
+		goto out_free_sbi;
 
 	/* Make sure that snapshots are mounted read-only */
 	if (sbi->s_snap_name)
