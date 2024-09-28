@@ -964,8 +964,13 @@ extern int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 				 struct dentry *dentry);
 extern int apfs_inode_create_exclusive_dstream(struct inode *inode);
 extern int APFS_CREATE_INODE_REC_MAXOPS(void);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 extern int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata);
 extern int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata);
+#else
+extern int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct folio **foliop, void **fsdata);
+extern int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct folio *folio, void *fsdata);
+#endif
 extern int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)

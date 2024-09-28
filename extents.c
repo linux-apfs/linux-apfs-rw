@@ -1206,7 +1206,11 @@ static int apfs_zero_dstream_tail(struct apfs_dstream_info *dstream)
 {
 	struct super_block *sb = dstream->ds_sb;
 	struct inode *inode = NULL;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 	struct page *page = NULL;
+#else
+	struct folio *folio = NULL;
+#endif
 	void *fsdata = NULL;
 	int valid_length;
 	int err;
@@ -1228,10 +1232,18 @@ static int apfs_zero_dstream_tail(struct apfs_dstream_info *dstream)
 	}
 
 	/* This will take care of the CoW and zeroing */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 	err = __apfs_write_begin(NULL, inode->i_mapping, inode->i_size, 0, 0, &page, &fsdata);
+#else
+	err = __apfs_write_begin(NULL, inode->i_mapping, inode->i_size, 0, 0, &folio, &fsdata);
+#endif
 	if (err)
 		return err;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 	return __apfs_write_end(NULL, inode->i_mapping, inode->i_size, 0, 0, page, fsdata);
+#else
+	return __apfs_write_end(NULL, inode->i_mapping, inode->i_size, 0, 0, folio, fsdata);
+#endif
 }
 
 /**
