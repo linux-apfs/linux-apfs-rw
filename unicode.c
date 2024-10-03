@@ -15,10 +15,6 @@
 #include <linux/version.h>
 #include "unicode.h"
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
-#define MIN(X, Y)	((X) <= (Y) ? (X) : (Y))
-#endif
-
 /* The arrays of unicode data are defined at the bottom of the file */
 /* TODO: would a single trie with all the data be more efficient? */
 static u16 apfs_nfd_trie[];
@@ -237,7 +233,7 @@ static int apfs_get_normalization_length(const char *utf8str, unsigned int total
 	while (1) {
 		if (!total_len || !*utf8str)
 			return norm_len;
-		utf8len = utf8_to_utf32(utf8str, MIN(total_len, 4), &utf32char);
+		utf8len = utf8_to_utf32(utf8str, min(total_len, 4), &utf32char);
 		if (utf8len < 0) /* Invalid unicode; don't normalize anything */
 			return 0;
 
@@ -309,7 +305,7 @@ new_starter:
 		unicode_t utf32char;
 		int utf8len, pos;
 
-		utf8len = utf8_to_utf32(utf8str, MIN(total_len, 4), &utf32char);
+		utf8len = utf8_to_utf32(utf8str, min(total_len, 4), &utf32char);
 		for (pos = 0;; pos++, str_pos++) {
 			unicode_t utf32norm;
 			u8 ccc;
