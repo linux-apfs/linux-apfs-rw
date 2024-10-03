@@ -117,7 +117,7 @@ static bool apfs_is_precomposed_hangul(unicode_t utf32char)
 	int index;
 
 	index = utf32char - HANGUL_S_BASE;
-	return (index >= 0 && index < HANGUL_S_COUNT);
+	return in_range(index, 0, HANGUL_S_COUNT);
 }
 
 /* Signals the end of the normalization for a single character */

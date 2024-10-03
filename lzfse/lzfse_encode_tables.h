@@ -204,13 +204,13 @@ static inline uint8_t d_base_from_value(int32_t value) {
       0,  0,  0,  0};
   int index = 0;
   int in_range_k;
-  in_range_k = (value >= 0 && value < 60);
+  in_range_k = in_range(value, 0, 60);
   index |= (((value - 0) >> 0) + 0) & -in_range_k;
-  in_range_k = (value >= 60 && value < 1020);
+  in_range_k = in_range(value, 60, 1020 - 60);
   index |= (((value - 60) >> 4) + 64) & -in_range_k;
-  in_range_k = (value >= 1020 && value < 16380);
+  in_range_k = in_range(value, 1020, 16380 - 1020);
   index |= (((value - 1020) >> 8) + 128) & -in_range_k;
-  in_range_k = (value >= 16380 && value < 262140);
+  in_range_k = in_range(value, 16380, 262140 - 16380);
   index |= (((value - 16380) >> 12) + 192) & -in_range_k;
   return sym[index & 255];
 }

@@ -369,9 +369,8 @@ static inline bool apfs_block_in_ip(struct apfs_spaceman *sm, u64 bno)
 {
 	struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
 	u64 start = le64_to_cpu(sm_raw->sm_ip_base);
-	u64 end = start + le64_to_cpu(sm_raw->sm_ip_block_count);
-
-	return bno >= start && bno < end;
+	u64 len = le64_to_cpu(sm_raw->sm_ip_block_count);
+	return in_range(bno, start, len);
 }
 
 /**
