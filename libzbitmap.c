@@ -12,8 +12,6 @@
 #include <linux/string.h>
 #include "libzbitmap.h"
 
-#define MIN(x, y)   ((x) > (y) ? (y) : (x))
-
 #define ZBM_MAGIC       "ZBM\x09"
 #define ZBM_MAGIC_SZ    4
 

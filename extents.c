@@ -8,10 +8,6 @@
 #include <linux/blk_types.h>
 #include "apfs.h"
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
-#define MAX(X, Y)	((X) <= (Y) ? (Y) : (X))
-#endif
-
 /**
  * apfs_ext_is_hole - Does this extent represent a hole in a sparse file?
  * @extent: the extent to check
@@ -1975,7 +1971,7 @@ restart:
 	prev_end = prev_ext.bno + prev_ext.blkcount;
 	if (prev_end < *paddr_end) {
 		/* The extent to put is part of a snapshot */
-		tmp.phys_block_num = MAX(prev_end, paddr_min);
+		tmp.phys_block_num = max(prev_end, paddr_min);
 		tmp.len = (*paddr_end - tmp.phys_block_num) << sb->s_blocksize_bits;
 		ret = apfs_create_update_pext(query, &tmp, -1);
 		*paddr_end = tmp.phys_block_num;
@@ -2115,7 +2111,7 @@ restart:
 	prev_end = prev_ext.bno + prev_ext.blkcount;
 	if (prev_end < *paddr_end) {
 		/* The extent to take is part of a snapshot */
-		tmp.phys_block_num = MAX(prev_end, paddr_min);
+		tmp.phys_block_num = max(prev_end, paddr_min);
 		tmp.len = (*paddr_end - tmp.phys_block_num) << sb->s_blocksize_bits;
 		ret = apfs_create_update_pext(query, &tmp, +1);
 		*paddr_end = tmp.phys_block_num;
