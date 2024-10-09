@@ -470,7 +470,11 @@ out:
 	return ret;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata)
+#else
+int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct folio **foliop, void **fsdata)
+#endif
 {
 	struct inode *inode = mapping->host;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
@@ -515,7 +519,11 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
 		create_empty_buffers(page, sb->s_blocksize, 0);
 #else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 		folio = page_folio(page);
+#else
+		folio = *foliop;
+#endif
 		bh = folio_buffers(folio);
 		if (!bh)
 			bh = create_empty_buffers(folio, sb->s_blocksize, 0);
@@ -565,13 +573,22 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 		}
 	}
 
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 	err = __block_write_begin(page, pos, len, apfs_get_new_block);
+#else
+	err = __block_write_begin(folio, pos, len, apfs_get_new_block);
+#endif
 	if (err) {
 		apfs_err(sb, "CoW failed in inode 0x%llx", apfs_ino(inode));
 		goto out_put_page;
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 	*pagep = page;
+#else
+	*foliop = folio;
+#endif
 	return 0;
 
 out_put_page:
@@ -580,7 +597,11 @@ out_put_page:
 	return err;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+static int apfs_write_begin(struct file *file, struct address_space *mapping,
+			    loff_t pos, unsigned int len,
+			    struct folio **foliop, void **fsdata)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
 static int apfs_write_begin(struct file *file, struct address_space *mapping,
 			    loff_t pos, unsigned int len,
 			    struct page **pagep, void **fsdata)
@@ -612,7 +633,11 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 	if (err)
 		return err;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 	err = __apfs_write_begin(file, mapping, pos, len, flags, pagep, fsdata);
+#else
+	err = __apfs_write_begin(file, mapping, pos, len, flags, foliop, fsdata);
+#endif
 	if (err)
 		goto fail;
 	return 0;
@@ -622,13 +647,22 @@ fail:
 	return err;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata)
+#else
+int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct folio *folio, void *fsdata)
+#endif
 {
 	struct inode *inode = mapping->host;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
 	int ret, err;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 	ret = generic_write_end(file, mapping, pos, len, copied, page, fsdata);
+#else
+	ret = generic_write_end(file, mapping, pos, len, copied, folio, fsdata);
+#endif
+
 	dstream->ds_size = i_size_read(inode);
 	if (ret < len && pos + len > inode->i_size) {
 		truncate_pagecache(inode, inode->i_size);
@@ -641,16 +675,26 @@ int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t po
 	return ret;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 static int apfs_write_end(struct file *file, struct address_space *mapping,
 			  loff_t pos, unsigned int len, unsigned int copied,
 			  struct page *page, void *fsdata)
+#else
+static int apfs_write_end(struct file *file, struct address_space *mapping,
+			  loff_t pos, unsigned int len, unsigned int copied,
+			  struct folio *folio, void *fsdata)
+#endif
 {
 	struct inode *inode = mapping->host;
 	struct super_block *sb = inode->i_sb;
 	struct apfs_nx_transaction *trans = &APFS_NXI(sb)->nx_transaction;
 	int ret, err;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 	ret = __apfs_write_end(file, mapping, pos, len, copied, page, fsdata);
+#else
+	ret = __apfs_write_end(file, mapping, pos, len, copied, folio, fsdata);
+#endif
 	if (ret < 0) {
 		err = ret;
 		goto fail;
@@ -693,9 +737,9 @@ static const struct address_space_operations apfs_aops = {
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
-	.readahead      = apfs_readahead,
+	.readahead	= apfs_readahead,
 #else
-	.readpages      = apfs_readpages,
+	.readpages	= apfs_readpages,
 #endif
 
 	.write_begin	= apfs_write_begin,
