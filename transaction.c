@@ -101,13 +101,18 @@ static bool apfs_transaction_has_room(struct super_block *sb, struct apfs_max_op
 static int apfs_read_single_ephemeral_object(struct super_block *sb, struct apfs_checkpoint_mapping *map)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_nx_superblock *raw_sb = NULL;
 	struct apfs_ephemeral_object_info *list = NULL;
 	struct buffer_head *bh = NULL;
 	char *object = NULL;
 	int count;
-	u32 size;
-	u64 bno, oid;
-	int err, i;
+	u32 data_blks, size;
+	u64 data_base, bno, oid;
+	int err, i, data_idx;
+
+	raw_sb = nxi->nx_raw;
+	data_base = le64_to_cpu(raw_sb->nx_xp_data_base);
+	data_blks = le32_to_cpu(raw_sb->nx_xp_data_blocks);
 
 	list = nxi->nx_eph_list;
 	count = nxi->nx_eph_count;
@@ -135,8 +140,9 @@ static int apfs_read_single_ephemeral_object(struct super_block *sb, struct apfs
 	if (!object)
 		return -ENOMEM;
 
+	data_idx = bno - data_base;
 	for (i = 0; i < size >> sb->s_blocksize_bits; ++i) {
-		bh = apfs_sb_bread(sb, bno + i);
+		bh = apfs_sb_bread(sb, data_base + data_idx);
 		if (!bh) {
 			apfs_err(sb, "failed to read ephemeral block");
 			err = -EIO;
@@ -145,6 +151,9 @@ static int apfs_read_single_ephemeral_object(struct super_block *sb, struct apfs
 		memcpy(object + (i << sb->s_blocksize_bits), bh->b_data, sb->s_blocksize);
 		brelse(bh);
 		bh = NULL;
+		/* Somewhat surprisingly, objects can wrap around */
+		if (++data_idx == data_blks)
+			data_idx = 0;
 	}
 
 	/*
@@ -464,18 +473,24 @@ int apfs_transaction_flush_all_inodes(struct super_block *sb)
 static int apfs_write_single_ephemeral_object(struct super_block *sb, struct apfs_obj_phys *obj_raw, const struct apfs_checkpoint_mapping *map)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_nx_superblock *raw_sb = NULL;
 	struct buffer_head *bh = NULL;
-	u64 bno;
-	u32 size;
-	int err, i;
+	u64 data_base, bno;
+	u32 data_blks, size;
+	int err, i, data_idx;
+
+	raw_sb = nxi->nx_raw;
+	data_base = le64_to_cpu(raw_sb->nx_xp_data_base);
+	data_blks = le32_to_cpu(raw_sb->nx_xp_data_blocks);
 
 	bno = le64_to_cpu(map->cpm_paddr);
 	size = le32_to_cpu(map->cpm_size);
 	obj_raw->o_xid = cpu_to_le64(nxi->nx_xid);
 	apfs_multiblock_set_csum((char *)obj_raw, size);
 
+	data_idx = bno - data_base;
 	for (i = 0; i < size >> sb->s_blocksize_bits; ++i) {
-		bh = apfs_getblk(sb, bno + i);
+		bh = apfs_getblk(sb, data_base + data_idx);
 		if (!bh) {
 			apfs_err(sb, "failed to map ephemeral block");
 			return -EIO;
@@ -489,6 +504,9 @@ static int apfs_write_single_ephemeral_object(struct super_block *sb, struct apf
 		memcpy(bh->b_data, (char *)obj_raw + (i << sb->s_blocksize_bits), sb->s_blocksize);
 		brelse(bh);
 		bh = NULL;
+		/* Somewhat surprisingly, objects can wrap around */
+		if (++data_idx == data_blks)
+			data_idx = 0;
 	}
 	return 0;
 }
@@ -564,15 +582,6 @@ static int apfs_write_ephemeral_objects(struct super_block *sb)
 		eph_info = &nxi->nx_eph_list[i];
 		data_next = (data_index + data_len) % data_blks;
 		obj_blkcnt = eph_info->size >> sb->s_blocksize_bits;
-		if (obj_blkcnt > data_blks - data_next) {
-			/*
-			 * This multiblock object does not fit in what's left
-			 * of the ring buffer, so move it to the beginning and
-			 * leave some empty blocks.
-			 */
-			data_len += data_blks - data_next;
-			data_next = 0;
-		}
 
 		err = apfs_create_cpoint_map(sb, cpm, eph_info->object, data_base + data_next, eph_info->size);
 		if (err) {
