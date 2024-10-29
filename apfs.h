@@ -117,6 +117,11 @@ static inline bool apfs_node_has_fixed_kv_size(struct apfs_node *node)
 	return (node->flags & APFS_BTNODE_FIXED_KV_SIZE) != 0;
 }
 
+struct apfs_ip_bitmap_block_info {
+	bool	dirty;		/* Do we need to commit this block to disk? */
+	void	*block;		/* In-memory address of the bitmap block */
+};
+
 /*
  * Space manager data in memory.
  */
@@ -147,7 +152,7 @@ struct apfs_spaceman {
 	/* Number of ip bitmaps */
 	u32 sm_ip_bmaps_count;
 	/* List of ip bitmaps, in order */
-	struct buffer_head *sm_ip_bmaps[];
+	struct apfs_ip_bitmap_block_info sm_ip_bmaps[];
 };
 
 #define APFS_TRANS_MAIN_QUEUE_MAX	10000
@@ -1066,6 +1071,7 @@ extern int apfs_read_spaceman(struct super_block *sb);
 extern int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count);
 extern int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count);
 extern int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backwards);
+extern int apfs_write_ip_bitmaps(struct super_block *sb);
 
 /* super.c */
 extern int apfs_map_volume_super_bno(struct super_block *sb, u64 bno, bool check);

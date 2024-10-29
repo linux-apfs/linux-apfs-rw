@@ -640,7 +640,6 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	struct apfs_bh_info *bhi, *tmp;
 	int err = 0;
-	u32 bmap_idx;
 
 	ASSERT(!(sb->s_flags & SB_RDONLY));
 
@@ -663,6 +662,16 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 			return err;
 		}
 		sm->sm_free_cache_base = sm->sm_free_cache_blkcnt = 0;
+	}
+	/*
+	 * Writing the ip bitmaps modifies the spaceman, so it must happen
+	 * before we commit the ephemeral objects. It must also happen after we
+	 * flush the free queue, in case the last freed range was in the ip.
+	 */
+	err = apfs_write_ip_bitmaps(sb);
+	if (err) {
+		apfs_err(sb, "failed to commit the ip bitmaps");
+		return err;
 	}
 	err = apfs_write_ephemeral_objects(sb);
 	if (err)
@@ -752,12 +761,6 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		apfs_err(sb, "failed to end the checkpoint");
 		return err;
 	}
-
-	for (bmap_idx = 0; bmap_idx < APFS_SM(sb)->sm_ip_bmaps_count; ++bmap_idx) {
-		brelse(APFS_SM(sb)->sm_ip_bmaps[bmap_idx]);
-		APFS_SM(sb)->sm_ip_bmaps[bmap_idx] = NULL;
-	}
-	APFS_SM(sb)->sm_raw = NULL;
 
 	nx_trans->t_starts_count = 0;
 	nx_trans->t_buffers_count = 0;
@@ -943,8 +946,6 @@ void apfs_transaction_abort(struct super_block *sb)
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
 	struct apfs_bh_info *bhi, *tmp;
 	struct apfs_inode_info *ai, *ai_tmp;
-	struct apfs_spaceman *sm = NULL;
-	u32 bmap_idx;
 
 	if (sb->s_flags & SB_RDONLY) {
 		/* Transaction already aborted, do nothing */
@@ -970,15 +971,6 @@ void apfs_transaction_abort(struct super_block *sb)
 
 		list_del(&bhi->list);
 		kfree(bhi);
-	}
-
-	sm = APFS_SM(sb);
-	if (sm) {
-		for (bmap_idx = 0; bmap_idx < sm->sm_ip_bmaps_count; ++bmap_idx) {
-			brelse(sm->sm_ip_bmaps[bmap_idx]);
-			sm->sm_ip_bmaps[bmap_idx] = NULL;
-		}
-		APFS_SM(sb)->sm_raw = NULL;
 	}
 
 	/*

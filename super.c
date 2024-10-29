@@ -323,6 +323,8 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 	fmode_t mode = FMODE_READ | FMODE_EXCL;
 #endif
 	struct apfs_ephemeral_object_info *eph_list = NULL;
+	struct apfs_spaceman *sm = NULL;
+	u32 bmap_idx;
 	int i;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
@@ -362,8 +364,15 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 #endif
 
 	list_del(&nxi->nx_list);
-	kfree(nxi->nx_spaceman);
-	nxi->nx_spaceman = NULL;
+	sm = nxi->nx_spaceman;
+	if (sm) {
+		for (bmap_idx = 0; bmap_idx < sm->sm_ip_bmaps_count; ++bmap_idx) {
+			kfree(sm->sm_ip_bmaps[bmap_idx].block);
+			sm->sm_ip_bmaps[bmap_idx].block = NULL;
+		}
+		kfree(sm);
+		nxi->nx_spaceman = sm = NULL;
+	}
 	kfree(nxi);
 out:
 	sbi->s_nxi = NULL;
