@@ -721,9 +721,9 @@ static const struct address_space_operations apfs_aops = {
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
-	.readahead      = apfs_readahead,
+	.readahead	= apfs_readahead,
 #else
-	.readpages      = apfs_readpages,
+	.readpages	= apfs_readpages,
 #endif
 
 	.write_begin	= apfs_write_begin,
