@@ -233,7 +233,7 @@ static int apfs_get_normalization_length(const char *utf8str, unsigned int total
 	while (1) {
 		if (!total_len || !*utf8str)
 			return norm_len;
-		utf8len = utf8_to_utf32(utf8str, min(total_len, 4), &utf32char);
+		utf8len = utf8_to_utf32(utf8str, min(total_len, 4U), &utf32char);
 		if (utf8len < 0) /* Invalid unicode; don't normalize anything */
 			return 0;
 
@@ -305,7 +305,7 @@ new_starter:
 		unicode_t utf32char;
 		int utf8len, pos;
 
-		utf8len = utf8_to_utf32(utf8str, min(total_len, 4), &utf32char);
+		utf8len = utf8_to_utf32(utf8str, min(total_len, 4U), &utf32char);
 		for (pos = 0;; pos++, str_pos++) {
 			unicode_t utf32norm;
 			u8 ccc;
