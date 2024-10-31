@@ -565,7 +565,11 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 		}
 	}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+	err = __block_write_begin(page_folio(page), pos, len, apfs_get_new_block);
+#else
 	err = __block_write_begin(page, pos, len, apfs_get_new_block);
+#endif
 	if (err) {
 		apfs_err(sb, "CoW failed in inode 0x%llx", apfs_ino(inode));
 		goto out_put_page;
@@ -580,7 +584,11 @@ out_put_page:
 	return err;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+static int apfs_write_begin(struct file *file, struct address_space *mapping,
+			    loff_t pos, unsigned int len,
+			    struct folio **foliop, void **fsdata)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
 static int apfs_write_begin(struct file *file, struct address_space *mapping,
 			    loff_t pos, unsigned int len,
 			    struct page **pagep, void **fsdata)
@@ -592,6 +600,10 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 {
 	struct inode *inode = mapping->host;
 	struct super_block *sb = inode->i_sb;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+	struct page *page = NULL;
+	struct page **pagep = &page;
+#endif
 	int blkcount = (len + sb->s_blocksize - 1) >> inode->i_blkbits;
 	struct apfs_max_ops maxops;
 	int err;
@@ -615,6 +627,9 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 	err = __apfs_write_begin(file, mapping, pos, len, flags, pagep, fsdata);
 	if (err)
 		goto fail;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+	*foliop = page_folio(page);
+#endif
 	return 0;
 
 fail:
@@ -628,7 +643,11 @@ int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t po
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
 	int ret, err;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+	ret = generic_write_end(file, mapping, pos, len, copied, page_folio(page), fsdata);
+#else
 	ret = generic_write_end(file, mapping, pos, len, copied, page, fsdata);
+#endif
 	dstream->ds_size = i_size_read(inode);
 	if (ret < len && pos + len > inode->i_size) {
 		truncate_pagecache(inode, inode->i_size);
@@ -641,13 +660,22 @@ int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t po
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+static int apfs_write_end(struct file *file, struct address_space *mapping,
+			  loff_t pos, unsigned int len, unsigned int copied,
+			  struct folio *folio, void *fsdata)
+#else
 static int apfs_write_end(struct file *file, struct address_space *mapping,
 			  loff_t pos, unsigned int len, unsigned int copied,
 			  struct page *page, void *fsdata)
+#endif
 {
 	struct inode *inode = mapping->host;
 	struct super_block *sb = inode->i_sb;
 	struct apfs_nx_transaction *trans = &APFS_NXI(sb)->nx_transaction;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+	struct page *page = &folio->page;
+#endif
 	int ret, err;
 
 	ret = __apfs_write_end(file, mapping, pos, len, copied, page, fsdata);
