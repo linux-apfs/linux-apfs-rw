@@ -115,6 +115,12 @@ static struct buffer_head *apfs_read_super_copy(struct super_block *sb)
 	msb_raw = (struct apfs_nx_superblock *)bh->b_data;
 	blocksize = le32_to_cpu(msb_raw->nx_block_size);
 
+	sb->s_magic = le32_to_cpu(msb_raw->nx_magic);
+	if (sb->s_magic != APFS_NX_MAGIC) {
+		apfs_warn(sb, "not an apfs container - are you mounting the right partition?");
+		goto fail;
+	}
+
 	if (sb->s_blocksize != blocksize) {
 		brelse(bh);
 
@@ -130,11 +136,6 @@ static struct buffer_head *apfs_read_super_copy(struct super_block *sb)
 		msb_raw = (struct apfs_nx_superblock *)bh->b_data;
 	}
 
-	sb->s_magic = le32_to_cpu(msb_raw->nx_magic);
-	if (sb->s_magic != APFS_NX_MAGIC) {
-		apfs_err(sb, "not an apfs filesystem");
-		goto fail;
-	}
 	if (!apfs_obj_verify_csum(sb, bh))
 		apfs_notice(sb, "backup superblock seems corrupted");
 	return bh;
