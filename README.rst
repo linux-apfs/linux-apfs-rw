@@ -34,6 +34,12 @@ you prefer.
 Build
 =====
 
+.. note::
+	At this point the driver has been packaged for several distros, so
+	if you are not very experienced with this stuff you may prefer to
+	install it from there instead of building it yourself. The distro
+	packages may be outdated though, so be sure to check the version.
+
 In order to build a module out-of-tree, you will first need the Linux kernel
 headers. Depending on your distro, you can get them by running (as root)::
 
