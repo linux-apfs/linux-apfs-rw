@@ -4,13 +4,8 @@ Apple File System for Linux
 
 The Apple File System (APFS) is the copy-on-write filesystem currently used on
 all Apple devices. This module provides a degree of experimental support on
-Linux.
-
-It's supposed to work with a range of kernel versions starting at 4.9 or before,
-but only a few of those have actually been tested. Also, kernel versions below
-4.12 will be slower for some operations. If you run into any problem, please
-send a report to <linux-apfs@googlegroups.com> or file a github issue at
-https://github.com/eafer/linux-apfs-rw/issues.
+Linux. It's intended to work with all kernel versions since 4.12, but testing
+is focused on 5.18 and above.
 
 To help test write support, a set of userland tools is also under development.
 The git tree can be retrieved from https://github.com/eafer/apfsprogs.git.
@@ -24,6 +19,17 @@ so mounts are read-only by default. Please report any issues that you find.
 
 Encryption is not yet implemented even in read-only mode, and neither are
 fusion drives.
+
+Reporting bugs
+==============
+
+If you encounter any problem, the first thing you should do is run (as root)::
+
+	dmesg | grep -i apfs
+
+to see all the error messages. If that doesn't help you, please file a github
+issue at https://github.com/eafer/linux-apfs-rw/issues. Or send me an email if
+you prefer.
 
 Build
 =====
