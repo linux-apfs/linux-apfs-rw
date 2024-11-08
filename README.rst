@@ -19,8 +19,8 @@ Known limitations
 =================
 
 This module is the result of reverse engineering and testing has been limited.
-If you make use of the write support, expect data corruption. Please report any
-issues that you find, but I can't promise a quick resolution at this stage.
+If you make use of the write support, there is a real risk of data corruption,
+so mounts are read-only by default. Please report any issues that you find.
 
 Encryption is not yet implemented even in read-only mode, and neither are
 fusion drives.
@@ -70,7 +70,7 @@ uid=n, gid=n   Override on-disk inode ownership data with given uid/gid.
 cknodes	       Verify the checksum on all metadata nodes. Right now this has a
 	       severe performance cost, so it's not recommended.
 
-readwrite      Enable the experimental write support. This **will** corrupt your
+readwrite      Enable the experimental write support. This may corrupt your
 	       container.
 ============   =================================================================
 
