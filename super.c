@@ -1194,6 +1194,11 @@ static int parse_options(struct super_block *sb, char *options)
 	/* Set default values before parsing */
 	nx_flags = 0;
 
+#ifdef CONFIG_APFS_RW_ALWAYS
+	/* Still risky, but some packagers want writable mounts by default */
+	nx_flags |= APFS_READWRITE;
+#endif
+
 	if (!options)
 		goto out;
 
