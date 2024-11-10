@@ -1855,6 +1855,10 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 		kfree(sbi);
 		sbi = NULL;
 	} else {
+		if (!sbi->s_snap_name)
+			snprintf(sb->s_id, sizeof(sb->s_id), "%pg:%u", APFS_NXI(sb)->nx_bdev, sbi->s_vol_nr);
+		else
+			snprintf(sb->s_id, sizeof(sb->s_id), "%pg:%u:%s", APFS_NXI(sb)->nx_bdev, sbi->s_vol_nr, sbi->s_snap_name);
 		error = apfs_read_main_super(sb);
 		if (error) {
 			deactivate_locked_super(sb);
@@ -1863,7 +1867,6 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 		sb->s_mode = mode;
 #endif
-		snprintf(sb->s_id, sizeof(sb->s_id), "%xg", sb->s_dev);
 		error = apfs_fill_super(sb, data, flags & SB_SILENT ? 1 : 0);
 		if (error) {
 			deactivate_locked_super(sb);
