@@ -1495,6 +1495,12 @@ struct apfs_snap_metadata_val {
 	u8 name[];
 } __packed;
 
+/* Snapshot metadata record flags */
+enum {
+	APFS_SNAP_META_PENDING_DATALESS	= 0x00000001,
+	APFS_SNAP_MERGE_IN_PROGRESS	= 0x00000002,
+};
+
 /*
  * Structure of the value of a snapshot name record
  */

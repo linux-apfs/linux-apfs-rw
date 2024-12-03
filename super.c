@@ -1329,8 +1329,15 @@ static int apfs_check_vol_features(struct super_block *sb)
 		return -EINVAL;
 	}
 	if (features & APFS_INCOMPAT_DATALESS_SNAPS) {
-		apfs_warn(sb, "snapshots with no data are not supported");
-		return -EINVAL;
+		/*
+		 * I haven't encountered dataless snapshots myself yet (TODO).
+		 * I'm not even sure what they are, so be safe.
+		 */
+		if (!sb_rdonly(sb)) {
+			apfs_warn(sb, "writes to volumes with dataless snapshots not yet supported");
+			return -EINVAL;
+		}
+		apfs_warn(sb, "volume has dataless snapshots");
 	}
 	if (features & APFS_INCOMPAT_ENC_ROLLED) {
 		apfs_warn(sb, "encrypted volumes are not supported");

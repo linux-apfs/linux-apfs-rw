@@ -585,14 +585,21 @@ fail:
 
 static int apfs_snap_sblock_from_query(struct apfs_query *query, u64 *sblock_oid)
 {
+	struct super_block *sb = query->node->object.sb;
 	char *raw = query->node->object.data;
 	struct apfs_snap_metadata_val *val = NULL;
 
 	if (query->len < sizeof(*val)) {
-		apfs_err(query->node->object.sb, "bad value length (%d)", query->len);
+		apfs_err(sb, "bad value length (%d)", query->len);
 		return -EFSCORRUPTED;
 	}
 	val = (struct apfs_snap_metadata_val *)(raw + query->off);
+
+	/* I don't know anything about these snapshots, can they be mounted? */
+	if (le32_to_cpu(val->flags) & APFS_SNAP_META_PENDING_DATALESS) {
+		apfs_warn(sb, "the requested snapshot is dataless");
+		return -EOPNOTSUPP;
+	}
 
 	*sblock_oid = le64_to_cpu(val->sblock_oid);
 	return 0;
