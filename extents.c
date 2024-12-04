@@ -1909,7 +1909,7 @@ out:
  * @paddr_end:	first block after the extent to put
  * @paddr_min:	don't put references before this block
  *
- * Puts a reference to the physical extent range that ends in paddr. Sets
+ * Puts a reference to the physical extent range that ends in @paddr_end. Sets
  * @paddr_end to the beginning of the extent, so that the caller can continue
  * with the previous one. Returns 0 on success, or a negative error code in
  * case of failure.
@@ -2051,7 +2051,7 @@ static int apfs_range_put_reference(struct super_block *sb, u64 paddr, u64 lengt
  * @paddr_end:	first block after the extent to take
  * @paddr_min:	don't take references before this block
  *
- * Takes a reference to the physical extent range that ends in paddr. Sets
+ * Takes a reference to the physical extent range that ends in @paddr_end. Sets
  * @paddr_end to the beginning of the extent, so that the caller can continue
  * with the previous one. Returns 0 on success, or a negative error code in
  * case of failure.
