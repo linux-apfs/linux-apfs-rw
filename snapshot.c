@@ -420,6 +420,7 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name, i
 		err = apfs_transaction_commit(sb);
 		if (err)
 			goto fail;
+		apfs_warn(sb, "snapshot name already in use (%s)", name);
 		return -EEXIST;
 	}
 
