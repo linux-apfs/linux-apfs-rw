@@ -15,7 +15,7 @@
  * Verifies that the node index fits in a single block, and that the number
  * of records fits in the index. Without this check a crafted filesystem could
  * pretend to have too many records, and calls to apfs_node_locate_key() and
- * apfs_node_locate_data() would read beyond the limits of the node.
+ * apfs_node_locate_value() would read beyond the limits of the node.
  */
 static bool apfs_node_is_valid(struct super_block *sb,
 			       struct apfs_node *node)
@@ -142,7 +142,7 @@ struct apfs_node *apfs_read_node(struct super_block *sb, u64 oid, u32 storage,
 	node->key = sizeof(*raw) + le16_to_cpu(raw->btn_table_space.off)
 				+ le16_to_cpu(raw->btn_table_space.len);
 	node->free = node->key + le16_to_cpu(raw->btn_free_space.off);
-	node->data = node->free + le16_to_cpu(raw->btn_free_space.len);
+	node->val = node->free + le16_to_cpu(raw->btn_free_space.len);
 
 	free_head = &raw->btn_key_free_list;
 	node->key_free_list_len = le16_to_cpu(free_head->len);
@@ -559,7 +559,7 @@ void apfs_update_node(struct apfs_node *node)
 	toc_off = sizeof(*raw) + le16_to_cpu(raw->btn_table_space.off);
 	raw->btn_table_space.len = cpu_to_le16(node->key - toc_off);
 	raw->btn_free_space.off = cpu_to_le16(node->free - node->key);
-	raw->btn_free_space.len = cpu_to_le16(node->data - node->free);
+	raw->btn_free_space.len = cpu_to_le16(node->val - node->free);
 
 	/* Reset the lists on zero length, a defragmentation is taking place */
 	free_head = &raw->btn_key_free_list;
@@ -584,8 +584,8 @@ void apfs_update_node(struct apfs_node *node)
  * @off:	on return will hold the offset in the block
  *
  * Returns the length of the key, or 0 in case of failure. The function checks
- * that this length fits within the block; callers must use the returned value
- * to make sure they never operate outside its bounds.
+ * that this length fits within the block; callers must use it to make sure
+ * they never operate outside its bounds.
  */
 int apfs_node_locate_key(struct apfs_node *node, int index, int *off)
 {
@@ -613,7 +613,7 @@ int apfs_node_locate_key(struct apfs_node *node, int index, int *off)
 		/* Translate offset in key area to offset in block */
 		*off = node->key + le16_to_cpu(entry->k);
 	} else {
-		/* These node types have variable length keys and data */
+		/* These node types have variable length keys and values */
 		struct apfs_kvloc *entry;
 
 		entry = (struct apfs_kvloc *)raw->btn_data + index;
@@ -630,17 +630,17 @@ int apfs_node_locate_key(struct apfs_node *node, int index, int *off)
 }
 
 /**
- * apfs_node_locate_data - Locate the data of a node record
+ * apfs_node_locate_value - Locate the value of a node record
  * @node:	node to be searched
  * @index:	number of the entry to locate
  * @off:	on return will hold the offset in the block
  *
- * Returns the length of the data, which may be 0 in case of corruption or if
+ * Returns the length of the value, which may be 0 in case of corruption or if
  * the record is a ghost. The function checks that this length fits within the
- * block; callers must use the returned value to make sure they never operate
- * outside its bounds.
+ * block; callers must use it to make sure they never operate outside its
+ * bounds.
  */
-static int apfs_node_locate_data(struct apfs_node *node, int index, int *off)
+static int apfs_node_locate_value(struct apfs_node *node, int index, int *off)
 {
 	struct super_block *sb = node->object.sb;
 	struct apfs_btree_node_phys *raw;
@@ -653,7 +653,7 @@ static int apfs_node_locate_data(struct apfs_node *node, int index, int *off)
 
 	raw = (struct apfs_btree_node_phys *)node->object.data;
 	if (apfs_node_has_fixed_kv_size(node)) {
-		/* These node types have fixed length keys and data */
+		/* These node types have fixed length keys and values */
 		struct apfs_kvoff *entry;
 
 		entry = (struct apfs_kvoff *)raw->btn_data + index;
@@ -669,7 +669,7 @@ static int apfs_node_locate_data(struct apfs_node *node, int index, int *off)
 			len = apfs_node_is_leaf(node) ? 16 : 8;
 		}
 		/*
-		 * Data offsets are counted backwards from the end of the
+		 * Value offsets are counted backwards from the end of the
 		 * block, or from the beginning of the footer when it exists
 		 */
 		if (apfs_node_is_root(node)) /* has footer */
@@ -678,13 +678,13 @@ static int apfs_node_locate_data(struct apfs_node *node, int index, int *off)
 		else
 			*off = sb->s_blocksize - le16_to_cpu(entry->v);
 	} else {
-		/* These node types have variable length keys and data */
+		/* These node types have variable length keys and values */
 		struct apfs_kvloc *entry;
 
 		entry = (struct apfs_kvloc *)raw->btn_data + index;
 		len = le16_to_cpu(entry->v.len);
 		/*
-		 * Data offsets are counted backwards from the end of the
+		 * Value offsets are counted backwards from the end of the
 		 * block, or from the beginning of the footer when it exists
 		 */
 		if (apfs_node_is_root(node)) /* has footer */
@@ -831,7 +831,7 @@ static int apfs_node_prev(struct super_block *sb, struct apfs_query *query)
 		apfs_err(sb, "bad key for index %d", query->index);
 		return -EFSCORRUPTED;
 	}
-	query->len = apfs_node_locate_data(node, query->index, &query->off);
+	query->len = apfs_node_locate_value(node, query->index, &query->off);
 	if (query->len == 0) {
 		apfs_err(sb, "bad value for index %d", query->index);
 		return -EFSCORRUPTED;
@@ -881,7 +881,7 @@ static int apfs_node_next(struct super_block *sb, struct apfs_query *query)
 	    query->flags & APFS_QUERY_EXACT)
 		return -ENODATA;
 
-	query->len = apfs_node_locate_data(node, query->index, &query->off);
+	query->len = apfs_node_locate_value(node, query->index, &query->off);
 	if (query->len == 0) {
 		apfs_err(sb, "bad value for index %d", query->index);
 		return -EFSCORRUPTED;
@@ -913,7 +913,7 @@ static int apfs_node_next(struct super_block *sb, struct apfs_query *query)
  * as soon as we return to this level. The function may also return -EAGAIN,
  * to signal that the search should go on in a different branch.
  *
- * On success returns 0; the offset of the data within the block will be saved
+ * On success returns 0; the offset of the value within the block will be saved
  * in @query->off, and its length in @query->len. The function checks that this
  * length fits within the block; callers must use the returned value to make
  * sure they never operate outside its bounds.
@@ -979,7 +979,7 @@ int apfs_node_query(struct super_block *sb, struct apfs_query *query)
 		query->flags |= APFS_QUERY_NEXT;
 	}
 
-	query->len = apfs_node_locate_data(node, query->index, &query->off);
+	query->len = apfs_node_locate_value(node, query->index, &query->off);
 	return 0;
 }
 
@@ -993,7 +993,7 @@ void apfs_node_query_first(struct apfs_query *query)
 
 	query->index = 0;
 	query->key_len = apfs_node_locate_key(node, query->index, &query->key_off);
-	query->len = apfs_node_locate_data(node, query->index, &query->off);
+	query->len = apfs_node_locate_value(node, query->index, &query->off);
 }
 
 /**
@@ -1071,7 +1071,7 @@ static int apfs_btree_inc_height(struct apfs_query *query)
 	new_node->records = root->records;
 	new_node->key = root->key;
 	new_node->free = root->free;
-	new_node->data = root->data + sizeof(*info);
+	new_node->val = root->val + sizeof(*info);
 	new_node->key_free_list_len = root->key_free_list_len;
 	new_node->val_free_list_len = root->val_free_list_len;
 	new_raw = (void *)new_node->object.data;
@@ -1079,9 +1079,9 @@ static int apfs_btree_inc_height(struct apfs_query *query)
 	memcpy((void *)new_raw + sizeof(new_raw->btn_o),
 	       (void *)root_raw + sizeof(root_raw->btn_o),
 	       root->free - sizeof(new_raw->btn_o));
-	memcpy((void *)new_raw + new_node->data,
-	       (void *)root_raw + root->data,
-	       sb->s_blocksize - new_node->data);
+	memcpy((void *)new_raw + new_node->val,
+	       (void *)root_raw + root->val,
+	       sb->s_blocksize - new_node->val);
 	query->off += sizeof(*info);
 	apfs_update_node(new_node);
 
@@ -1112,10 +1112,10 @@ static int apfs_btree_inc_height(struct apfs_query *query)
 
 	/* The new root is a nonleaf node; the record value is the child id */
 	root->flags &= ~APFS_BTNODE_LEAF;
-	root->data = sb->s_blocksize - sizeof(*info) - sizeof(*raw_oid);
-	raw_oid = (void *)root_raw + root->data;
+	root->val = sb->s_blocksize - sizeof(*info) - sizeof(*raw_oid);
+	raw_oid = (void *)root_raw + root->val;
 	*raw_oid = cpu_to_le64(new_node->object.oid);
-	root_query->off = root->data;
+	root_query->off = root->val;
 	root_query->len = sizeof(*raw_oid);
 
 	/* With the key and value in place, set the table-of-contents */
@@ -1173,9 +1173,9 @@ static int apfs_copy_record_range(struct apfs_node *dest_node,
 		toc_size = toc_entry_size * round_up(end - start, APFS_BTREE_TOC_ENTRY_INCREMENT);
 	dest_node->key = sizeof(*dest_raw) + toc_size;
 	dest_node->free = dest_node->key;
-	dest_node->data = sb->s_blocksize;
+	dest_node->val = sb->s_blocksize;
 	if (apfs_node_is_root(dest_node))
-		dest_node->data -= sizeof(struct apfs_btree_info);
+		dest_node->val -= sizeof(struct apfs_btree_info);
 
 	/* We'll use a temporary query structure to move the records around */
 	query = apfs_alloc_query(dest_node, NULL /* parent */);
@@ -1199,15 +1199,15 @@ static int apfs_copy_record_range(struct apfs_node *dest_node,
 		query->key_len = len;
 		dest_node->free += len;
 
-		len = apfs_node_locate_data(src_node, i, &off);
-		dest_node->data -= len;
-		if (dest_node->data < 0) {
+		len = apfs_node_locate_value(src_node, i, &off);
+		dest_node->val -= len;
+		if (dest_node->val < 0) {
 			apfs_err(sb, "value of length %d doesn't fit", len);
 			goto fail;
 		}
-		memcpy((char *)dest_raw + dest_node->data,
+		memcpy((char *)dest_raw + dest_node->val,
 		       (char *)src_raw + off, len);
-		query->off = dest_node->data;
+		query->off = dest_node->val;
 		query->len = len;
 
 		query->index = i - start;
@@ -1483,7 +1483,7 @@ static void apfs_node_free_list_add(struct apfs_node *node, u16 off, u16 len)
 
 	apfs_assert_in_transaction(sb, &node_raw->btn_o);
 
-	if (off >= node->data) { /* Value area */
+	if (off >= node->val) { /* Value area */
 		off_to_rel = apfs_off_to_val_off;
 		head = &node_raw->btn_val_free_list;
 		node->val_free_list_len += len;
@@ -1519,8 +1519,8 @@ void apfs_node_free_range(struct apfs_node *node, u16 off, u16 len)
 
 	apfs_assert_in_transaction(sb, &raw->btn_o);
 
-	if (off == node->data)
-		node->data += len;
+	if (off == node->val)
+		node->val += len;
 	else if (off + len == node->free)
 		node->free -= len;
 	else
@@ -1616,7 +1616,7 @@ static int apfs_node_alloc_key(struct apfs_node *node, u16 len)
 {
 	int off;
 
-	if (node->free + len <= node->data) {
+	if (node->free + len <= node->val) {
 		off = node->free;
 		node->free += len;
 		return off;
@@ -1636,9 +1636,9 @@ static int apfs_node_alloc_val(struct apfs_node *node, u16 len)
 {
 	int off;
 
-	if (node->free + len <= node->data) {
-		off = node->data - len;
-		node->data -= len;
+	if (node->free + len <= node->val) {
+		off = node->val - len;
+		node->val -= len;
 		return off;
 	}
 	return apfs_node_free_list_alloc(node, len, true /* value */);
@@ -1650,7 +1650,7 @@ static int apfs_node_alloc_val(struct apfs_node *node, u16 len)
  */
 static int apfs_node_total_room(struct apfs_node *node)
 {
-	return node->data - node->free + node->key_free_list_len + node->val_free_list_len;
+	return node->val - node->free + node->key_free_list_len + node->val_free_list_len;
 }
 
 /**
@@ -1856,7 +1856,7 @@ defrag:
 	defragged = true;
 
 	/* The record to replace probably moved around */
-	query->len = apfs_node_locate_data(query->node, query->index, &query->off);
+	query->len = apfs_node_locate_value(query->node, query->index, &query->off);
 	query->key_len = apfs_node_locate_key(query->node, query->index, &query->key_off);
 	goto retry;
 }
@@ -1900,7 +1900,7 @@ retry:
 
 		new_key_base += inc;
 		new_free_base += inc;
-		if (new_free_base > node->data)
+		if (new_free_base > node->val)
 			goto defrag;
 		memmove((void *)node_raw + new_key_base,
 			(void *)node_raw + node->key, node->free - node->key);
@@ -2021,7 +2021,7 @@ int apfs_create_single_rec_node(struct apfs_query *query, void *key, int key_len
 	new_node->key_free_list_len = 0;
 	new_node->val_free_list_len = 0;
 	new_node->key = new_node->free = sizeof(*new_raw);
-	new_node->data = sb->s_blocksize; /* Nonroot */
+	new_node->val = sb->s_blocksize; /* Nonroot */
 
 	prev_raw = (void *)prev_node->object.data;
 	new_raw = (void *)new_node->object.data;

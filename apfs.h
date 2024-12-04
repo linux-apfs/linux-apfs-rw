@@ -81,7 +81,7 @@ struct apfs_node {
 
 	int key;		/* Offset of the key area in the block */
 	int free;		/* Offset of the free area in the block */
-	int data;		/* Offset of the data area in the block */
+	int val;		/* Offset of the value area in the block */
 
 	int key_free_list_len;	/* Length of the fragmented free key space */
 	int val_free_list_len;	/* Length of the fragmented free value space */
@@ -661,8 +661,8 @@ struct apfs_query {
 	int index;			/* Index of the entry in the node */
 	int key_off;			/* Offset of the key in the node */
 	int key_len;			/* Length of the key */
-	int off;			/* Offset of the data in the node */
-	int len;			/* Length of the data */
+	int off;			/* Offset of the value in the node */
+	int len;			/* Length of the value */
 
 	int depth;			/* Put a limit on recursion */
 };

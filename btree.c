@@ -50,7 +50,7 @@ static int apfs_child_from_query(struct apfs_query *query, u64 *child)
 		index_val = (struct apfs_btn_index_node_val *)(raw + query->off);
 		*child = le64_to_cpu(index_val->binv_child_oid) + apfs_catalog_base_oid(query);
 	} else {
-		if (query->len != 8) { /* The data on a nonleaf node is the child id */
+		if (query->len != 8) { /* The value on a nonleaf node is the child id */
 			apfs_err(sb, "bad index value length (%d)", query->len);
 			return -EFSCORRUPTED;
 		}
