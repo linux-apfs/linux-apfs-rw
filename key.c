@@ -180,7 +180,7 @@ int apfs_read_free_queue_key(void *raw, int size, struct apfs_key *key)
 {
 	struct apfs_spaceman_free_queue_key *raw_key;
 
-	if (size < sizeof(struct apfs_spaceman_free_queue_key)) {
+	if (size != sizeof(*raw_key)) {
 		apfs_err(NULL, "bad key length (%d)", size);
 		return -EFSCORRUPTED;
 	}
@@ -204,14 +204,17 @@ int apfs_read_free_queue_key(void *raw, int size, struct apfs_key *key)
  */
 int apfs_read_omap_key(void *raw, int size, struct apfs_key *key)
 {
-	if (size < sizeof(struct apfs_omap_key)) {
+	struct apfs_omap_key *raw_key;
+
+	if (size != sizeof(*raw_key)) {
 		apfs_err(NULL, "bad key length (%d)", size);
 		return -EFSCORRUPTED;
 	}
+	raw_key = raw;
 
-	key->id = le64_to_cpu(((struct apfs_omap_key *)raw)->ok_oid);
+	key->id = le64_to_cpu(raw_key->ok_oid);
 	key->type = 0;
-	key->number = le64_to_cpu(((struct apfs_omap_key *)raw)->ok_xid);
+	key->number = le64_to_cpu(raw_key->ok_xid);
 	key->name = NULL;
 
 	return 0;
