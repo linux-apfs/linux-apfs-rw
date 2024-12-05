@@ -647,8 +647,7 @@ static inline u64 apfs_cat_cnid(struct apfs_key_header *key)
 #define APFS_QUERY_PREV		010000	/* Find previous record */
 
 /*
- * Structure used to retrieve data from an APFS B-Tree. For now only used
- * on the calalog and the object map.
+ * Structure used to retrieve data from an APFS B-Tree.
  */
 struct apfs_query {
 	struct apfs_node *node;		/* Node being searched */
