@@ -224,6 +224,13 @@ static int apfs_read_main_super(struct super_block *sb)
 		goto out;
 	}
 
+	/*
+	 * We won't know the block size until we read the backup superblock,
+	 * so we can't set this up correctly yet. But we do know that the
+	 * backup superblock itself is always in the main device.
+	 */
+	nxi->nx_tier2_bno = APFS_NX_BLOCK_NUM + 1;
+
 	/* Read the superblock from the last clean unmount */
 	bh = apfs_read_super_copy(sb);
 	if (IS_ERR(bh)) {
@@ -232,6 +239,13 @@ static int apfs_read_main_super(struct super_block *sb)
 		goto out;
 	}
 	msb_raw = (struct apfs_nx_superblock *)bh->b_data;
+
+	/*
+	 * Now that we confirmed the block size, we can set this up for real.
+	 * It's important to do this early because I don't know which mount
+	 * objects could get moved to tier 2.
+	 */
+	nxi->nx_tier2_bno = APFS_FUSION_TIER2_DEVICE_BYTE_ADDR >> sb->s_blocksize_bits;
 
 	/* We want to mount the latest valid checkpoint among the descriptors */
 	desc_base = le64_to_cpu(msb_raw->nx_xp_desc_base);
@@ -345,6 +359,8 @@ static void apfs_blkdev_cleanup(struct apfs_blkdev_info *info)
 #endif
 	info->blki_bdev = NULL;
 
+	kfree(info->blki_path);
+	info->blki_path = NULL;
 	kfree(info);
 }
 
@@ -385,6 +401,8 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 
 	apfs_blkdev_cleanup(nxi->nx_blkdev_info);
 	nxi->nx_blkdev_info = NULL;
+	apfs_blkdev_cleanup(nxi->nx_tier2_info);
+	nxi->nx_tier2_info = NULL;
 
 	list_del(&nxi->nx_list);
 	sm = nxi->nx_spaceman;
@@ -1107,6 +1125,8 @@ static int apfs_show_options(struct seq_file *seq, struct dentry *root)
 						     sbi->s_gid));
 	if (nxi->nx_flags & APFS_CHECK_NODES)
 		seq_puts(seq, ",cknodes");
+	if (nxi->nx_tier2_info)
+		seq_printf(seq, ",tier2=%s", nxi->nx_tier2_info->blki_path);
 
 	return 0;
 }
@@ -1165,7 +1185,7 @@ static const struct super_operations apfs_sops = {
 };
 
 enum {
-	Opt_readwrite, Opt_cknodes, Opt_uid, Opt_gid, Opt_vol, Opt_snap, Opt_err,
+	Opt_readwrite, Opt_cknodes, Opt_uid, Opt_gid, Opt_vol, Opt_snap, Opt_tier2, Opt_err,
 };
 
 static const match_table_t tokens = {
@@ -1175,6 +1195,7 @@ static const match_table_t tokens = {
 	{Opt_gid, "gid=%u"},
 	{Opt_vol, "vol=%u"},
 	{Opt_snap, "snap=%s"},
+	{Opt_tier2, "tier2=%s"},
 	{Opt_err, NULL}
 };
 
@@ -1267,6 +1288,7 @@ static int parse_options(struct super_block *sb, char *options)
 			break;
 		case Opt_vol:
 		case Opt_snap:
+		case Opt_tier2:
 			/* Already read early on mount */
 			break;
 		default:
@@ -1299,6 +1321,7 @@ static int apfs_check_nx_features(struct super_block *sb)
 {
 	struct apfs_nx_superblock *msb_raw = NULL;
 	u64 features;
+	bool fusion;
 
 	msb_raw = APFS_NXI(sb)->nx_raw;
 	if (!msb_raw) {
@@ -1311,9 +1334,21 @@ static int apfs_check_nx_features(struct super_block *sb)
 		apfs_warn(sb, "unknown incompatible container features (0x%llx)", features);
 		return -EINVAL;
 	}
-	if (features & APFS_NX_INCOMPAT_FUSION) {
-		apfs_warn(sb, "fusion drives are not supported");
+
+	fusion = features & APFS_NX_INCOMPAT_FUSION;
+	if (fusion && !APFS_NXI(sb)->nx_tier2_info) {
+		apfs_warn(sb, "fusion drive - please use the \"tier2\" mount option");
 		return -EINVAL;
+	}
+	if (!fusion && APFS_NXI(sb)->nx_tier2_info) {
+		apfs_warn(sb, "not a fusion drive - what's the second disk for?");
+		return -EINVAL;
+	}
+	if (fusion) {
+		if (!sb_rdonly(sb)) {
+			apfs_warn(sb, "writes to fusion drives not yet supported");
+			sb->s_flags |= SB_RDONLY;
+		}
 	}
 
 	features = le64_to_cpu(msb_raw->nx_readonly_compatible_features);
@@ -1648,6 +1683,8 @@ static int apfs_set_super(struct super_block *sb, void *data)
 	 * This is the actual device number, shared by all volumes and
 	 * snapshots. It gets reported by the mountinfo file, and it seems that
 	 * udisks uses it to decide if a device is mounted, so it must be set.
+	 *
+	 * TODO: does this work for fusion drives?
 	 */
 	sb->s_dev = nxi->nx_blkdev_info->blki_bdev->bd_dev;
 
@@ -1701,6 +1738,11 @@ static int apfs_blkdev_setup(struct apfs_blkdev_info **info_p, const char *dev_n
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
 		return -ENOMEM;
+	info->blki_path = kstrdup(dev_name, GFP_KERNEL);
+	if (!info->blki_path) {
+		ret = -ENOMEM;
+		goto fail;
+	}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
 	file = bdev_file_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
@@ -1736,6 +1778,8 @@ static int apfs_blkdev_setup(struct apfs_blkdev_info **info_p, const char *dev_n
 	return 0;
 
 fail:
+	kfree(info->blki_path);
+	info->blki_path = NULL;
 	kfree(info);
 	info = NULL;
 	return ret;
@@ -1755,7 +1799,7 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, blk_m
 static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode_t mode)
 #endif
 {
-	struct apfs_nxsb_info *nxi;
+	struct apfs_nxsb_info *nxi = NULL;
 	dev_t dev = 0;
 	int ret;
 
@@ -1774,10 +1818,19 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 		}
 
 		ret = apfs_blkdev_setup(&nxi->nx_blkdev_info, dev_name, mode);
-		if (ret) {
-			kfree(nxi);
-			nxi = NULL;
+		if (ret)
 			goto out;
+
+		if (sbi->s_tier2_path) {
+			ret = apfs_blkdev_setup(&nxi->nx_tier2_info, sbi->s_tier2_path, mode);
+			if (ret) {
+				apfs_blkdev_cleanup(nxi->nx_blkdev_info);
+				nxi->nx_blkdev_info = NULL;
+				goto out;
+			}
+			/* We won't need this anymore, so why waste memory? */
+			kfree(sbi->s_tier2_path);
+			sbi->s_tier2_path = NULL;
 		}
 
 		init_rwsem(&nxi->nx_big_sem);
@@ -1791,6 +1844,10 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 	++nxi->nx_refcnt;
 	ret = 0;
 out:
+	if (ret) {
+		kfree(nxi);
+		nxi = NULL;
+	}
 	mutex_unlock(&nxs_mutex);
 	return ret;
 }
@@ -1813,6 +1870,7 @@ static int apfs_preparse_options(struct apfs_sb_info *sbi, char *options)
 	/* Set default values before parsing */
 	sbi->s_vol_nr = 0;
 	sbi->s_snap_name = NULL;
+	sbi->s_tier2_path = NULL;
 
 	if (!options)
 		return 0;
@@ -1843,6 +1901,14 @@ static int apfs_preparse_options(struct apfs_sb_info *sbi, char *options)
 				goto out;
 			}
 			break;
+		case Opt_tier2:
+			kfree(sbi->s_tier2_path);
+			sbi->s_tier2_path = match_strdup(&args[0]);
+			if (!sbi->s_tier2_path) {
+				err = -ENOMEM;
+				goto out;
+			}
+			break;
 		case Opt_readwrite:
 		case Opt_cknodes:
 		case Opt_uid:
@@ -1868,7 +1934,7 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 {
 	struct super_block *sb;
 	struct apfs_sb_info *sbi;
-	struct apfs_blkdev_info *bd_info = NULL;
+	struct apfs_blkdev_info *bd_info = NULL, *tier2_info = NULL;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 	blk_mode_t mode = sb_open_mode(flags);
 #else
@@ -1904,11 +1970,13 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 		goto out_unmap_super;
 	}
 
+	bd_info = APFS_NXI(sb)->nx_blkdev_info;
+	tier2_info = APFS_NXI(sb)->nx_tier2_info;
+
 	/*
 	 * I'm doing something hacky with s_dev inside ->kill_sb(), so I want
 	 * to find out as soon as possible if I messed it up.
 	 */
-	bd_info = APFS_NXI(sb)->nx_blkdev_info;
 	WARN_ON(sb->s_dev != bd_info->blki_bdev->bd_dev);
 
 	if (sb->s_root) {
@@ -1921,13 +1989,19 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 		apfs_free_main_super(sbi);
 		kfree(sbi->s_snap_name);
 		sbi->s_snap_name = NULL;
+		kfree(sbi->s_tier2_path);
+		sbi->s_tier2_path = NULL;
 		kfree(sbi);
 		sbi = NULL;
 	} else {
-		if (!sbi->s_snap_name)
+		if (!sbi->s_snap_name && !tier2_info)
 			snprintf(sb->s_id, sizeof(sb->s_id), "%pg:%u", bd_info->blki_bdev, sbi->s_vol_nr);
-		else
+		else if (!tier2_info)
 			snprintf(sb->s_id, sizeof(sb->s_id), "%pg:%u:%s", bd_info->blki_bdev, sbi->s_vol_nr, sbi->s_snap_name);
+		else if (!sbi->s_snap_name)
+			snprintf(sb->s_id, sizeof(sb->s_id), "%pg+%pg:%u", bd_info->blki_bdev, tier2_info->blki_bdev, sbi->s_vol_nr);
+		else
+			snprintf(sb->s_id, sizeof(sb->s_id), "%pg+%pg:%u:%s", bd_info->blki_bdev, tier2_info->blki_bdev, sbi->s_vol_nr, sbi->s_snap_name);
 		error = apfs_read_main_super(sb);
 		if (error) {
 			deactivate_locked_super(sb);
@@ -1950,6 +2024,7 @@ out_unmap_super:
 	apfs_free_main_super(sbi);
 out_free_sbi:
 	kfree(sbi->s_snap_name);
+	kfree(sbi->s_tier2_path);
 	kfree(sbi);
 	return ERR_PTR(error);
 }
@@ -1972,6 +2047,8 @@ static void apfs_free_sb_info(struct super_block *sb)
 
 	kfree(sbi->s_snap_name);
 	sbi->s_snap_name = NULL;
+	kfree(sbi->s_tier2_path);
+	sbi->s_tier2_path = NULL;
 	if (sbi->s_dflt_pfk)
 		kfree(sbi->s_dflt_pfk);
 	kfree(sbi);

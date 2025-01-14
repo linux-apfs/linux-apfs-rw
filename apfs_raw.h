@@ -1474,6 +1474,8 @@ struct apfs_compress_rsrc_data {
 	} __packed block[];
 } __packed;
 
+#define APFS_FUSION_TIER2_DEVICE_BYTE_ADDR	0x4000000000000000ULL
+
 /*
  * TODO: this is a placeholder, create some snapshots with the official
  * implementation to find the actual limit.

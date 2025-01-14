@@ -242,6 +242,13 @@ struct apfs_blkdev_info {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	fmode_t blki_mode;
 #endif
+
+	/*
+	 * For tier 2, we need to remember the mount path for show_options().
+	 * We don't need this for the main device of course, but better to
+	 * keep things consistent.
+	 */
+	char *blki_path;
 };
 
 /*
@@ -250,6 +257,8 @@ struct apfs_blkdev_info {
 struct apfs_nxsb_info {
 	/* Block device info for the container */
 	struct apfs_blkdev_info *nx_blkdev_info;
+	struct apfs_blkdev_info *nx_tier2_info;
+	u64 nx_tier2_bno; /* Offset for tier 2 block numbers */
 
 	struct apfs_nx_superblock *nx_raw; /* On-disk main sb */
 	u64 nx_bno; /* Current block number for the checkpoint superblock */
@@ -334,6 +343,8 @@ struct apfs_sb_info {
 	struct apfs_superblock *s_vsb_raw; /* On-disk volume sb */
 
 	dev_t s_anon_dev; /* Anonymous device for this volume-snapshot */
+
+	char *s_tier2_path; /* Path to the tier 2 device */
 
 	char *s_snap_name; /* Label for the mounted snapshot */
 	u64 s_snap_xid; /* Transaction id for mounted snapshot */
@@ -1172,9 +1183,26 @@ static inline void apfs_assert_query_is_valid(const struct apfs_query *query)
 static inline void
 apfs_map_bh(struct buffer_head *bh, struct super_block *sb, sector_t block)
 {
+	struct apfs_nxsb_info *nxi = NULL;
 	struct apfs_blkdev_info *info = NULL;
 
-	info = APFS_NXI(sb)->nx_blkdev_info;
+	nxi = APFS_NXI(sb);
+	info = nxi->nx_blkdev_info;
+
+	/*
+	 * Block numbers above s_tier2_bno are for the tier 2 device of a
+	 * fusion drive. Don't bother returning an error code if a regular
+	 * drive gets corrupted and reports a tier 2 block number: just treat
+	 * it the same as any other out-of-range block.
+	 */
+	if (block >= nxi->nx_tier2_bno) {
+		if (nxi->nx_tier2_info) {
+			info = nxi->nx_tier2_info;
+			block -= nxi->nx_tier2_bno;
+		} else {
+			apfs_err(sb, "block number in tier 2 range (0x%llx)", (unsigned long long)block);
+		}
+	}
 
 	set_buffer_mapped(bh);
 	bh->b_bdev = info->blki_bdev;
@@ -1185,9 +1213,22 @@ apfs_map_bh(struct buffer_head *bh, struct super_block *sb, sector_t block)
 static inline struct buffer_head *
 apfs_sb_bread(struct super_block *sb, sector_t block)
 {
+	struct apfs_nxsb_info *nxi = NULL;
 	struct apfs_blkdev_info *info = NULL;
 
-	info = APFS_NXI(sb)->nx_blkdev_info;
+	nxi = APFS_NXI(sb);
+	info = nxi->nx_blkdev_info;
+
+	if (block >= nxi->nx_tier2_bno) {
+		if (!nxi->nx_tier2_info) {
+			/* Not really a fusion drive, so it's corrupted */
+			apfs_err(sb, "block number in tier 2 range (0x%llx)", (unsigned long long)block);
+			return NULL;
+		}
+		info = nxi->nx_tier2_info;
+		block -= nxi->nx_tier2_bno;
+	}
+
 	return __bread_gfp(info->blki_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
 }
 
@@ -1195,9 +1236,22 @@ apfs_sb_bread(struct super_block *sb, sector_t block)
 static inline struct buffer_head *
 __apfs_getblk(struct super_block *sb, sector_t block)
 {
+	struct apfs_nxsb_info *nxi = NULL;
 	struct apfs_blkdev_info *info = NULL;
 
-	info = APFS_NXI(sb)->nx_blkdev_info;
+	nxi = APFS_NXI(sb);
+	info = nxi->nx_blkdev_info;
+
+	if (block >= nxi->nx_tier2_bno) {
+		if (!nxi->nx_tier2_info) {
+			/* Not really a fusion drive, so it's corrupted */
+			apfs_err(sb, "block number in tier 2 range (0x%llx)", (unsigned long long)block);
+			return NULL;
+		}
+		info = nxi->nx_tier2_info;
+		block -= nxi->nx_tier2_bno;
+	}
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
 	return __getblk_gfp(info->blki_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
 #else
