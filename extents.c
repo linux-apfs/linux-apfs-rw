@@ -2295,11 +2295,7 @@ int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *buf, si
 			goto out;
 		}
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
-		bhs[idx] = __getblk_gfp(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
-#else
-		bhs[idx] = bdev_getblk(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
-#endif
+		bhs[idx] = __apfs_getblk(sb, bno);
 		if (!bhs[idx]) {
 			apfs_err(sb, "failed to map block 0x%llx", bno);
 			ret = -EIO;
@@ -2371,11 +2367,7 @@ void apfs_nonsparse_dstream_preread(struct apfs_dstream_info *dstream)
 		if (ret || bno == 0)
 			return;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
-		bh = __getblk_gfp(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
-#else
-		bh = bdev_getblk(APFS_NXI(sb)->nx_bdev, bno, sb->s_blocksize, __GFP_MOVABLE);
-#endif
+		bh = __apfs_getblk(sb, bno);
 		if (!bh)
 			return;
 		if (!buffer_uptodate(bh)) {

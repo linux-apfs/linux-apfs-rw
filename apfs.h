@@ -1171,17 +1171,24 @@ apfs_sb_bread(struct super_block *sb, sector_t block)
 	return __bread_gfp(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
 }
 
+/* Like apfs_getblk(), but doesn't mark the buffer uptodate */
+static inline struct buffer_head *
+__apfs_getblk(struct super_block *sb, sector_t block)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
+	return __getblk_gfp(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
+#else
+	return bdev_getblk(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
+#endif
+}
+
 /* Use instead of apfs_sb_bread() for blocks that will just be overwritten */
 static inline struct buffer_head *
 apfs_getblk(struct super_block *sb, sector_t block)
 {
-	struct buffer_head *bh;
+	struct buffer_head *bh = NULL;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
-	bh = __getblk_gfp(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
-#else
-	bh = bdev_getblk(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
-#endif
+	bh = __apfs_getblk(sb, block);
 	if (bh)
 		set_buffer_uptodate(bh);
 	return bh;
