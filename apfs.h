@@ -229,15 +229,24 @@ struct apfs_ephemeral_object_info {
 #define APFS_FLAGS_SET		4
 
 /*
+ * Wrapper around block devices for portability.
+ */
+struct apfs_blkdev_info {
+	struct block_device *blki_bdev;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	struct file *blki_bdev_file;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	struct bdev_handle *blki_bdev_handle;
+#endif
+};
+
+/*
  * Container superblock data in memory
  */
 struct apfs_nxsb_info {
-	struct block_device *nx_bdev; /* Device for the container */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
-	struct file *nx_bdev_file;
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
-	struct bdev_handle *nx_bdev_handle;
-#endif
+	/* Block device info for the container */
+	struct apfs_blkdev_info nx_blkdev_info;
+
 	struct apfs_nx_superblock *nx_raw; /* On-disk main sb */
 	u64 nx_bno; /* Current block number for the checkpoint superblock */
 	u64 nx_xid; /* Latest transaction id */
@@ -1159,8 +1168,12 @@ static inline void apfs_assert_query_is_valid(const struct apfs_query *query)
 static inline void
 apfs_map_bh(struct buffer_head *bh, struct super_block *sb, sector_t block)
 {
+	struct apfs_blkdev_info *info = NULL;
+
+	info = &APFS_NXI(sb)->nx_blkdev_info;
+
 	set_buffer_mapped(bh);
-	bh->b_bdev = APFS_NXI(sb)->nx_bdev;
+	bh->b_bdev = info->blki_bdev;
 	bh->b_blocknr = block;
 	bh->b_size = sb->s_blocksize;
 }
@@ -1168,17 +1181,23 @@ apfs_map_bh(struct buffer_head *bh, struct super_block *sb, sector_t block)
 static inline struct buffer_head *
 apfs_sb_bread(struct super_block *sb, sector_t block)
 {
-	return __bread_gfp(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
+	struct apfs_blkdev_info *info = NULL;
+
+	info = &APFS_NXI(sb)->nx_blkdev_info;
+	return __bread_gfp(info->blki_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
 }
 
 /* Like apfs_getblk(), but doesn't mark the buffer uptodate */
 static inline struct buffer_head *
 __apfs_getblk(struct super_block *sb, sector_t block)
 {
+	struct apfs_blkdev_info *info = NULL;
+
+	info = &APFS_NXI(sb)->nx_blkdev_info;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
-	return __getblk_gfp(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
+	return __getblk_gfp(info->blki_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
 #else
-	return bdev_getblk(APFS_NXI(sb)->nx_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
+	return bdev_getblk(info->blki_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
 #endif
 }
 

@@ -57,12 +57,28 @@ static struct apfs_nxsb_info *apfs_nx_find_by_dev(dev_t dev)
 
 	lockdep_assert_held(&nxs_mutex);
 	list_for_each_entry(curr, &nxs, nx_list) {
-		struct block_device *curr_bdev = curr->nx_bdev;
+		struct block_device *curr_bdev = curr->nx_blkdev_info.blki_bdev;
 
 		if (curr_bdev->bd_dev == dev)
 			return curr;
 	}
 	return NULL;
+}
+
+/**
+ * apfs_blkdev_set_blocksize - Set the blocksize for a block device
+ * @info:	info struct for the block device
+ * @size:	size to set
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_blkdev_set_blocksize(struct apfs_blkdev_info *info, int size)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
+	return set_blocksize(info->blki_bdev_file, size);
+#else
+	return set_blocksize(info->blki_bdev, size);
+#endif
 }
 
 /**
@@ -75,11 +91,7 @@ static struct apfs_nxsb_info *apfs_nx_find_by_dev(dev_t dev)
  */
 static int apfs_sb_set_blocksize(struct super_block *sb, int size)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
-	if (set_blocksize(APFS_NXI(sb)->nx_bdev_file, size))
-#else
-	if (set_blocksize(APFS_NXI(sb)->nx_bdev, size))
-#endif
+	if (apfs_blkdev_set_blocksize(&APFS_NXI(sb)->nx_blkdev_info, size))
 		return 0;
 	sb->s_blocksize = size;
 	sb->s_blocksize_bits = blksize_bits(size);
@@ -312,6 +324,35 @@ static void apfs_update_software_info(struct super_block *sb)
 static struct file_system_type apfs_fs_type;
 
 /**
+ * apfs_blkdev_cleanup - Clean up after a block device
+ * @info:	info struct to clean up
+ * @rw:		is the container writable?
+ */
+static void apfs_blkdev_cleanup(struct apfs_blkdev_info *info, bool rw)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+	fmode_t mode;
+
+	mode = FMODE_READ | FMODE_EXCL;
+	if (rw)
+		mode |= FMODE_WRITE;
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	fput(info->blki_bdev_file);
+	info->blki_bdev_file = NULL;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	bdev_release(info->blki_bdev_handle);
+	info->blki_bdev_handle = NULL;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+	blkdev_put(info->blki_bdev, &apfs_fs_type);
+#else
+	blkdev_put(info->blki_bdev, mode);
+#endif
+	info->blki_bdev = NULL;
+}
+
+/**
  * apfs_free_main_super - Clean up apfs_read_main_super()
  * @sbi:	in-memory superblock info
  *
@@ -320,18 +361,10 @@ static struct file_system_type apfs_fs_type;
 static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 {
 	struct apfs_nxsb_info *nxi = sbi->s_nxi;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
-	fmode_t mode = FMODE_READ | FMODE_EXCL;
-#endif
 	struct apfs_ephemeral_object_info *eph_list = NULL;
 	struct apfs_spaceman *sm = NULL;
 	u32 bmap_idx;
 	int i;
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
-	if (nxi->nx_flags & APFS_READWRITE)
-		mode |= FMODE_WRITE;
-#endif
 
 	mutex_lock(&nxs_mutex);
 
@@ -354,15 +387,7 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 	kfree(nxi->nx_raw);
 	nxi->nx_raw = NULL;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
-	fput(nxi->nx_bdev_file);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
-	bdev_release(nxi->nx_bdev_handle);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
-	blkdev_put(nxi->nx_bdev, &apfs_fs_type);
-#else
-	blkdev_put(nxi->nx_bdev, mode);
-#endif
+	apfs_blkdev_cleanup(&nxi->nx_blkdev_info, nxi->nx_flags & APFS_READWRITE);
 
 	list_del(&nxi->nx_list);
 	sm = nxi->nx_spaceman;
@@ -1400,13 +1425,15 @@ static int apfs_check_vol_features(struct super_block *sb)
 static int apfs_setup_bdi(struct super_block *sb)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_blkdev_info *bd_info = NULL;
 	struct backing_dev_info *bdi_dev = NULL, *bdi_sb = NULL;
 	int err;
 
+	bd_info = &nxi->nx_blkdev_info;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) || (defined(RHEL_RELEASE) && LINUX_VERSION_CODE == KERNEL_VERSION(5, 14, 0))
-	bdi_dev = nxi->nx_bdev->bd_disk->bdi;
+	bdi_dev = bd_info->blki_bdev->bd_disk->bdi;
 #else
-	bdi_dev = nxi->nx_bdev->bd_bdi;
+	bdi_dev = bd_info->blki_bdev->bd_bdi;
 #endif
 
 	err = super_setup_bdi(sb);
@@ -1625,7 +1652,7 @@ static int apfs_set_super(struct super_block *sb, void *data)
 	 * snapshots. It gets reported by the mountinfo file, and it seems that
 	 * udisks uses it to decide if a device is mounted, so it must be set.
 	 */
-	sb->s_dev = nxi->nx_bdev->bd_dev;
+	sb->s_dev = nxi->nx_blkdev_info.blki_bdev->bd_dev;
 
 	sb->s_fs_info = sbi;
 	return 0;
@@ -1649,6 +1676,51 @@ static int apfs_lookup_bdev(const char *pathname, dev_t *dev)
 #else
 	return lookup_bdev(pathname, dev);
 #endif
+}
+
+/**
+ * apfs_blkdev_setup - Open a block device and set its info struct
+ * @info:	info struct to set
+ * @dev_name:	path name for the block device to open
+ * @mode:	FMODE_* mask
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+static int apfs_blkdev_setup(struct apfs_blkdev_info *info, const char *dev_name, blk_mode_t mode)
+#else
+static int apfs_blkdev_setup(struct apfs_blkdev_info *info, const char *dev_name, fmode_t mode)
+#endif
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	struct file *file = NULL;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	struct bdev_handle *handle = NULL;
+#endif
+	struct block_device *bdev = NULL;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	file = bdev_file_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
+	if (IS_ERR(file))
+		return PTR_ERR(file);
+	info->blki_bdev_file = file;
+	bdev = file_bdev(file);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	handle = bdev_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
+	if (IS_ERR(handle))
+		return PTR_ERR(handle);
+	info->blki_bdev_handle = handle;
+	bdev = handle->bdev;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+	bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type, NULL);
+#else
+	bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type);
+#endif
+
+	if (IS_ERR(bdev))
+		return PTR_ERR(bdev);
+	info->blki_bdev = bdev;
+	return 0;
 }
 
 /**
@@ -1677,49 +1749,19 @@ static int apfs_attach_nxi(struct apfs_sb_info *sbi, const char *dev_name, fmode
 
 	nxi = apfs_nx_find_by_dev(dev);
 	if (!nxi) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
-		struct file *file = NULL;
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
-		struct bdev_handle *handle = NULL;
-#endif
-		struct block_device *bdev = NULL;
-
 		nxi = kzalloc(sizeof(*nxi), GFP_KERNEL);
 		if (!nxi) {
 			ret = -ENOMEM;
 			goto out;
 		}
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
-		file = bdev_file_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
-		if (IS_ERR(file)) {
+		ret = apfs_blkdev_setup(&nxi->nx_blkdev_info, dev_name, mode);
+		if (ret) {
 			kfree(nxi);
-			ret = PTR_ERR(file);
-			goto out;
-		}
-		nxi->nx_bdev_file = file;
-		bdev = file_bdev(file);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
-		handle = bdev_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
-		if (IS_ERR(handle)) {
-			kfree(nxi);
-			ret = PTR_ERR(handle);
-			goto out;
-		}
-		nxi->nx_bdev_handle = handle;
-		bdev = handle->bdev;
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
-		bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type, NULL);
-#else
-		bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type);
-#endif
-		if (IS_ERR(bdev)) {
-			kfree(nxi);
-			ret = PTR_ERR(bdev);
+			nxi = NULL;
 			goto out;
 		}
 
-		nxi->nx_bdev = bdev;
 		init_rwsem(&nxi->nx_big_sem);
 		list_add(&nxi->nx_list, &nxs);
 		INIT_LIST_HEAD(&nxi->vol_list);
@@ -1808,6 +1850,7 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 {
 	struct super_block *sb;
 	struct apfs_sb_info *sbi;
+	struct apfs_blkdev_info *bd_info = NULL;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 	blk_mode_t mode = sb_open_mode(flags);
 #else
@@ -1847,7 +1890,8 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	 * I'm doing something hacky with s_dev inside ->kill_sb(), so I want
 	 * to find out as soon as possible if I messed it up.
 	 */
-	WARN_ON(sb->s_dev != APFS_NXI(sb)->nx_bdev->bd_dev);
+	bd_info = &APFS_NXI(sb)->nx_blkdev_info;
+	WARN_ON(sb->s_dev != bd_info->blki_bdev->bd_dev);
 
 	if (sb->s_root) {
 		if ((flags ^ sb->s_flags) & SB_RDONLY) {
@@ -1863,9 +1907,9 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 		sbi = NULL;
 	} else {
 		if (!sbi->s_snap_name)
-			snprintf(sb->s_id, sizeof(sb->s_id), "%pg:%u", APFS_NXI(sb)->nx_bdev, sbi->s_vol_nr);
+			snprintf(sb->s_id, sizeof(sb->s_id), "%pg:%u", bd_info->blki_bdev, sbi->s_vol_nr);
 		else
-			snprintf(sb->s_id, sizeof(sb->s_id), "%pg:%u:%s", APFS_NXI(sb)->nx_bdev, sbi->s_vol_nr, sbi->s_snap_name);
+			snprintf(sb->s_id, sizeof(sb->s_id), "%pg:%u:%s", bd_info->blki_bdev, sbi->s_vol_nr, sbi->s_snap_name);
 		error = apfs_read_main_super(sb);
 		if (error) {
 			deactivate_locked_super(sb);
