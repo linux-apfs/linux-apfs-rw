@@ -114,7 +114,11 @@ static int apfs_dentry_compare(const struct dentry *dentry, unsigned int len,
 	return apfs_filename_cmp(dentry->d_sb, name->name, name->len, str, len);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 14, 0)
 static int apfs_dentry_revalidate(struct dentry *dentry, unsigned int flags)
+#else
+static int apfs_dentry_revalidate(struct inode *dir, const struct qstr *name, struct dentry *dentry, unsigned int flags)
+#endif
 {
 	struct super_block *sb = dentry->d_sb;
 
