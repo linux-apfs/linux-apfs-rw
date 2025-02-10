@@ -326,18 +326,9 @@ static struct file_system_type apfs_fs_type;
 /**
  * apfs_blkdev_cleanup - Clean up after a block device
  * @info:	info struct to clean up
- * @rw:		is the container writable?
  */
-static void apfs_blkdev_cleanup(struct apfs_blkdev_info *info, bool rw)
+static void apfs_blkdev_cleanup(struct apfs_blkdev_info *info)
 {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
-	fmode_t mode;
-
-	mode = FMODE_READ | FMODE_EXCL;
-	if (rw)
-		mode |= FMODE_WRITE;
-#endif
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
 	fput(info->blki_bdev_file);
 	info->blki_bdev_file = NULL;
@@ -347,7 +338,7 @@ static void apfs_blkdev_cleanup(struct apfs_blkdev_info *info, bool rw)
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 	blkdev_put(info->blki_bdev, &apfs_fs_type);
 #else
-	blkdev_put(info->blki_bdev, mode);
+	blkdev_put(info->blki_bdev, info->blki_mode);
 #endif
 	info->blki_bdev = NULL;
 }
@@ -387,7 +378,7 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 	kfree(nxi->nx_raw);
 	nxi->nx_raw = NULL;
 
-	apfs_blkdev_cleanup(&nxi->nx_blkdev_info, nxi->nx_flags & APFS_READWRITE);
+	apfs_blkdev_cleanup(&nxi->nx_blkdev_info);
 
 	list_del(&nxi->nx_list);
 	sm = nxi->nx_spaceman;
@@ -1720,6 +1711,9 @@ static int apfs_blkdev_setup(struct apfs_blkdev_info *info, const char *dev_name
 	if (IS_ERR(bdev))
 		return PTR_ERR(bdev);
 	info->blki_bdev = bdev;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+	info->blki_mode = mode;
+#endif
 	return 0;
 }
 
