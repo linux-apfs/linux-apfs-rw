@@ -249,7 +249,7 @@ struct apfs_blkdev_info {
  */
 struct apfs_nxsb_info {
 	/* Block device info for the container */
-	struct apfs_blkdev_info nx_blkdev_info;
+	struct apfs_blkdev_info *nx_blkdev_info;
 
 	struct apfs_nx_superblock *nx_raw; /* On-disk main sb */
 	u64 nx_bno; /* Current block number for the checkpoint superblock */
@@ -1174,7 +1174,7 @@ apfs_map_bh(struct buffer_head *bh, struct super_block *sb, sector_t block)
 {
 	struct apfs_blkdev_info *info = NULL;
 
-	info = &APFS_NXI(sb)->nx_blkdev_info;
+	info = APFS_NXI(sb)->nx_blkdev_info;
 
 	set_buffer_mapped(bh);
 	bh->b_bdev = info->blki_bdev;
@@ -1187,7 +1187,7 @@ apfs_sb_bread(struct super_block *sb, sector_t block)
 {
 	struct apfs_blkdev_info *info = NULL;
 
-	info = &APFS_NXI(sb)->nx_blkdev_info;
+	info = APFS_NXI(sb)->nx_blkdev_info;
 	return __bread_gfp(info->blki_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
 }
 
@@ -1197,7 +1197,7 @@ __apfs_getblk(struct super_block *sb, sector_t block)
 {
 	struct apfs_blkdev_info *info = NULL;
 
-	info = &APFS_NXI(sb)->nx_blkdev_info;
+	info = APFS_NXI(sb)->nx_blkdev_info;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
 	return __getblk_gfp(info->blki_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
 #else

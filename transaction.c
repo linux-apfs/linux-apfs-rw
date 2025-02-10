@@ -20,7 +20,7 @@ static int apfs_checkpoint_end(struct super_block *sb)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_obj_phys *obj = &nxi->nx_raw->nx_o;
 	struct buffer_head *bh = NULL;
-	struct apfs_blkdev_info *bd_info = &nxi->nx_blkdev_info;
+	struct apfs_blkdev_info *bd_info = nxi->nx_blkdev_info;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
 	struct address_space *bdev_map = bd_info->blki_bdev->bd_mapping;
 #else
