@@ -194,6 +194,80 @@ out_unlock:
 static int apfs_check_nx_features(struct super_block *sb);
 static void apfs_set_trans_buffer_limit(struct super_block *sb);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 7, 0)
+static inline void import_uuid(uuid_t *dst, const __u8 *src)
+{
+	memcpy(dst, src, sizeof(uuid_t));
+}
+#endif
+
+/**
+ * apfs_check_fusion_uuid - Verify that the main and tier 2 devices match
+ * @sb: filesystem superblock
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_check_fusion_uuid(struct super_block *sb)
+{
+	struct apfs_nxsb_info *nxi = NULL;
+	struct apfs_nx_superblock *main_raw = NULL, *tier2_raw = NULL;
+	uuid_t main_uuid, tier2_uuid;
+	struct buffer_head *bh = NULL;
+
+	nxi = APFS_NXI(sb);
+	main_raw = nxi->nx_raw;
+	if (!main_raw) {
+		apfs_alert(sb, "fusion uuid checks are misplaced");
+		return -EINVAL;
+	}
+	import_uuid(&main_uuid, main_raw->nx_fusion_uuid);
+	main_raw = NULL;
+
+	if (!nxi->nx_tier2_info) {
+		/* Not a fusion drive */
+		if (!uuid_is_null(&main_uuid)) {
+			apfs_err(sb, "fusion uuid on a regular drive");
+			return -EFSCORRUPTED;
+		}
+		return 0;
+	}
+	if (uuid_is_null(&main_uuid)) {
+		apfs_err(sb, "no fusion uuid on fusion drive");
+		return -EFSCORRUPTED;
+	}
+
+	/* Tier 2 also has a copy of the superblock in block zero */
+	bh = apfs_sb_bread(sb, nxi->nx_tier2_bno);
+	if (IS_ERR(bh))
+		return PTR_ERR(bh);
+	tier2_raw = (struct apfs_nx_superblock *)bh->b_data;
+	import_uuid(&tier2_uuid, tier2_raw->nx_fusion_uuid);
+	brelse(bh);
+	bh = NULL;
+	tier2_raw = NULL;
+
+	/*
+	 * The only difference between both superblocks (other than the
+	 * checksum) is this one bit here, so it can be used to tell which is
+	 * main and which is tier 2. By the way, the reference seems to have
+	 * this backwards.
+	 */
+	if (main_uuid.b[15] & 0x01) {
+		apfs_warn(sb, "bad bit on main device - are you mixing up main and tier 2?");
+		return -EINVAL;
+	}
+	if (!(tier2_uuid.b[15] & 0x01)) {
+		apfs_warn(sb, "bad bit on tier 2 device - are you mixing up main and tier 2?");
+		return -EINVAL;
+	}
+	tier2_uuid.b[15] &= ~0x01;
+	if (!uuid_equal(&main_uuid, &tier2_uuid)) {
+		apfs_warn(sb, "the devices are not part of the same fusion drive");
+		return -EINVAL;
+	}
+	return 0;
+}
+
 /**
  * apfs_read_main_super - Find the container superblock and read it into memory
  * @sb:	superblock structure
@@ -304,6 +378,19 @@ static int apfs_read_main_super(struct super_block *sb)
 	apfs_set_trans_buffer_limit(sb);
 
 	err = apfs_check_nx_features(sb);
+	if (err)
+		goto out;
+
+	/*
+	 * This check is technically too late: if main and tier 2 are backwards
+	 * then we have already attempted (and failed) to read the checkpoint
+	 * from tier 2. This may lead to a confusing error message if tier 2
+	 * is absurdly tiny, not a big deal.
+	 */
+	err = apfs_check_fusion_uuid(sb);
+	if (err)
+		goto out;
+
 out:
 	brelse(bh);
 	mutex_unlock(&nxs_mutex);
