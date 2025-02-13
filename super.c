@@ -1292,6 +1292,11 @@ static int parse_options(struct super_block *sb, char *options)
 			/* Already read early on mount */
 			break;
 		default:
+			/*
+			 * We should have already checked the mount options in
+			 * apfs_preparse_options(), so this is a bug.
+			 */
+			apfs_alert(sb, "invalid mount option %s", p);
 			return -EINVAL;
 		}
 	}
@@ -1916,6 +1921,7 @@ static int apfs_preparse_options(struct apfs_sb_info *sbi, char *options)
 			/* Not needed for sget(), will be read later */
 			break;
 		default:
+			apfs_warn(NULL, "invalid mount option %s", p);
 			err = -EINVAL;
 			goto out;
 		}
