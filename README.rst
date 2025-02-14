@@ -17,8 +17,9 @@ This module is the result of reverse engineering and testing has been limited.
 If you make use of the write support, there is a real risk of data corruption,
 so mounts are read-only by default. Please report any issues that you find.
 
-Encryption is not yet implemented even in read-only mode, and neither are
-fusion drives.
+Writes to fusion drives will likely never be supported, though I might
+reconsider this if people actually need it. Encryption is not yet implemented
+even in read-only mode.
 
 Reporting bugs
 ==============
@@ -75,6 +76,8 @@ where ``device`` is the path to your device file or filesystem image, and
 vol=n	       Volume number to mount. The default is volume 0.
 
 snap=label     Volume snapshot to mount (in read-only mode).
+
+tier2=path     Path to the tier 2 device. For fusion drives only.
 
 uid=n, gid=n   Override on-disk inode ownership data with given uid/gid.
 
