@@ -409,7 +409,7 @@ static ssize_t apfs_compress_file_read_page(struct file *filp, char *buf, loff_t
 	return step;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0) || RHEL_VERSION_GE(9, 3)
 static int apfs_compress_read_folio(struct file *filp, struct folio *folio)
 {
 	struct page *page = &folio->page;
@@ -438,7 +438,7 @@ static int apfs_compress_readpage(struct file *filp, struct page *page)
 }
 
 const struct address_space_operations apfs_compress_aops = {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0) || RHEL_VERSION_GE(9, 3)
 	.read_folio	= apfs_compress_read_folio,
 #else
 	.readpage	= apfs_compress_readpage,

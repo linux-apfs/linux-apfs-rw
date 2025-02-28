@@ -10,7 +10,7 @@
 #include <linux/blk_types.h>
 #include "apfs.h"
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0) || RHEL_VERSION_GE(9, 3)
 #include <linux/sched/mm.h>
 #endif
 
@@ -20,7 +20,7 @@
 
 #define MAX_PFK_LEN	512
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0) || RHEL_VERSION_GE(9, 3)
 
 static int apfs_read_folio(struct file *file, struct folio *folio)
 {
@@ -502,7 +502,7 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 		}
 	}
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0) || RHEL_VERSION_GE(9, 3)
 	flags = memalloc_nofs_save();
 	page = grab_cache_page_write_begin(mapping, index);
 	memalloc_nofs_restore(flags);
@@ -588,7 +588,7 @@ out_put_page:
 static int apfs_write_begin(struct file *file, struct address_space *mapping,
 			    loff_t pos, unsigned int len,
 			    struct folio **foliop, void **fsdata)
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0) || RHEL_VERSION_GE(9, 3)
 static int apfs_write_begin(struct file *file, struct address_space *mapping,
 			    loff_t pos, unsigned int len,
 			    struct page **pagep, void **fsdata)
@@ -607,7 +607,7 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 	int blkcount = (len + sb->s_blocksize - 1) >> inode->i_blkbits;
 	struct apfs_max_ops maxops;
 	int err;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0) || RHEL_VERSION_GE(9, 3)
 	unsigned int flags = 0;
 #endif
 
@@ -698,23 +698,23 @@ fail:
 	return err;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
-static void apfs_noop_invalidatepage(struct page *page, unsigned int offset, unsigned int length)
-#else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0) || RHEL_VERSION_GE(9, 3)
 static void apfs_noop_invalidate_folio(struct folio *folio, size_t offset, size_t length)
+#else
+static void apfs_noop_invalidatepage(struct page *page, unsigned int offset, unsigned int length)
 #endif
 {
 }
 
 /* bmap is not implemented to avoid issues with CoW on swapfiles */
 static const struct address_space_operations apfs_aops = {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0) || RHEL_VERSION_GE(9, 2)
 	.dirty_folio	= block_dirty_folio,
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
 	.set_page_dirty	= __set_page_dirty_buffers,
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0) || RHEL_VERSION_GE(9, 3)
 	.read_folio	= apfs_read_folio,
 #else
 	.readpage	= apfs_readpage,
@@ -730,10 +730,10 @@ static const struct address_space_operations apfs_aops = {
 	.write_end	= apfs_write_end,
 
 	/* The intention is to keep bhs around until the transaction is over */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
-	.invalidatepage	= apfs_noop_invalidatepage,
-#else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0) || RHEL_VERSION_GE(9, 3)
 	.invalidate_folio = apfs_noop_invalidate_folio,
+#else
+	.invalidatepage	= apfs_noop_invalidatepage,
 #endif
 };
 

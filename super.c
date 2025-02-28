@@ -968,7 +968,7 @@ static struct inode *apfs_alloc_inode(struct super_block *sb)
 	struct apfs_inode_info *ai;
 	struct apfs_dstream_info *dstream;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0) || RHEL_VERSION_GE(9, 1)
 	ai = alloc_inode_sb(sb, apfs_inode_cachep, GFP_KERNEL);
 #else
 	ai = kmem_cache_alloc(apfs_inode_cachep, GFP_KERNEL);
@@ -1554,7 +1554,7 @@ static int apfs_setup_bdi(struct super_block *sb)
 	int err;
 
 	bd_info = nxi->nx_blkdev_info;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) || (defined(RHEL_RELEASE) && LINUX_VERSION_CODE == KERNEL_VERSION(5, 14, 0))
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) || RHEL_VERSION_GE(9, 0)
 	bdi_dev = bd_info->blki_bdev->bd_disk->bdi;
 #else
 	bdi_dev = bd_info->blki_bdev->bd_bdi;

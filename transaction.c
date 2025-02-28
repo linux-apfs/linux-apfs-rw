@@ -743,7 +743,7 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		if (!is_metadata) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
 			try_to_free_buffers(folio);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0) || RHEL_VERSION_GE(9, 3)
 			try_to_free_buffers(page_folio(page));
 #else
 			try_to_free_buffers(page);

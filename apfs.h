@@ -11,6 +11,21 @@
 #include <linux/list.h>
 #include <linux/types.h>
 #include <linux/version.h>
+
+/*
+ * Redhat kernels regularly break the api, so they need their own version
+ * checks. Make sure they always fail for non-rhel kernels.
+ *
+ * By the way, if rhel keeps picking up breaking patches for old majors after
+ * a new one is out, this check could break down and things could get more
+ * complicated. I don't think they do that though...
+ */
+#ifdef RHEL_RELEASE
+#define RHEL_VERSION_GE(a, b)	(RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(a, b))
+#else
+#define RHEL_VERSION_GE(a, b)	0
+#endif
+
 #include "apfs_raw.h"
 
 #define EFSBADCRC	EBADMSG		/* Bad CRC detected */
@@ -29,10 +44,10 @@ static inline bool sb_rdonly(const struct super_block *sb) { return sb->s_flags 
 #endif
 
 /* Compatibility wrapper around submit_bh() */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
-#define apfs_submit_bh(op, op_flags, bh) submit_bh(op, op_flags, bh)
-#else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0) || RHEL_VERSION_GE(9, 2)
 #define apfs_submit_bh(op, op_flags, bh) submit_bh(op | op_flags, bh)
+#else
+#define apfs_submit_bh(op, op_flags, bh) submit_bh(op, op_flags, bh)
 #endif
 
 /*
