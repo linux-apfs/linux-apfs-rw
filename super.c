@@ -2028,7 +2028,7 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	struct super_block *sb;
 	struct apfs_sb_info *sbi;
 	struct apfs_blkdev_info *bd_info = NULL, *tier2_info = NULL;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0) || RHEL_VERSION_GE(9, 4)
 	blk_mode_t mode = sb_open_mode(flags);
 #else
 	fmode_t mode = FMODE_READ | FMODE_EXCL;
@@ -2047,7 +2047,7 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	if (sbi->s_snap_name)
 		flags |= SB_RDONLY;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0) && !RHEL_VERSION_GE(9, 4)
 	if (!(flags & SB_RDONLY))
 		mode |= FMODE_WRITE;
 #endif
@@ -2100,7 +2100,7 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 			deactivate_locked_super(sb);
 			return ERR_PTR(error);
 		}
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0) && !RHEL_VERSION_GE(9, 4)
 		sb->s_mode = mode;
 #endif
 		error = apfs_fill_super(sb, data, flags & SB_SILENT ? 1 : 0);
