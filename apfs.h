@@ -248,13 +248,13 @@ struct apfs_ephemeral_object_info {
  */
 struct apfs_blkdev_info {
 	struct block_device *blki_bdev;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0) || RHEL_VERSION_GE(9, 5)
 	struct file *blki_bdev_file;
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 	struct bdev_handle *blki_bdev_handle;
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0) && !RHEL_VERSION_GE(9, 4)
 	fmode_t blki_mode;
 #endif
 

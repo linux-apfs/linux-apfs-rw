@@ -433,13 +433,13 @@ static void apfs_blkdev_cleanup(struct apfs_blkdev_info *info)
 	if (!info)
 		return;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0) || RHEL_VERSION_GE(9, 5)
 	fput(info->blki_bdev_file);
 	info->blki_bdev_file = NULL;
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 	bdev_release(info->blki_bdev_handle);
 	info->blki_bdev_handle = NULL;
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0) || RHEL_VERSION_GE(9, 4)
 	blkdev_put(info->blki_bdev, &apfs_fs_type);
 #else
 	blkdev_put(info->blki_bdev, info->blki_mode);
@@ -1819,7 +1819,7 @@ static int apfs_blkdev_setup(struct apfs_blkdev_info **info_p, const char *dev_n
 #endif
 {
 	struct apfs_blkdev_info *info = NULL;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0) || RHEL_VERSION_GE(9, 5)
 	struct file *file = NULL;
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 	struct bdev_handle *handle = NULL;
@@ -1836,7 +1836,7 @@ static int apfs_blkdev_setup(struct apfs_blkdev_info **info_p, const char *dev_n
 		goto fail;
 	}
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0) || RHEL_VERSION_GE(9, 5)
 	file = bdev_file_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
 	if (IS_ERR(file)) {
 		ret = PTR_ERR(file);
@@ -1852,7 +1852,7 @@ static int apfs_blkdev_setup(struct apfs_blkdev_info **info_p, const char *dev_n
 	}
 	info->blki_bdev_handle = handle;
 	bdev = handle->bdev;
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0) || RHEL_VERSION_GE(9, 4)
 	bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type, NULL);
 #else
 	bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type);
@@ -1863,7 +1863,7 @@ static int apfs_blkdev_setup(struct apfs_blkdev_info **info_p, const char *dev_n
 		goto fail;
 	}
 	info->blki_bdev = bdev;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0) && !RHEL_VERSION_GE(9, 4)
 	info->blki_mode = mode;
 #endif
 	*info_p = info;
@@ -2028,7 +2028,7 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	struct super_block *sb;
 	struct apfs_sb_info *sbi;
 	struct apfs_blkdev_info *bd_info = NULL, *tier2_info = NULL;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0) || RHEL_VERSION_GE(9, 4)
 	blk_mode_t mode = sb_open_mode(flags);
 #else
 	fmode_t mode = FMODE_READ | FMODE_EXCL;
@@ -2047,7 +2047,7 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	if (sbi->s_snap_name)
 		flags |= SB_RDONLY;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0) && !RHEL_VERSION_GE(9, 4)
 	if (!(flags & SB_RDONLY))
 		mode |= FMODE_WRITE;
 #endif
@@ -2100,7 +2100,7 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 			deactivate_locked_super(sb);
 			return ERR_PTR(error);
 		}
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0) && !RHEL_VERSION_GE(9, 4)
 		sb->s_mode = mode;
 #endif
 		error = apfs_fill_super(sb, data, flags & SB_SILENT ? 1 : 0);

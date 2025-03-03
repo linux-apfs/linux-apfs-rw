@@ -113,7 +113,7 @@ out_abort:
 	apfs_transaction_abort(sb);
 out:
 	if (err)
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0) && !RHEL_VERSION_GE(9, 5)
 		ret = block_page_mkwrite_return(err);
 #else
 		ret = vmf_fs_error(err);
