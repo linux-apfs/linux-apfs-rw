@@ -1819,7 +1819,7 @@ static int apfs_blkdev_setup(struct apfs_blkdev_info **info_p, const char *dev_n
 #endif
 {
 	struct apfs_blkdev_info *info = NULL;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0) || RHEL_VERSION_GE(9, 5)
 	struct file *file = NULL;
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 	struct bdev_handle *handle = NULL;
@@ -1836,7 +1836,7 @@ static int apfs_blkdev_setup(struct apfs_blkdev_info **info_p, const char *dev_n
 		goto fail;
 	}
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0) || RHEL_VERSION_GE(9, 5)
 	file = bdev_file_open_by_path(dev_name, mode, &apfs_fs_type, NULL);
 	if (IS_ERR(file)) {
 		ret = PTR_ERR(file);
@@ -1852,7 +1852,7 @@ static int apfs_blkdev_setup(struct apfs_blkdev_info **info_p, const char *dev_n
 	}
 	info->blki_bdev_handle = handle;
 	bdev = handle->bdev;
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0) || RHEL_VERSION_GE(9, 4)
 	bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type, NULL);
 #else
 	bdev = blkdev_get_by_path(dev_name, mode, &apfs_fs_type);
