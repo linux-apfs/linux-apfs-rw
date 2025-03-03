@@ -433,13 +433,13 @@ static void apfs_blkdev_cleanup(struct apfs_blkdev_info *info)
 	if (!info)
 		return;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0) || RHEL_VERSION_GE(9, 5)
 	fput(info->blki_bdev_file);
 	info->blki_bdev_file = NULL;
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 	bdev_release(info->blki_bdev_handle);
 	info->blki_bdev_handle = NULL;
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0) || RHEL_VERSION_GE(9, 4)
 	blkdev_put(info->blki_bdev, &apfs_fs_type);
 #else
 	blkdev_put(info->blki_bdev, info->blki_mode);
@@ -1863,7 +1863,7 @@ static int apfs_blkdev_setup(struct apfs_blkdev_info **info_p, const char *dev_n
 		goto fail;
 	}
 	info->blki_bdev = bdev;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0) && !RHEL_VERSION_GE(9, 4)
 	info->blki_mode = mode;
 #endif
 	*info_p = info;
