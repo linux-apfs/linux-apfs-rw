@@ -59,37 +59,65 @@ out:
 /**
  * apfs_transaction_has_room - Is there enough free space for this transaction?
  * @sb:		superblock structure
- * @maxops:	maximum operations expected
+ * @kind:	transaction kind for space preallocation
  */
-static bool apfs_transaction_has_room(struct super_block *sb, struct apfs_max_ops maxops)
+static bool apfs_transaction_has_room(struct super_block *sb, enum apfs_trans_kind kind)
 {
-	u64 max_cat_blks, max_omap_blks, max_extref_blks, max_blks;
-	/* I don't know the actual maximum heights, just guessing */
-	const u64 max_cat_height = 8, max_omap_height = 3, max_extref_height = 3;
+	struct apfs_nx_transaction *trans = NULL;
+	struct apfs_spaceman *sm = NULL;
+	u64 max_blks;
+
+	trans = &APFS_NXI(sb)->nx_transaction;
+	sm = APFS_SM(sb);
 
 	/*
-	 * On the worst possible case (a tree of max_height), each new insertion
-	 * to the catalog may both cow and split every node up to the root. The
-	 * root though, is only cowed once.
+	 * It's hard to keep track of the maximum number of blocks that each
+	 * operation could need because of the complexities of apfs btrees,
+	 * plus snapshots and clones. I try to keep things simple here.
 	 */
-	max_cat_blks = 1 + 2 * maxops.cat * max_cat_height;
+	switch (kind) {
+	case APFS_TRANS_REG:
+		/*
+		 * For transactions that are expected to reduce free space, we
+		 * use a very coarse bound (512 KiB) that is certain to be much
+		 * more than enough, and will always leave room for deletions.
+		 */
+		max_blks = 128;
+		break;
+	case APFS_TRANS_DEL:
+		/*
+		 * For transactions that are likely to increase free space, we
+		 * use a much tighter bound (80 KiB), so that users have the
+		 * opportunity to fix their ENOSPC situation.
+		 *
+		 * For huge filesystems with huge numbers of records, there is
+		 * a tiny chance that this might be too permissive, in which
+		 * case the transaction will later abort. I think that's
+		 * acceptable.
+		 */
+		max_blks = 20;
+		break;
+	case APFS_TRANS_SYNC:
+		/*
+		 * We try to allow sync as much as possible, for the user's
+		 * peace of mind and because flushing the free queues could
+		 * make some room.
+		 *
+		 * Even if we do nothing the transaction still allocates a new
+		 * volume superblock, and new roots for the omap and catalog,
+		 * which consumes 6 blocks in total. This could be avoided...
+		 */
+		if (trans->t_starts_count == 0)
+			max_blks = 6;
+		else
+			max_blks = 0;
+		break;
+	default:
+		apfs_alert(sb, "invalid transaction kind %u - bug!", kind);
+		return false;
+	}
 
-	/*
-	 * Any new catalog node could require a new entry in the object map,
-	 * because the original might belong to a snapshot.
-	 */
-	max_omap_blks = 1 + 2 * max_cat_blks * max_omap_height;
-
-	/* The extent reference tree needs a maximum of one record per block */
-	max_extref_blks = 1 + 2 * maxops.blks * max_extref_height;
-
-	/*
-	 * Ephemeral allocations shouldn't fail, and neither should those in the
-	 * internal pool. So just add the actual file blocks and we are done.
-	 */
-	max_blks = max_cat_blks + max_omap_blks + max_extref_blks + maxops.blks;
-
-	return max_blks < APFS_SM(sb)->sm_free_count;
+	return max_blks <= sm->sm_free_count;
 }
 
 /**
@@ -326,12 +354,12 @@ void apfs_transaction_init(struct apfs_nx_transaction *trans)
 /**
  * apfs_transaction_start - Begin a new transaction
  * @sb:		superblock structure
- * @maxops:	maximum operations expected
+ * @kind:	transaction kind for space preallocation
  *
  * Also locks the filesystem for writing; returns 0 on success or a negative
  * error code in case of failure.
  */
-int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
+int apfs_transaction_start(struct super_block *sb, enum apfs_trans_kind kind)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
@@ -370,7 +398,7 @@ int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops)
 	}
 
 	/* Don't start transactions unless we are sure they fit in disk */
-	if (!apfs_transaction_has_room(sb, maxops)) {
+	if (!apfs_transaction_has_room(sb, kind)) {
 		/* Commit what we have so far to flush the queues */
 		nx_trans->t_state |= APFS_NX_TRANS_FORCE_COMMIT;
 		err = apfs_transaction_commit(sb);

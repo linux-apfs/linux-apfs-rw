@@ -799,10 +799,6 @@ done:
 	apfs_free_query(query);
 	return ret;
 }
-int APFS_XATTR_SET_MAXOPS(void)
-{
-	return 1;
-}
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 static int apfs_xattr_osx_set(const struct xattr_handler *handler,
@@ -821,13 +817,9 @@ static int apfs_xattr_osx_set(const struct xattr_handler *handler,
 #endif
 {
 	struct super_block *sb = inode->i_sb;
-	struct apfs_max_ops maxops;
 	int err;
 
-	maxops.cat = APFS_XATTR_SET_MAXOPS();
-	maxops.blks = 0;
-
-	err = apfs_transaction_start(sb, maxops);
+	err = apfs_transaction_start(sb, value ? APFS_TRANS_REG : APFS_TRANS_DEL);
 	if (err)
 		return err;
 

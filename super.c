@@ -912,10 +912,9 @@ static void apfs_put_super(struct super_block *sb)
 	if (!(sb->s_flags & SB_RDONLY)) {
 		struct apfs_superblock *vsb_raw;
 		struct buffer_head *vsb_bh;
-		struct apfs_max_ops maxops = {0};
 		int err;
 
-		err = apfs_transaction_start(sb, maxops);
+		err = apfs_transaction_start(sb, APFS_TRANS_SYNC);
 		if (err) {
 			apfs_err(sb, "unmount transaction start failed (err:%d)", err);
 			goto fail;
@@ -1032,13 +1031,9 @@ static int apfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_nxsb_info *nxi = APFS_SB(sb)->s_nxi;
-	struct apfs_max_ops maxops;
 	int err;
 
-	maxops.cat = APFS_UPDATE_INODE_MAXOPS();
-	maxops.blks = 0;
-
-	err = apfs_transaction_start(sb, maxops);
+	err = apfs_transaction_start(sb, APFS_TRANS_REG);
 	if (err)
 		return err;
 	err = apfs_update_inode(inode, NULL /* new_name */);
@@ -1220,14 +1215,13 @@ static int apfs_show_options(struct seq_file *seq, struct dentry *root)
 
 int apfs_sync_fs(struct super_block *sb, int wait)
 {
-	struct apfs_max_ops maxops = {0};
 	int err;
 
 	/* TODO: actually start the commit and return without waiting? */
 	if (wait == 0)
 		return 0;
 
-	err = apfs_transaction_start(sb, maxops);
+	err = apfs_transaction_start(sb, APFS_TRANS_SYNC);
 	if (err)
 		return err;
 	APFS_SB(sb)->s_nxi->nx_transaction.t_state |= APFS_NX_TRANS_FORCE_COMMIT;

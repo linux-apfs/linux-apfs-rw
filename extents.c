@@ -758,7 +758,6 @@ static int apfs_update_extent(struct apfs_dstream_info *dstream, const struct ap
 	}
 	return apfs_update_mid_extent(dstream, extent);
 }
-#define APFS_UPDATE_EXTENTS_MAXOPS	(1 + 2 * APFS_CRYPTO_ADJ_REFCNT_MAXOPS())
 
 static int apfs_extend_phys_extent(struct apfs_query *query, u64 bno, u64 blkcnt, u64 dstream_id)
 {
@@ -1136,7 +1135,6 @@ int apfs_flush_extent_cache(struct apfs_dstream_info *dstream)
 	dstream->ds_ext_dirty = false;
 	return 0;
 }
-#define APFS_FLUSH_EXTENT_CACHE	APFS_UPDATE_EXTENTS_MAXOPS
 
 /**
  * apfs_create_hole - Create and insert a hole extent for the dstream
@@ -1451,10 +1449,6 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 	dstream->ds_ext_dirty = true;
 	return 0;
 }
-int APFS_GET_NEW_BLOCK_MAXOPS(void)
-{
-	return APFS_FLUSH_EXTENT_CACHE;
-}
 
 /**
  * apfs_dstream_get_new_bno - Allocate a new block inside a dstream
@@ -1761,8 +1755,6 @@ int apfs_clone_file_range(struct file *src_file, loff_t off, struct file *dst_fi
 	struct apfs_dstream_info *dst_ds = &dst_ai->i_dstream;
 	struct super_block *sb = src_inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	/* TODO: remember to update the maxops in the future */
-	struct apfs_max_ops maxops = {0};
 	const u64 xfield_flags = APFS_INODE_MAINTAIN_DIR_STATS | APFS_INODE_IS_SPARSE | APFS_INODE_HAS_PURGEABLE_FLAGS;
 	int err;
 
@@ -1796,7 +1788,7 @@ int apfs_clone_file_range(struct file *src_file, loff_t off, struct file *dst_fi
 		return -EOPNOTSUPP;
 	}
 
-	err = apfs_transaction_start(sb, maxops);
+	err = apfs_transaction_start(sb, APFS_TRANS_REG);
 	if (err)
 		return err;
 	apfs_inode_join_transaction(sb, src_inode);

@@ -395,13 +395,11 @@ static int apfs_do_ioc_take_snapshot(struct inode *mntpoint, const char *name, i
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 	struct apfs_superblock *vsb_raw = NULL;
 	struct apfs_omap *omap = sbi->s_omap;
-	/* TODO: remember to update the maxops in the future */
-	struct apfs_max_ops maxops = {0};
 	u64 sblock_oid;
 	bool eexist = false;
 	int err;
 
-	err = apfs_transaction_start(sb, maxops);
+	err = apfs_transaction_start(sb, APFS_TRANS_REG);
 	if (err)
 		return err;
 

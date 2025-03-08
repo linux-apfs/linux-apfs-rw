@@ -181,6 +181,15 @@ struct apfs_spaceman {
 #define APFS_NX_TRANS_INCOMPLETE_BLOCK	8	/* A data block is not written in full */
 
 /*
+ * ENOSPC checks before transactions are more or less coarse depending on this.
+ */
+enum apfs_trans_kind {
+	APFS_TRANS_REG,		/* Most transactions */
+	APFS_TRANS_DEL,		/* Transactions that usually free space */
+	APFS_TRANS_SYNC,	/* Sync (or unmount) transaction */
+};
+
+/*
  * Structure that keeps track of a container transaction.
  */
 struct apfs_nx_transaction {
@@ -207,14 +216,6 @@ BUFFER_FNS(CSUM, csum);
 struct apfs_bh_info {
 	struct buffer_head	*bh;	/* The buffer head */
 	struct list_head	list;	/* List of buffers in the transaction */
-};
-
-/*
- * Used to report how many operations may be needed for a transaction
- */
-struct apfs_max_ops {
-	int cat;	/* Maximum catalog records that may need changing */
-	int blks;	/* Maximum extent blocks that may need changing */
 };
 
 /*
@@ -964,7 +965,6 @@ extern int apfs_link(struct dentry *old_dentry, struct inode *dir,
 extern int apfs_unlink(struct inode *dir, struct dentry *dentry);
 extern int apfs_rmdir(struct inode *dir, struct dentry *dentry);
 extern int apfs_delete_orphan_link(struct inode *inode);
-extern int APFS_DELETE_ORPHAN_LINK_MAXOPS(void);
 extern u64 apfs_any_orphan_ino(struct super_block *sb, u64 *ino_p);
 
 /* extents.c */
@@ -979,7 +979,6 @@ extern int apfs_flush_extent_cache(struct apfs_dstream_info *dstream);
 extern int apfs_dstream_get_new_bno(struct apfs_dstream_info *dstream, u64 dsblock, u64 *bno);
 extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			      struct buffer_head *bh_result, int create);
-extern int APFS_GET_NEW_BLOCK_MAXOPS(void);
 extern int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size);
 extern int apfs_inode_delete_front(struct inode *inode);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
@@ -998,7 +997,6 @@ extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 /* inode.c */
 extern struct inode *apfs_iget(struct super_block *sb, u64 cnid);
 extern int apfs_update_inode(struct inode *inode, char *new_name);
-extern int APFS_UPDATE_INODE_MAXOPS(void);
 extern void apfs_orphan_cleanup_work(struct work_struct *work);
 extern void apfs_evict_inode(struct inode *inode);
 extern struct inode *apfs_new_inode(struct inode *dir, umode_t mode,
@@ -1006,7 +1004,6 @@ extern struct inode *apfs_new_inode(struct inode *dir, umode_t mode,
 extern int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 				 struct dentry *dentry);
 extern int apfs_inode_create_exclusive_dstream(struct inode *inode);
-extern int APFS_CREATE_INODE_REC_MAXOPS(void);
 extern int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata);
 extern int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata);
 extern int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta);
@@ -1046,7 +1043,6 @@ extern int apfs_getattr(struct mnt_idmap *idmap,
 #endif
 
 extern int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta);
-extern int APFS_CRYPTO_ADJ_REFCNT_MAXOPS(void);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
 extern int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa);
@@ -1122,7 +1118,7 @@ extern int apfs_sync_fs(struct super_block *sb, int wait);
 /* transaction.c */
 extern int apfs_cpoint_data_free(struct super_block *sb, u64 bno);
 extern void apfs_transaction_init(struct apfs_nx_transaction *trans);
-extern int apfs_transaction_start(struct super_block *sb, struct apfs_max_ops maxops);
+extern int apfs_transaction_start(struct super_block *sb, enum apfs_trans_kind kind);
 extern int apfs_transaction_commit(struct super_block *sb);
 extern void apfs_inode_join_transaction(struct super_block *sb, struct inode *inode);
 extern int apfs_transaction_join(struct super_block *sb,
@@ -1138,7 +1134,6 @@ extern int __apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 extern int apfs_delete_all_xattrs(struct inode *inode);
 extern int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 			  size_t size, int flags);
-extern int APFS_XATTR_SET_MAXOPS(void);
 extern ssize_t apfs_listxattr(struct dentry *dentry, char *buffer, size_t size);
 extern int apfs_xattr_get_compressed_data(struct inode *inode, const char *name, struct apfs_compressed_data *cdata);
 extern void apfs_release_compressed_data(struct apfs_compressed_data *cdata);
