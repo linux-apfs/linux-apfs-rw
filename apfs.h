@@ -1106,6 +1106,7 @@ extern int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 c
 extern int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count);
 extern int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backwards);
 extern int apfs_write_ip_bitmaps(struct super_block *sb);
+extern int apfs_spaceman_get_free_blkcnt(struct super_block *sb, u64 *blkcnt);
 
 /* super.c */
 extern int apfs_map_volume_super_bno(struct super_block *sb, u64 bno, bool check);
@@ -1125,6 +1126,7 @@ extern int apfs_transaction_join(struct super_block *sb,
 				 struct buffer_head *bh);
 void apfs_transaction_abort(struct super_block *sb);
 extern int apfs_transaction_flush_all_inodes(struct super_block *sb);
+extern int apfs_read_ephemeral_objects(struct super_block *sb);
 
 /* xattr.c */
 extern int ____apfs_xattr_get(struct inode *inode, const char *name, void *buffer,

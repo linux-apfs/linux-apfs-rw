@@ -1431,3 +1431,47 @@ static int apfs_main_free(struct super_block *sb, u64 bno)
 
 	return err;
 }
+
+/**
+ * apfs_spaceman_get_free_blkcnt - Calculate the total number of free blocks
+ * @sb:		filesystem superblock
+ * @blkcnt:	on return, the total number of free blocks for all devices
+ *
+ * Can be called even if the spaceman has not been read (for example, on a
+ * read-only mount). Returns 0 on success, or a negative error code in case of
+ * failure.
+ */
+int apfs_spaceman_get_free_blkcnt(struct super_block *sb, u64 *blkcnt)
+{
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_nx_superblock *raw_sb = NULL;
+	struct apfs_spaceman_phys *sm_raw = NULL;
+	struct apfs_ephemeral_object_info *sm_eph_info = NULL;
+	struct apfs_spaceman_device *dev = NULL;
+	u64 oid;
+	int err;
+
+	if (!nxi->nx_eph_list) {
+		err = apfs_read_ephemeral_objects(sb);
+		if (err) {
+			apfs_err(sb, "failed to read the ephemeral objects");
+			return err;
+		}
+	}
+
+	raw_sb = nxi->nx_raw;
+	oid = le64_to_cpu(raw_sb->nx_spaceman_oid);
+	sm_eph_info = apfs_ephemeral_object_lookup(sb, oid);
+	if (IS_ERR(sm_eph_info)) {
+		apfs_err(sb, "no spaceman object for oid 0x%llx", oid);
+		return PTR_ERR(sm_eph_info);
+	}
+	sm_raw = (struct apfs_spaceman_phys *)sm_eph_info->object;
+
+	*blkcnt = 0;
+	dev = &sm_raw->sm_dev[APFS_SD_MAIN];
+	*blkcnt += le64_to_cpu(dev->sm_free_count);
+	dev = &sm_raw->sm_dev[APFS_SD_TIER2];
+	*blkcnt += le64_to_cpu(dev->sm_free_count);
+	return 0;
+}

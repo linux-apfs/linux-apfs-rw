@@ -1061,85 +1061,6 @@ static void destroy_inodecache(void)
 	kmem_cache_destroy(apfs_inode_cachep);
 }
 
-/**
- * apfs_count_used_blocks - Count the blocks in use across all volumes
- * @sb:		filesystem superblock
- * @count:	on return it will store the block count
- *
- * This function probably belongs in a separate file, but for now it is
- * only called by statfs.
- */
-static int apfs_count_used_blocks(struct super_block *sb, u64 *count)
-{
-	struct apfs_nx_superblock *msb_raw = APFS_NXI(sb)->nx_raw;
-	struct apfs_node *vnode;
-	struct apfs_omap_phys *msb_omap_raw;
-	struct buffer_head *bh;
-	struct apfs_omap *omap = NULL;
-	u64 msb_omap, vb;
-	int i;
-	int err = 0;
-
-	/* Get the container's object map */
-	msb_omap = le64_to_cpu(msb_raw->nx_omap_oid);
-	bh = apfs_sb_bread(sb, msb_omap);
-	if (!bh) {
-		apfs_err(sb, "unable to read container object map");
-		return -EIO;
-	}
-	msb_omap_raw = (struct apfs_omap_phys *)bh->b_data;
-
-	/* Get the Volume Block */
-	vb = le64_to_cpu(msb_omap_raw->om_tree_oid);
-	msb_omap_raw = NULL;
-	brelse(bh);
-	bh = NULL;
-	vnode = apfs_read_node(sb, vb, APFS_OBJ_PHYSICAL, false /* write */);
-	if (IS_ERR(vnode)) {
-		apfs_err(sb, "unable to read volume block");
-		return PTR_ERR(vnode);
-	}
-
-	omap = apfs_alloc_omap();
-	if (!omap) {
-		err = -ENOMEM;
-		goto fail;
-	}
-	omap->omap_root = vnode;
-
-	/* Iterate through the checkpoint superblocks and add the used blocks */
-	*count = 0;
-	for (i = 0; i < APFS_NX_MAX_FILE_SYSTEMS; i++) {
-		struct apfs_superblock *vsb_raw;
-		u64 vol_id;
-		u64 vol_bno;
-
-		vol_id = le64_to_cpu(msb_raw->nx_fs_oid[i]);
-		if (vol_id == 0) /* All volumes have been checked */
-			break;
-		err = apfs_omap_lookup_newest_block(sb, omap, vol_id, &vol_bno, false /* write */);
-		if (err) {
-			apfs_err(sb, "omap lookup failed for vol id 0x%llx", vol_id);
-			break;
-		}
-
-		bh = apfs_sb_bread(sb, vol_bno);
-		if (!bh) {
-			err = -EIO;
-			apfs_err(sb, "unable to read volume superblock");
-			break;
-		}
-		vsb_raw = (struct apfs_superblock *)bh->b_data;
-		*count += le64_to_cpu(vsb_raw->apfs_fs_alloc_count);
-		brelse(bh);
-	}
-
-fail:
-	kfree(omap);
-	apfs_node_free(vnode);
-	return err;
-}
-
 static int apfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
 	struct super_block *sb = dentry->d_sb;
@@ -1147,7 +1068,7 @@ static int apfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_superblock *msb_raw;
 	struct apfs_superblock *vol;
-	u64 fsid, used_blocks = 0;
+	u64 fsid, free_blocks;
 	int err;
 
 	down_read(&nxi->nx_big_sem);
@@ -1160,11 +1081,16 @@ static int apfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 
 	/* Volumes share the whole disk space */
 	buf->f_blocks = le64_to_cpu(msb_raw->nx_block_count);
-	err = apfs_count_used_blocks(sb, &used_blocks);
+	/*
+	 * It takes some work to retrieve the free block count because we
+	 * can't assume that the spaceman has been read yet. It would be
+	 * cleaner if we always did that on first mount (TODO).
+	 */
+	err = apfs_spaceman_get_free_blkcnt(sb, &free_blocks);
 	if (err)
 		goto fail;
-	buf->f_bfree = buf->f_blocks - used_blocks;
-	buf->f_bavail = buf->f_bfree; /* I don't know any better */
+	buf->f_bfree = free_blocks;
+	buf->f_bavail = free_blocks;
 
 	/* The file count is only for the mounted volume */
 	buf->f_files = le64_to_cpu(vol->apfs_num_files) +

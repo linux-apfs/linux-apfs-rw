@@ -269,7 +269,7 @@ out:
  *
  * Returns 0 on success or a negative error code in case of failure.
  */
-static int apfs_read_ephemeral_objects(struct super_block *sb)
+int apfs_read_ephemeral_objects(struct super_block *sb)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_nx_superblock *raw_sb = nxi->nx_raw;
