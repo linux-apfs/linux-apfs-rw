@@ -1370,6 +1370,11 @@ int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backward
 			apfs_err(sb, "error during allocation");
 		return err;
 	}
+	/*
+	 * We checked the free space before starting the transaction, so this
+	 * isn't expected to happen.
+	 */
+	apfs_err(sb, "ran out of space during transaction");
 	return -ENOSPC;
 }
 
