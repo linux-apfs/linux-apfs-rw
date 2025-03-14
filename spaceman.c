@@ -1401,10 +1401,11 @@ static int apfs_main_free(struct super_block *sb, u64 bno)
 {
 	struct apfs_spaceman *sm = APFS_SM(sb);
 	struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
+	struct apfs_sb_info *sbi = NULL;
 	u64 cib_idx, chunk_idx;
 	struct buffer_head *cib_bh;
 	u64 cib_bno;
-	int err;
+	int err, orphan_err;
 
 	if (!sm_raw->sm_blocks_per_chunk || !sm_raw->sm_chunks_per_cib) {
 		apfs_err(sb, "block or chunk count not set");
@@ -1431,8 +1432,18 @@ static int apfs_main_free(struct super_block *sb, u64 bno)
 		apfs_write_spaceman(sm);
 	}
 	brelse(cib_bh);
-	if (err)
+	if (err) {
 		apfs_err(sb, "error during free");
+		return err;
+	}
+
+	/* It may be time to resume orphan cleanups, if we made enough room */
+	sbi = APFS_SB(sb);
+	orphan_err = atomic_read(&sbi->s_orphan_cleanup_err);
+	if (orphan_err == -ENOSPC && sm->sm_free_count >= 2 * 20) {
+		atomic_set(&sbi->s_orphan_cleanup_err, 0);
+		apfs_schedule_orphan_cleanup(sb);
+	}
 
 	return err;
 }

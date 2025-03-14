@@ -1723,6 +1723,32 @@ out:
 }
 
 /**
+ * apfs_schedule_orphan_cleanup - Schedule cleanup for orphan inodes
+ * @sb: filesystem superblock
+ */
+void apfs_schedule_orphan_cleanup(struct super_block *sb)
+{
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+
+	/*
+	 * Don't schedule cleanups during unmount: completing all of it could
+	 * take a while so just leave future mounts to handle the orphans.
+	 */
+	if (atomic_read(&sb->s_active) == 0)
+		return;
+
+	/*
+	 * Don't keep retrying orphan cleanups nonstop when they run into an
+	 * unexpected error: it won't do any good and it will flood dmesg. We
+	 * will retry eventually for ENOSPC, but that's handled elsewhere.
+	 */
+	if (atomic_read(&sbi->s_orphan_cleanup_err))
+		return;
+
+	schedule_work(&sbi->s_orphan_cleanup_work);
+}
+
+/**
  * apfs_clean_orphans - Delete as many orphan files as is reasonable
  * @sb: filesystem superblock
  *
@@ -1730,26 +1756,27 @@ out:
  */
 static int apfs_clean_orphans(struct super_block *sb)
 {
+	struct apfs_sb_info *sbi = APFS_SB(sb);
 	int ret, i;
 
 	for (i = 0; i < 100; ++i) {
 		ret = apfs_clean_any_orphan(sb);
-		if (ret) {
-			if (ret == -ENODATA)
-				return 0;
-			if (ret == -EAGAIN)
-				break;
-			apfs_err(sb, "failed to delete an orphan file");
-			return ret;
-		}
+		if (ret == 0)
+			continue;
+		if (ret == -ENODATA)
+			return 0;
+		if (ret == -EAGAIN)
+			break;
+		apfs_err(sb, "failed to delete an orphan file");
+		atomic_set(&sbi->s_orphan_cleanup_err, ret);
+		return ret;
 	}
 
 	/*
 	 * If a file is too big, or if there are too many files, take a break
 	 * and continue later.
 	 */
-	if (atomic_read(&sb->s_active) != 0)
-		schedule_work(&APFS_SB(sb)->s_orphan_cleanup_work);
+	apfs_schedule_orphan_cleanup(sb);
 	return 0;
 }
 
@@ -1765,18 +1792,15 @@ void apfs_evict_inode(struct inode *inode)
 	if (!ai->i_has_dstream || ai->i_dstream.ds_size == 0) {
 		/* For files with no extents, scheduled cleanup wastes time */
 		err = apfs_clean_single_orphan(inode);
-		if (err)
+		if (err) {
 			apfs_err(sb, "failed to clean orphan 0x%llx (err:%d)", apfs_ino(inode), err);
+			atomic_set(&APFS_SB(sb)->s_orphan_cleanup_err, err);
+		}
 		goto out;
 	}
 
-	/*
-	 * If the inode still has extents then schedule cleanup for the rest
-	 * of it. Not during unmount though: completing all cleanup could take
-	 * a while so just leave future mounts to handle the orphans.
-	 */
-	if (atomic_read(&sb->s_active))
-		schedule_work(&APFS_SB(sb)->s_orphan_cleanup_work);
+	/* If the inode still has extents then schedule cleanup for the rest */
+	apfs_schedule_orphan_cleanup(sb);
 out:
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);

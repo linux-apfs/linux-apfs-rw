@@ -379,6 +379,7 @@ struct apfs_sb_info {
 
 	struct inode *s_private_dir;	/* Inode for the private directory */
 	struct work_struct s_orphan_cleanup_work;
+	atomic_t s_orphan_cleanup_err;	/* Error from last orphan cleanup */
 };
 
 static inline struct apfs_sb_info *APFS_SB(struct super_block *sb)
@@ -997,6 +998,7 @@ extern int apfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 /* inode.c */
 extern struct inode *apfs_iget(struct super_block *sb, u64 cnid);
 extern int apfs_update_inode(struct inode *inode, char *new_name);
+extern void apfs_schedule_orphan_cleanup(struct super_block *sb);
 extern void apfs_orphan_cleanup_work(struct work_struct *work);
 extern void apfs_evict_inode(struct inode *inode);
 extern struct inode *apfs_new_inode(struct inode *dir, umode_t mode,
