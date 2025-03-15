@@ -1440,7 +1440,7 @@ static int apfs_main_free(struct super_block *sb, u64 bno)
 	/* It may be time to resume orphan cleanups, if we made enough room */
 	sbi = APFS_SB(sb);
 	orphan_err = atomic_read(&sbi->s_orphan_cleanup_err);
-	if (orphan_err == -ENOSPC && sm->sm_free_count >= 2 * 20) {
+	if (orphan_err == -ENOSPC && sm->sm_free_count >= 2 * APFS_DEL_ROOM) {
 		atomic_set(&sbi->s_orphan_cleanup_err, 0);
 		apfs_schedule_orphan_cleanup(sb);
 	}

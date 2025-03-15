@@ -189,6 +189,11 @@ enum apfs_trans_kind {
 	APFS_TRANS_SYNC,	/* Sync (or unmount) transaction */
 };
 
+/* The space requirements for each kind of transaction, in blocks */
+#define APFS_REG_ROOM	128
+#define APFS_DEL_ROOM	20
+#define APFS_SYNC_ROOM	6
+
 /*
  * Structure that keeps track of a container transaction.
  */

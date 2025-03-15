@@ -82,7 +82,7 @@ static bool apfs_transaction_has_room(struct super_block *sb, enum apfs_trans_ki
 		 * use a very coarse bound (512 KiB) that is certain to be much
 		 * more than enough, and will always leave room for deletions.
 		 */
-		max_blks = 128;
+		max_blks = APFS_REG_ROOM;
 		break;
 	case APFS_TRANS_DEL:
 		/*
@@ -95,7 +95,7 @@ static bool apfs_transaction_has_room(struct super_block *sb, enum apfs_trans_ki
 		 * case the transaction will later abort. I think that's
 		 * acceptable.
 		 */
-		max_blks = 20;
+		max_blks = APFS_DEL_ROOM;
 		break;
 	case APFS_TRANS_SYNC:
 		/*
@@ -108,7 +108,7 @@ static bool apfs_transaction_has_room(struct super_block *sb, enum apfs_trans_ki
 		 * which consumes 6 blocks in total. This could be avoided...
 		 */
 		if (trans->t_starts_count == 0)
-			max_blks = 6;
+			max_blks = APFS_SYNC_ROOM;
 		else
 			max_blks = 0;
 		break;
