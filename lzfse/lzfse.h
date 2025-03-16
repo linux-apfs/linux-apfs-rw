@@ -10,33 +10,6 @@
 #include <linux/stddef.h>
 #include <linux/types.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#if defined(_MSC_VER) && !defined(__clang__)
-#  define __attribute__(X)
-#  pragma warning(disable : 4068)
-#endif
-
-#if defined(LZFSE_DLL)
-#  if defined(_WIN32) || defined(__CYGWIN__)
-#    if defined(LZFSE_DLL_EXPORTS)
-#      define LZFSE_API __declspec(dllexport)
-#    else
-#      define LZFSE_API __declspec(dllimport)
-#    endif
-#  endif
-#endif
-
-#if !defined(LZFSE_API)
-#  if __GNUC__ >= 4
-#    define LZFSE_API __attribute__((visibility("default")))
-#  else
-#    define LZFSE_API
-#  endif
-#endif
-
 /*! @abstract Get the required scratch buffer size to compress using LZFSE.   */
 size_t lzfse_encode_scratch_size(void);
 
@@ -69,11 +42,9 @@ size_t lzfse_encode_scratch_size(void);
  *  successfully compressed. If the input cannot be compressed to fit into
  *  the provided buffer, or an error occurs, zero is returned, and the
  *  contents of dst_buffer are unspecified.                                   */
-size_t lzfse_encode_buffer(uint8_t *__restrict dst_buffer,
-                           size_t dst_size,
-                           const uint8_t *__restrict src_buffer,
-                           size_t src_size,
-                           void *__restrict scratch_buffer);
+size_t lzfse_encode_buffer(uint8_t *__restrict dst_buffer, size_t dst_size,
+			   const uint8_t *__restrict src_buffer,
+			   size_t src_size, void *__restrict scratch_buffer);
 
 /*! @abstract Get the required scratch buffer size to decompress using LZFSE. */
 size_t lzfse_decode_scratch_size(void);
@@ -108,14 +79,8 @@ size_t lzfse_decode_scratch_size(void);
  *  buffer to hold the entire expanded output, only the first dst_size bytes
  *  will be written to the buffer and dst_size is returned. Note that this
  *  behavior differs from that of lzfse_encode_buffer.                        */
-size_t lzfse_decode_buffer(uint8_t *__restrict dst_buffer,
-                           size_t dst_size,
-                           const uint8_t *__restrict src_buffer,
-                           size_t src_size,
-                           void *__restrict scratch_buffer);
-
-#ifdef __cplusplus
-} /* extern "C" */
-#endif
+size_t lzfse_decode_buffer(uint8_t *__restrict dst_buffer, size_t dst_size,
+			   const uint8_t *__restrict src_buffer,
+			   size_t src_size, void *__restrict scratch_buffer);
 
 #endif /* LZFSE_H */
