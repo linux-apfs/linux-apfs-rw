@@ -152,6 +152,7 @@ struct apfs_spaceman {
 	u32 sm_cib_count;		/* Number of chunk-info blocks */
 	u64 sm_free_count;		/* Number of free blocks */
 	u32 sm_addr_offset;		/* Offset of cib addresses in @sm_raw */
+	u64 sm_main_fq_nodes;		/* Number of nodes in the main fq */
 
 	/*
 	 * A range of freed blocks not yet put in the free queue. Extend this as

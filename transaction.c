@@ -827,6 +827,7 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 		int buffers_max = nxi->nx_trans_buffers_max;
 		int starts_max = APFS_TRANS_STARTS_MAX;
 		int mq_max = APFS_TRANS_MAIN_QUEUE_MAX;
+		int maxnodes;
 
 		/*
 		 * Try to avoid committing halfway through a data block write,
@@ -854,6 +855,18 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 
 		/* Don't let the main queue get too full either */
 		if (le64_to_cpu(fq_main->sfq_count) > mq_max)
+			return true;
+
+		/*
+		 * The main free queue can become unbalanced enough to reach
+		 * the node limit while being mostly empty. For now, the only
+		 * way I have to rebalance it is to flush it entirely with a
+		 * new transaction. We could wait longer to do it, but I don't
+		 * see the point.
+		 */
+		maxnodes = le16_to_cpu(fq_main->sfq_tree_node_limit);
+		maxnodes = (maxnodes + 1) >> 1;
+		if (sm->sm_main_fq_nodes > 1 && sm->sm_main_fq_nodes >= maxnodes)
 			return true;
 	}
 

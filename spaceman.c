@@ -600,6 +600,7 @@ static int apfs_flush_free_queue(struct super_block *sb, unsigned int qid)
 	struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
 	struct apfs_spaceman_free_queue *fq = &sm_raw->sm_fq[qid];
 	struct apfs_node *fq_root;
+	struct apfs_btree_info *fq_info = NULL;
 	u64 oldest = le64_to_cpu(fq->sfq_oldest_xid);
 	int err;
 
@@ -638,6 +639,16 @@ static int apfs_flush_free_queue(struct super_block *sb, unsigned int qid)
 		}
 		oldest = apfs_free_queue_oldest_xid(fq_root);
 		fq->sfq_oldest_xid = cpu_to_le64(oldest);
+	}
+
+	if (qid == APFS_SFQ_MAIN) {
+		fq_info = (void *)fq_root->object.data + sb->s_blocksize - sizeof(*fq_info);
+		sm->sm_main_fq_nodes = le64_to_cpu(fq_info->bt_node_count);
+		if (sm->sm_main_fq_nodes != 1) {
+			apfs_alert(sb, "main queue wasn't flushed in full - bug!");
+			err = -EFSCORRUPTED;
+			goto fail;
+		}
 	}
 
 fail:
@@ -926,12 +937,11 @@ static int apfs_free_queue_try_insert(struct super_block *sb, u64 bno, u64 count
 	__le64 raw_val;
 	u64 node_count;
 	u16 node_limit;
+	unsigned int qid;
 	int err;
 
-	if (apfs_block_in_ip(sm, bno))
-		fq = &sm_raw->sm_fq[APFS_SFQ_IP];
-	else
-		fq = &sm_raw->sm_fq[APFS_SFQ_MAIN];
+	qid = apfs_block_in_ip(sm, bno) ? APFS_SFQ_IP : APFS_SFQ_MAIN;
+	fq = &sm_raw->sm_fq[qid];
 
 	fq_root = apfs_read_node(sb, le64_to_cpu(fq->sfq_tree_oid),
 				 APFS_OBJ_EPHEMERAL, true /* write */);
@@ -982,6 +992,9 @@ static int apfs_free_queue_try_insert(struct super_block *sb, u64 bno, u64 count
 	if (!fq->sfq_oldest_xid)
 		fq->sfq_oldest_xid = cpu_to_le64(nxi->nx_xid);
 	le64_add_cpu(&fq->sfq_count, count);
+
+	if (qid == APFS_SFQ_MAIN)
+		sm->sm_main_fq_nodes = le64_to_cpu(fq_info->bt_node_count);
 
 fail:
 	apfs_free_query(query);
