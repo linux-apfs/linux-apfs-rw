@@ -590,11 +590,10 @@ static u64 apfs_free_queue_oldest_xid(struct apfs_node *root)
  * apfs_flush_free_queue - Free ip blocks queued by old transactions
  * @sb:		superblock structure
  * @qid:	queue to be freed
- * @force:	flush as much as possible
  *
  * Returns 0 on success or a negative error code in case of failure.
  */
-static int apfs_flush_free_queue(struct super_block *sb, unsigned int qid, bool force)
+static int apfs_flush_free_queue(struct super_block *sb, unsigned int qid)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
 	struct apfs_spaceman *sm = APFS_SM(sb);
@@ -612,19 +611,15 @@ static int apfs_flush_free_queue(struct super_block *sb, unsigned int qid, bool 
 	}
 
 	while (oldest) {
-		u64 sfq_count;
-
 		/*
-		 * Try to preserve one transaction here. I don't really know
-		 * what free queues are for so this is probably silly.
+		 * Blocks freed in the current transaction can't be reused
+		 * safely until after the commit, but I don't think there is
+		 * any point in preserving old transacions. I'm guessing the
+		 * official driver keeps multiple transactions going at the
+		 * same time, that must be why they need a free queue.
 		 */
-		if (force) {
-			if (oldest == nxi->nx_xid)
-				break;
-		} else {
-			if (oldest + 1 >= nxi->nx_xid)
-				break;
-		}
+		if (oldest == nxi->nx_xid)
+			break;
 
 		while (true) {
 			u64 count = 0;
@@ -643,22 +638,6 @@ static int apfs_flush_free_queue(struct super_block *sb, unsigned int qid, bool 
 		}
 		oldest = apfs_free_queue_oldest_xid(fq_root);
 		fq->sfq_oldest_xid = cpu_to_le64(oldest);
-
-		if (force)
-			continue;
-
-		/*
-		 * Flushing a single transaction may not be enough to avoid
-		 * running out of space in the ip, but it's probably best not
-		 * to flush all the old transactions at once either. We use a
-		 * harsher version of the apfs_transaction_need_commit() check,
-		 * to make sure we won't be forced to commit again right away.
-		 */
-		sfq_count = le64_to_cpu(fq->sfq_count);
-		if (qid == APFS_SFQ_IP && sfq_count * 6 <= le64_to_cpu(sm_raw->sm_ip_block_count))
-			break;
-		if (qid == APFS_SFQ_MAIN && sfq_count <= APFS_TRANS_MAIN_QUEUE_MAX - 200)
-			break;
 	}
 
 fail:
@@ -787,12 +766,16 @@ int apfs_read_spaceman(struct super_block *sb)
 		goto fail;
 	}
 
-	err = apfs_flush_free_queue(sb, APFS_SFQ_IP, false /* force */);
+	/*
+	 * We flush free queues whole when each transaction begins, to make it
+	 * harder for the btrees to become too unbalanced.
+	 */
+	err = apfs_flush_free_queue(sb, APFS_SFQ_IP);
 	if (err) {
 		apfs_err(sb, "failed to flush ip fq");
 		goto fail;
 	}
-	err = apfs_flush_free_queue(sb, APFS_SFQ_MAIN, false /* force */);
+	err = apfs_flush_free_queue(sb, APFS_SFQ_MAIN);
 	if (err) {
 		apfs_err(sb, "failed to flush main fq");
 		goto fail;
@@ -926,8 +909,7 @@ static inline int apfs_chunk_mark_free(struct super_block *sb, char *bitmap,
  * @count:	number of consecutive blocks to free
  *
  * Same as apfs_free_queue_insert_nocache(), except that this one can also fail
- * with -EAGAIN if there is no room for the new record, so that the caller can
- * flush the queue and retry.
+ * with -ENOSPC if there is no room for the new record.
  */
 static int apfs_free_queue_try_insert(struct super_block *sb, u64 bno, u64 count)
 {
@@ -978,7 +960,7 @@ static int apfs_free_queue_try_insert(struct super_block *sb, u64 bno, u64 count
 	if (node_count == node_limit) {
 		needed_room = sizeof(raw_key) + (ghost ? 0 : sizeof(raw_val));
 		if (!apfs_node_has_room(query->node, needed_room, false /* replace */)) {
-			err = -EAGAIN;
+			err = -ENOSPC;
 			goto fail;
 		}
 	}
@@ -1020,25 +1002,16 @@ fail:
  */
 int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count)
 {
-	struct apfs_spaceman *sm = APFS_SM(sb);
 	unsigned int qid;
 	int err;
 
 	err = apfs_free_queue_try_insert(sb, bno, count);
-	if (err == -EAGAIN) {
-		qid = apfs_block_in_ip(sm, bno) ? APFS_SFQ_IP : APFS_SFQ_MAIN;
-		err = apfs_flush_free_queue(sb, qid, true /* force */);
-		if (err) {
-			apfs_err(sb, "failed to flush fq to make room");
-			return err;
-		}
-		err = apfs_free_queue_try_insert(sb, bno, count);
+	if (err == -ENOSPC) {
+		qid = apfs_block_in_ip(APFS_SM(sb), bno) ? APFS_SFQ_IP : APFS_SFQ_MAIN;
+		apfs_alert(sb, "free queue (%u) seems full - bug!", qid);
+		err = -EFSCORRUPTED;
 	}
 	if (err) {
-		if (err == -EAGAIN) {
-			apfs_alert(sb, "failed to make room in fq - bug!");
-			err = -EFSCORRUPTED;
-		}
 		apfs_err(sb, "fq insert failed (0x%llx-0x%llx)", bno, count);
 		return err;
 	}
