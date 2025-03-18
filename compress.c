@@ -423,10 +423,10 @@ static int apfs_compress_readpage(struct file *filp, struct page *page)
 
 	/* Mostly copied from ext4_read_inline_page() */
 	off = page->index << PAGE_SHIFT;
-	addr = kmap(page);
+	addr = kmap_local_page(page);
 	ret = apfs_compress_file_read_page(filp, addr, off);
 	flush_dcache_page(page);
-	kunmap(page);
+	kunmap_local(addr);
 	if (ret >= 0) {
 		zero_user_segment(page, ret, PAGE_SIZE);
 		SetPageUptodate(page);
