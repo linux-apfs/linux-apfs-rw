@@ -263,6 +263,8 @@ out:
 	return err;
 }
 
+static void apfs_force_readonly(struct apfs_nxsb_info *nxi);
+
 /**
  * apfs_read_ephemeral_objects - Read all ephemeral objects to memory
  * @sb:	superblock structure
@@ -298,6 +300,8 @@ int apfs_read_ephemeral_objects(struct super_block *sb)
 		err = apfs_read_single_cpm_block(sb, cpm_bno);
 		if (err) {
 			apfs_err(sb, "failed to read cpm block %u", i);
+			/* No transaction to abort yet */
+			apfs_force_readonly(nxi);
 			return err;
 		}
 	}
