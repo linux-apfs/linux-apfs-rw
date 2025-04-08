@@ -21,6 +21,7 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 
 // LZVN low-level decoder
 
+#include <linux/compiler.h>
 #include "lzvn_decode_base.h"
 
 #if !defined(HAVE_LABELS_AS_VALUES)
@@ -47,7 +48,7 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 void lzvn_decode(lzvn_decoder_state *state) {
 #if HAVE_LABELS_AS_VALUES
   // Jump table for all instructions
-  static const void *opc_tbl[256] = {
+  static const void *opc_tbl[256] __annotate_jump_table = {
       &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&eos,   &&lrg_d,
       &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&nop,   &&lrg_d,
       &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&nop,   &&lrg_d,
