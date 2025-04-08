@@ -22,13 +22,7 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 #ifndef LZFSE_INTERNAL_H
 #define LZFSE_INTERNAL_H
 
-//  Unlike the tunable parameters defined in lzfse_tunables.h, you probably
-//  should not modify the values defined in this header. Doing so will either
-//  break the compressor, or result in a compressed data format that is
-//  incompatible.
-
 #include "lzfse_fse.h"
-#include "lzfse_tunables.h"
 #include <linux/limits.h>
 #include <linux/stddef.h>
 
@@ -117,92 +111,6 @@ typedef int32_t lzfse_offset;
 #endif
 
 typedef uint64_t uintmax_t;
-
-/*! @abstract History table set. Each line of the history table represents a set
- *  of candidate match locations, each of which begins with four bytes with the
- *  same hash. The table contains not only the positions, but also the first
- *  four bytes at each position. This doubles the memory footprint of the
- *  table, but allows us to quickly eliminate false-positive matches without
- *  doing any pointer chasing and without pulling in any additional cachelines.
- *  This provides a large performance win in practice. */
-typedef struct {
-  int32_t pos[LZFSE_ENCODE_HASH_WIDTH];
-  uint32_t value[LZFSE_ENCODE_HASH_WIDTH];
-} lzfse_history_set;
-
-/*! @abstract An lzfse match is a sequence of bytes in the source buffer that
- *  exactly matches an earlier (but possibly overlapping) sequence of bytes in
- *  the same buffer.
- *  @code
- *  exeMPLARYexaMPLE
- *  |  |     | ||-|--- lzfse_match2.length=3
- *  |  |     | ||----- lzfse_match2.pos
- *  |  |     |-|------ lzfse_match1.length=3
- *  |  |     |-------- lzfse_match1.pos
- *  |  |-------------- lzfse_match2.ref
- *  |----------------- lzfse_match1.ref
- *  @endcode
- */
-typedef struct {
-  //  Offset of the first byte in the match.
-  lzfse_offset pos;
-  //  First byte of the source -- the earlier location in the buffer with the
-  //  same contents.
-  lzfse_offset ref;
-  //  Length of the match.
-  uint32_t length;
-} lzfse_match;
-
-// MARK: - Encoder and Decoder state objects
-
-/*! @abstract Encoder state object. */
-typedef struct {
-  //  Pointer to first byte of the source buffer.
-  const uint8_t *src;
-  //  Length of the source buffer in bytes. Note that this is not a size_t,
-  //  but rather lzfse_offset, which is a signed type. The largest
-  //  representable buffer is 2GB, but arbitrarily large buffers may be
-  //  handled by repeatedly calling the encoder function and "translating"
-  //  the state between calls. When doing this, it is beneficial to use
-  //  blocks smaller than 2GB in order to maintain residency in the last-level
-  //  cache. Consult the implementation of lzfse_encode_buffer for details.
-  lzfse_offset src_end;
-  //  Offset of the first byte of the next literal to encode in the source
-  //  buffer.
-  lzfse_offset src_literal;
-  //  Offset of the byte currently being checked for a match.
-  lzfse_offset src_encode_i;
-  //  The last byte offset to consider for a match.  In some uses it makes
-  //  sense to use a smaller offset than src_end.
-  lzfse_offset src_encode_end;
-  //  Pointer to the next byte to be written in the destination buffer.
-  uint8_t *dst;
-  //  Pointer to the first byte of the destination buffer.
-  uint8_t *dst_begin;
-  //  Pointer to one byte past the end of the destination buffer.
-  uint8_t *dst_end;
-  //  Pending match; will be emitted unless a better match is found.
-  lzfse_match pending;
-  //  The number of matches written so far. Note that there is no problem in
-  //  using a 32-bit field for this quantity, because the state already limits
-  //  us to at most 2GB of data; there cannot possibly be more matches than
-  //  there are bytes in the input.
-  uint32_t n_matches;
-  //  The number of literals written so far.
-  uint32_t n_literals;
-  //  Lengths of found literals.
-  uint32_t l_values[LZFSE_MATCHES_PER_BLOCK];
-  //  Lengths of found matches.
-  uint32_t m_values[LZFSE_MATCHES_PER_BLOCK];
-  //  Distances of found matches.
-  uint32_t d_values[LZFSE_MATCHES_PER_BLOCK];
-  //  Concatenated literal bytes.
-  uint8_t literals[LZFSE_LITERALS_PER_BLOCK];
-  //  History table used to search for matches. Each entry of the table
-  //  corresponds to a group of four byte sequences in the input stream
-  //  that hash to the same value.
-  lzfse_history_set history_table[LZFSE_ENCODE_HASH_VALUES];
-} lzfse_encoder_state;
 
 /*! @abstract Decoder state object for lzfse compressed blocks. */
 typedef struct {
@@ -384,33 +292,8 @@ typedef struct {
   uint32_t n_payload_bytes;
 } lzvn_compressed_block_header;
 
-// MARK: - LZFSE encode/decode interfaces
-
-int lzfse_encode_init(lzfse_encoder_state *s);
-int lzfse_encode_translate(lzfse_encoder_state *s, lzfse_offset delta);
-int lzfse_encode_base(lzfse_encoder_state *s);
-int lzfse_encode_finish(lzfse_encoder_state *s);
 int lzfse_decode(lzfse_decoder_state *s);
-
-// MARK: - LZVN encode/decode interfaces
-
-//  Minimum source buffer size for compression. Smaller buffers will not be
-//  compressed; the lzvn encoder will simply return.
-#define LZVN_ENCODE_MIN_SRC_SIZE ((size_t)8)
-
-//  Maximum source buffer size for compression. Larger buffers will be
-//  compressed partially.
-#define LZVN_ENCODE_MAX_SRC_SIZE ((size_t)0xffffffffU)
-
-//  Minimum destination buffer size for compression. No compression will take
-//  place if smaller.
-#define LZVN_ENCODE_MIN_DST_SIZE ((size_t)8)
-
 size_t lzvn_decode_scratch_size(void);
-size_t lzvn_encode_scratch_size(void);
-size_t lzvn_encode_buffer(void *__restrict dst, size_t dst_size,
-                          const void *__restrict src, size_t src_size,
-                          void *__restrict work);
 size_t lzvn_decode_buffer(void *__restrict dst, size_t dst_size,
                           const void *__restrict src, size_t src_size);
 
@@ -561,14 +444,6 @@ LZFSE_INLINE int lzfse_check_block_header_v1(
 
   return 0; // OK
 }
-
-// MARK: - L, M, D encoding constants for LZFSE
-
-//  Largest encodable L (literal length), M (match length) and D (match
-//  distance) values.
-#define LZFSE_ENCODE_MAX_L_VALUE 315
-#define LZFSE_ENCODE_MAX_M_VALUE 2359
-#define LZFSE_ENCODE_MAX_D_VALUE 262139
 
 /*! @abstract The L, M, D data streams are all encoded as a "base" value, which is
  * FSE-encoded, and an "extra bits" value, which is the difference between

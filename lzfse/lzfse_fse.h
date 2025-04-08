@@ -438,15 +438,6 @@ typedef fse_in_stream32 fse_in_stream;
 
 #endif
 
-/*! @abstract Entry for one symbol in the encoder table (64b). */
-typedef struct {
-  int16_t s0;     // First state requiring a K-bit shift
-  int16_t k;      // States S >= S0 are shifted K bits. States S < S0 are
-                  // shifted K-1 bits
-  int16_t delta0; // Relative increment used to compute next state if S >= S0
-  int16_t delta1; // Relative increment used to compute next state if S < S0
-} fse_encoder_entry;
-
 /*! @abstract  Entry for one state in the decoder table (32b). */
 typedef struct {  // DO NOT REORDER THE FIELDS
   int8_t k;       // Number of bits to read
@@ -461,33 +452,6 @@ typedef struct {      // DO NOT REORDER THE FIELDS
   int16_t delta;      // state base (delta)
   int32_t vbase;      // value base
 } fse_value_decoder_entry;
-
-/*! @abstract Encode SYMBOL using the encoder table, and update \c *pstate,
- *  \c out.
- *  @note The caller must ensure we have enough bits available in the output
- *  stream accumulator. */
-FSE_INLINE void fse_encode(fse_state *__restrict pstate,
-                           const fse_encoder_entry *__restrict encoder_table,
-                           fse_out_stream *__restrict out, uint8_t symbol) {
-  int s = *pstate;
-  fse_encoder_entry e = encoder_table[symbol];
-  int s0 = e.s0;
-  int k = e.k;
-  int delta0 = e.delta0;
-  int delta1 = e.delta1;
-
-  // Number of bits to write
-  int hi = s >= s0;
-  fse_bit_count nbits = hi ? k : (k - 1);
-  fse_state delta = hi ? delta0 : delta1;
-
-  // Write lower NBITS of state
-  fse_bits b = fse_mask_lsb(s, nbits);
-  fse_out_push(out, nbits, b);
-
-  // Update state with remaining bits and delta
-  *pstate = delta + (s >> nbits);
-}
 
 /*! @abstract Decode and return symbol using the decoder table, and update
  *  \c *pstate, \c in.
@@ -542,23 +506,6 @@ FSE_INLINE int fse_check_freq(const uint16_t *freq_table,
   return (sum_of_freq > number_of_states) ? -1 : 0;
 }
 
-/*! @abstract Initialize encoder table \c t[nsymbols].
- *
- * @param nstates
- * sum \c freq[i]; the number of states (a power of 2).
- *
- * @param nsymbols
- * the number of symbols.
- *
- * @param freq[nsymbols]
- * is a normalized histogram of symbol frequencies, with \c freq[i] >= 0.
- * Some symbols may have a 0 frequency. In that case they should not be
- * present in the data.
- */
-void fse_init_encoder_table(int nstates, int nsymbols,
-                            const uint16_t *__restrict freq,
-                            fse_encoder_entry *__restrict t);
-
 /*! @abstract Initialize decoder table \c t[nstates].
  *
  * @param nstates
@@ -599,8 +546,3 @@ void fse_init_value_decoder_table(int nstates, int nsymbols,
                                   const uint8_t *__restrict symbol_vbits,
                                   const int32_t *__restrict symbol_vbase,
                                   fse_value_decoder_entry *__restrict t);
-
-/*! @abstract Normalize a table \c t[nsymbols] of occurrences to
- *  \c freq[nsymbols]. */
-void fse_normalize_freq(int nstates, int nsymbols, const uint32_t *__restrict t,
-                        uint16_t *__restrict freq);
