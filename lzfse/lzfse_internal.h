@@ -26,8 +26,6 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 #include <linux/limits.h>
 #include <linux/stddef.h>
 
-#define LZFSE_INLINE static inline __attribute__((__always_inline__))
-
 //  Throughout LZFSE we refer to "L", "M" and "D"; these will always appear as
 //  a triplet, and represent a "usual" LZ-style literal and match pair.  "L"
 //  is the number of literal bytes, "M" is the number of match bytes, and "D"
@@ -262,34 +260,34 @@ typedef int32_t lzvn_offset;
 // MARK: - LZFSE utility functions
 
 /*! @abstract Load bytes from memory location SRC. */
-LZFSE_INLINE uint16_t load2(const void *ptr) {
+static __always_inline uint16_t load2(const void *ptr) {
   uint16_t data;
   memcpy(&data, ptr, sizeof data);
   return data;
 }
 
-LZFSE_INLINE uint32_t load4(const void *ptr) {
+static __always_inline uint32_t load4(const void *ptr) {
   uint32_t data;
   memcpy(&data, ptr, sizeof data);
   return data;
 }
 
-LZFSE_INLINE uint64_t load8(const void *ptr) {
+static __always_inline uint64_t load8(const void *ptr) {
   uint64_t data;
   memcpy(&data, ptr, sizeof data);
   return data;
 }
 
 /*! @abstract Store bytes to memory location DST. */
-LZFSE_INLINE void store2(void *ptr, uint16_t data) {
+static __always_inline void store2(void *ptr, uint16_t data) {
   memcpy(ptr, &data, sizeof data);
 }
 
-LZFSE_INLINE void store4(void *ptr, uint32_t data) {
+static __always_inline void store4(void *ptr, uint32_t data) {
   memcpy(ptr, &data, sizeof data);
 }
 
-LZFSE_INLINE void store8(void *ptr, uint64_t data) {
+static __always_inline void store8(void *ptr, uint64_t data) {
   memcpy(ptr, &data, sizeof data);
 }
 
@@ -298,8 +296,8 @@ LZFSE_INLINE void store8(void *ptr, uint64_t data) {
  * copies to behave like naive memcpy( ) implementations do, splatting the
  * leading sequence if the buffers overlap. This copy does not do that, so
  * should not be used with overlapping buffers. */
-LZFSE_INLINE void copy8(void *dst, const void *src) { store8(dst, load8(src)); }
-LZFSE_INLINE void copy16(void *dst, const void *src) {
+static __always_inline void copy8(void *dst, const void *src) { store8(dst, load8(src)); }
+static __always_inline void copy16(void *dst, const void *src) {
   uint64_t m0 = load8(src);
   uint64_t m1 = load8((const unsigned char *)src + 8);
   store8(dst, m0);
@@ -311,7 +309,7 @@ LZFSE_INLINE void copy16(void *dst, const void *src) {
 
 /*! @abstract Extracts \p width bits from \p container, starting with \p lsb; if
  * we view \p container as a bit array, we extract \c container[lsb:lsb+width]. */
-LZFSE_INLINE uintmax_t extract(uintmax_t container, unsigned lsb,
+static __always_inline uintmax_t extract(uintmax_t container, unsigned lsb,
                                unsigned width) {
   static const size_t container_width = sizeof container * 8;
   if (width == container_width)
@@ -327,7 +325,7 @@ LZFSE_INLINE uintmax_t extract(uintmax_t container, unsigned lsb,
  * container[lsb+width:] is unchanged
  * @endcode
  */
-LZFSE_INLINE uintmax_t insert(uintmax_t container, uintmax_t data, unsigned lsb,
+static __always_inline uintmax_t insert(uintmax_t container, uintmax_t data, unsigned lsb,
                               unsigned width) {
   static const size_t container_width = sizeof container * 8;
   uintmax_t mask;
@@ -342,7 +340,7 @@ LZFSE_INLINE uintmax_t insert(uintmax_t container, uintmax_t data, unsigned lsb,
  * frequency tables sum to value less than total number of states.
  * @return 0 if all tests passed.
  * @return negative error code with 1 bit set for each failed test. */
-LZFSE_INLINE int lzfse_check_block_header_v1(
+static __always_inline int lzfse_check_block_header_v1(
     const lzfse_compressed_block_header_v1 *header) {
   int tests_results = 0;
   uint16_t literal_state[4];
