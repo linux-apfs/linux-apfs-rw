@@ -25,14 +25,6 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 #include <linux/stddef.h>
 #include <linux/types.h>
 
-#if !defined(LZFSE_API)
-#  if __GNUC__ >= 4
-#    define LZFSE_API __attribute__((visibility("default")))
-#  else
-#    define LZFSE_API
-#  endif
-#endif
-
 /*! @abstract Get the required scratch buffer size to decompress using LZFSE. */
 size_t lzfse_decode_scratch_size(void);
 
