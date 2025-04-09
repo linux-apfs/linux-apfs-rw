@@ -29,21 +29,6 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 extern "C" {
 #endif
 
-#if defined(_MSC_VER) && !defined(__clang__)
-#  define __attribute__(X)
-#  pragma warning(disable : 4068)
-#endif
-
-#if defined(LZFSE_DLL)
-#  if defined(_WIN32) || defined(__CYGWIN__)
-#    if defined(LZFSE_DLL_EXPORTS)
-#      define LZFSE_API __declspec(dllexport)
-#    else
-#      define LZFSE_API __declspec(dllimport)
-#    endif
-#  endif
-#endif
-
 #if !defined(LZFSE_API)
 #  if __GNUC__ >= 4
 #    define LZFSE_API __attribute__((visibility("default")))

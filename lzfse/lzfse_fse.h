@@ -37,13 +37,7 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 #define FSE_IOSTREAM_64 0
 #endif
 
-#if defined(_MSC_VER) && !defined(__clang__)
-#  define FSE_INLINE __forceinline
-#  define inline __inline
-#  pragma warning(disable : 4068) // warning C4068: unknown pragma
-#else
-#  define FSE_INLINE static inline __attribute__((__always_inline__))
-#endif
+#define FSE_INLINE static inline __attribute__((__always_inline__))
 
 // MARK: - Bit utils
 
@@ -104,11 +98,9 @@ static inline uint32_t fse_mask_lsb32(uint32_t x, fse_bit_count nbits) {
  *  0 <= start <= start+nbits <= 64 */
 FSE_INLINE uint64_t fse_extract_bits64(uint64_t x, fse_bit_count start,
                                        fse_bit_count nbits) {
-#if defined(__GNUC__)
   // If START and NBITS are constants, map to bit-field extraction instructions
   if (__builtin_constant_p(start) && __builtin_constant_p(nbits))
     return (x >> start) & ((1LLU << nbits) - 1LLU);
-#endif
 
   // Otherwise, shift and mask
   return fse_mask_lsb64(x >> start, nbits);
@@ -118,11 +110,9 @@ FSE_INLINE uint64_t fse_extract_bits64(uint64_t x, fse_bit_count start,
  *  0 <= start <= start+nbits <= 32 */
 FSE_INLINE uint32_t fse_extract_bits32(uint32_t x, fse_bit_count start,
                                        fse_bit_count nbits) {
-#if defined(__GNUC__)
   // If START and NBITS are constants, map to bit-field extraction instructions
   if (__builtin_constant_p(start) && __builtin_constant_p(nbits))
     return (x >> start) & ((1U << nbits) - 1U);
-#endif
 
   // Otherwise, shift and mask
   return fse_mask_lsb32(x >> start, nbits);

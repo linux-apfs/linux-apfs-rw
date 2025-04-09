@@ -26,52 +26,7 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 #include <linux/limits.h>
 #include <linux/stddef.h>
 
-#if defined(_MSC_VER) && !defined(__clang__)
-#  define LZFSE_INLINE __forceinline
-#  define __builtin_expect(X, Y) (X)
-#  define __attribute__(X)
-#  pragma warning(disable : 4068) // warning C4068: unknown pragma
-#else
-#  define LZFSE_INLINE static inline __attribute__((__always_inline__))
-#endif
-
-// Implement GCC bit scan builtins for MSVC
-#if defined(_MSC_VER) && !defined(__clang__)
-#include <intrin.h>
-
-LZFSE_INLINE int __builtin_clz(unsigned int val) {
-    unsigned long r = 0;
-    if (_BitScanReverse(&r, val)) {
-        return 31 - r;
-    }
-    return 32;
-}
-
-LZFSE_INLINE int __builtin_ctzl(unsigned long val) {
-  unsigned long r = 0;
-  if (_BitScanForward(&r, val)) {
-    return r;
-  }
-  return 32;
-}
-
-LZFSE_INLINE int __builtin_ctzll(uint64_t val) {
-  unsigned long r = 0;
-#if defined(_M_AMD64) || defined(_M_ARM)
-  if (_BitScanForward64(&r, val)) {
-    return r;
-  }
-#else
-  if (_BitScanForward(&r, (uint32_t)val)) {
-    return r;
-  }
-  if (_BitScanForward(&r, (uint32_t)(val >> 32))) {
-    return 32 + r;
-  }
-#endif
-  return 64;
-}
-#endif
+#define LZFSE_INLINE static inline __attribute__((__always_inline__))
 
 //  Throughout LZFSE we refer to "L", "M" and "D"; these will always appear as
 //  a triplet, and represent a "usual" LZ-style literal and match pair.  "L"
