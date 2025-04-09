@@ -25,10 +25,6 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 #include <linux/stddef.h>
 #include <linux/types.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #if !defined(LZFSE_API)
 #  if __GNUC__ >= 4
 #    define LZFSE_API __attribute__((visibility("default")))
@@ -75,9 +71,5 @@ size_t lzfse_decode_buffer(uint8_t *__restrict dst_buffer,
                            const uint8_t *__restrict src_buffer,
                            size_t src_size,
                            void *__restrict scratch_buffer);
-
-#ifdef __cplusplus
-} /* extern "C" */
-#endif
 
 #endif /* LZFSE_H */
