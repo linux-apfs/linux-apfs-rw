@@ -30,34 +30,33 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 
 /*! @abstract Base decoder state. */
 typedef struct {
+	// Decoder I/O
 
-  // Decoder I/O
+	// Next byte to read in source buffer
+	const unsigned char *src;
+	// Next byte after source buffer
+	const unsigned char *src_end;
 
-  // Next byte to read in source buffer
-  const unsigned char *src;
-  // Next byte after source buffer
-  const unsigned char *src_end;
+	// Next byte to write in destination buffer (by decoder)
+	unsigned char *dst;
+	// Valid range for destination buffer is [dst_begin, dst_end - 1]
+	unsigned char *dst_begin;
+	unsigned char *dst_end;
+	// Next byte to read in destination buffer (modified by caller)
+	unsigned char *dst_current;
 
-  // Next byte to write in destination buffer (by decoder)
-  unsigned char *dst;
-  // Valid range for destination buffer is [dst_begin, dst_end - 1]
-  unsigned char *dst_begin;
-  unsigned char *dst_end;
-  // Next byte to read in destination buffer (modified by caller)
-  unsigned char *dst_current;
+	// Decoder state
 
-  // Decoder state
+	// Partially expanded match, or 0,0,0.
+	// In that case, src points to the next literal to copy, or the next op-code
+	// if L==0.
+	size_t L, M, D;
 
-  // Partially expanded match, or 0,0,0.
-  // In that case, src points to the next literal to copy, or the next op-code
-  // if L==0.
-  size_t L, M, D;
+	// Distance for last emitted match, or 0
+	lzvn_offset d_prev;
 
-  // Distance for last emitted match, or 0
-  lzvn_offset d_prev;
-
-  // Did we decode end-of-stream?
-  int end_of_stream;
+	// Did we decode end-of-stream?
+	int end_of_stream;
 
 } lzvn_decoder_state;
 

@@ -58,10 +58,8 @@ size_t lzfse_decode_scratch_size(void);
  *  buffer to hold the entire expanded output, only the first dst_size bytes
  *  will be written to the buffer and dst_size is returned. Note that this
  *  behavior differs from that of lzfse_encode_buffer.                        */
-size_t lzfse_decode_buffer(uint8_t *__restrict dst_buffer,
-                           size_t dst_size,
-                           const uint8_t *__restrict src_buffer,
-                           size_t src_size,
-                           void *__restrict scratch_buffer);
+size_t lzfse_decode_buffer(uint8_t *__restrict dst_buffer, size_t dst_size,
+			   const uint8_t *__restrict src_buffer, size_t src_size,
+			   void *__restrict scratch_buffer);
 
 #endif /* LZFSE_H */
