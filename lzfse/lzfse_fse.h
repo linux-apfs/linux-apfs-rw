@@ -1,43 +1,47 @@
 /*
-Copyright (c) 2015-2016, Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2016, Apple Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ *
+ * 1.  Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2.  Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *     in the documentation and/or other materials provided with the distribution.
+ *
+ * 3.  Neither the name of the copyright holder(s) nor the names of any contributors may be used to endorse or promote products derived
+ *     from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+ * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
-1.  Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-
-2.  Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
-    in the documentation and/or other materials provided with the distribution.
-
-3.  Neither the name of the copyright holder(s) nor the names of any contributors may be used to endorse or promote products derived
-    from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
-COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
-
-// Finite state entropy coding (FSE)
-// This is an implementation of the tANS algorithm described by Jarek Duda,
-// we use the more descriptive name "Finite State Entropy".
+/*
+ * Finite state entropy coding (FSE)
+ * This is an implementation of the tANS algorithm described by Jarek Duda,
+ * we use the more descriptive name "Finite State Entropy".
+ */
 
 #pragma once
 
 #include <linux/types.h>
 #include <linux/string.h>
 
-//  Select between 32/64-bit I/O streams for FSE. Note that the FSE stream
-//  size need not match the word size of the machine, but in practice you
-//  want to use 64b streams on 64b systems for better performance.
+/*
+ * Select between 32/64-bit I/O streams for FSE. Note that the FSE stream
+ * size need not match the word size of the machine, but in practice you
+ * want to use 64b streams on 64b systems for better performance.
+ */
 #if defined(_M_AMD64) || defined(__x86_64__) || defined(__arm64__)
 #define FSE_IOSTREAM_64 1
 #else
 #define FSE_IOSTREAM_64 0
 #endif
 
-// MARK: - Bit utils
+/* MARK: - Bit utils */
 
 /*! @abstract Signed type used to represent bit count. */
 typedef int32_t fse_bit_count;
@@ -45,7 +49,7 @@ typedef int32_t fse_bit_count;
 /*! @abstract Unsigned type used to represent FSE state. */
 typedef uint16_t fse_state;
 
-// Mask the NBITS lsb of X. 0 <= NBITS < 64
+/* Mask the NBITS lsb of X. 0 <= NBITS < 64 */
 static inline uint64_t fse_mask_lsb64(uint64_t x, fse_bit_count nbits)
 {
 	static const uint64_t mtable[65] = {
@@ -75,7 +79,7 @@ static inline uint64_t fse_mask_lsb64(uint64_t x, fse_bit_count nbits)
 	return x & mtable[nbits];
 }
 
-// Mask the NBITS lsb of X. 0 <= NBITS < 32
+/* Mask the NBITS lsb of X. 0 <= NBITS < 32 */
 static inline uint32_t fse_mask_lsb32(uint32_t x, fse_bit_count nbits)
 {
 	static const uint32_t mtable[33] = {
@@ -93,59 +97,63 @@ static inline uint32_t fse_mask_lsb32(uint32_t x, fse_bit_count nbits)
 }
 
 /*! @abstract Select \c nbits at index \c start from \c x.
- *  0 <= start <= start+nbits <= 64 */
+ *  0 <= start <= start+nbits <= 64
+ */
 static __always_inline uint64_t fse_extract_bits64(uint64_t x, fse_bit_count start,
 						   fse_bit_count nbits)
 {
-	// If START and NBITS are constants, map to bit-field extraction instructions
+	/* If START and NBITS are constants, map to bit-field extraction instructions */
 	if (__builtin_constant_p(start) && __builtin_constant_p(nbits))
 		return (x >> start) & ((1LLU << nbits) - 1LLU);
 
-	// Otherwise, shift and mask
+	/* Otherwise, shift and mask */
 	return fse_mask_lsb64(x >> start, nbits);
 }
 
 /*! @abstract Select \c nbits at index \c start from \c x.
- *  0 <= start <= start+nbits <= 32 */
+ *  0 <= start <= start+nbits <= 32
+ */
 static __always_inline uint32_t fse_extract_bits32(uint32_t x, fse_bit_count start,
 						   fse_bit_count nbits)
 {
-	// If START and NBITS are constants, map to bit-field extraction instructions
+	/* If START and NBITS are constants, map to bit-field extraction instructions */
 	if (__builtin_constant_p(start) && __builtin_constant_p(nbits))
 		return (x >> start) & ((1U << nbits) - 1U);
 
-	// Otherwise, shift and mask
+	/* Otherwise, shift and mask */
 	return fse_mask_lsb32(x >> start, nbits);
 }
 
-// MARK: - Bit stream
+/* MARK: - Bit stream */
 
-// I/O streams
-// The streams can be shared between several FSE encoders/decoders, which is why
-// they are not in the state struct
+/*
+ * I/O streams
+ * The streams can be shared between several FSE encoders/decoders, which is why
+ * they are not in the state struct
+ */
 
 /*! @abstract Output stream, 64-bit accum. */
 typedef struct {
-	uint64_t accum; // Output bits
-	fse_bit_count accum_nbits; // Number of valid bits in ACCUM, other bits are 0
+	uint64_t accum; /* Output bits */
+	fse_bit_count accum_nbits; /* Number of valid bits in ACCUM, other bits are 0 */
 } fse_out_stream64;
 
 /*! @abstract Output stream, 32-bit accum. */
 typedef struct {
-	uint32_t accum; // Output bits
-	fse_bit_count accum_nbits; // Number of valid bits in ACCUM, other bits are 0
+	uint32_t accum; /* Output bits */
+	fse_bit_count accum_nbits; /* Number of valid bits in ACCUM, other bits are 0 */
 } fse_out_stream32;
 
 /*! @abstract Object representing an input stream. */
 typedef struct {
-	uint64_t accum; // Input bits
-	fse_bit_count accum_nbits; // Number of valid bits in ACCUM, other bits are 0
+	uint64_t accum; /* Input bits */
+	fse_bit_count accum_nbits; /* Number of valid bits in ACCUM, other bits are 0 */
 } fse_in_stream64;
 
 /*! @abstract Object representing an input stream. */
 typedef struct {
-	uint32_t accum; // Input bits
-	fse_bit_count accum_nbits; // Number of valid bits in ACCUM, other bits are 0
+	uint32_t accum; /* Input bits */
+	fse_bit_count accum_nbits; /* Number of valid bits in ACCUM, other bits are 0 */
 } fse_in_stream32;
 
 /*! @abstract Initialize an output stream object. */
@@ -166,17 +174,18 @@ static __always_inline void fse_out_init32(fse_out_stream32 *s)
  * accum_nbits is in [0, 7].
  * We assume we can write 8 bytes to the output buffer \c (*pbuf[0..7]) in all
  * cases.
- * @note *pbuf is incremented by the number of written bytes. */
+ * @note *pbuf is incremented by the number of written bytes.
+ */
 static __always_inline void fse_out_flush64(fse_out_stream64 *s, uint8_t **pbuf)
 {
-	fse_bit_count nbits = s->accum_nbits & -8; // number of bits written, multiple of 8
+	fse_bit_count nbits = s->accum_nbits & -8; /* number of bits written, multiple of 8 */
 
-	// Write 8 bytes of current accumulator
+	/* Write 8 bytes of current accumulator */
 	memcpy(*pbuf, &(s->accum), 8);
-	*pbuf += (nbits >> 3); // bytes
+	*pbuf += (nbits >> 3); /* bytes */
 
-	// Update state
-	s->accum >>= nbits; // remove nbits
+	/* Update state */
+	s->accum >>= nbits; /* remove nbits */
 	s->accum_nbits -= nbits;
 }
 
@@ -184,17 +193,18 @@ static __always_inline void fse_out_flush64(fse_out_stream64 *s, uint8_t **pbuf)
  * accum_nbits is in [0, 7].
  * We assume we can write 4 bytes to the output buffer \c (*pbuf[0..3]) in all
  * cases.
- * @note *pbuf is incremented by the number of written bytes. */
+ * @note *pbuf is incremented by the number of written bytes.
+ */
 static __always_inline void fse_out_flush32(fse_out_stream32 *s, uint8_t **pbuf)
 {
-	fse_bit_count nbits = s->accum_nbits & -8; // number of bits written, multiple of 8
+	fse_bit_count nbits = s->accum_nbits & -8; /* number of bits written, multiple of 8 */
 
-	// Write 4 bytes of current accumulator
+	/* Write 4 bytes of current accumulator */
 	memcpy(*pbuf, &(s->accum), 4);
-	*pbuf += (nbits >> 3); // bytes
+	*pbuf += (nbits >> 3); /* bytes */
 
-	// Update state
-	s->accum >>= nbits; // remove nbits
+	/* Update state */
+	s->accum >>= nbits; /* remove nbits */
 	s->accum_nbits -= nbits;
 }
 
@@ -202,17 +212,18 @@ static __always_inline void fse_out_flush32(fse_out_stream32 *s, uint8_t **pbuf)
  * ensuring accum_nbits is in [-7, 0]. Bits are padded with 0 if needed.
  * We assume we can write 8 bytes to the output buffer \c (*pbuf[0..7]) in all
  * cases.
- * @note *pbuf is incremented by the number of written bytes. */
+ * @note *pbuf is incremented by the number of written bytes.
+ */
 static __always_inline void fse_out_finish64(fse_out_stream64 *s, uint8_t **pbuf)
 {
-	fse_bit_count nbits = (s->accum_nbits + 7) & -8; // number of bits written, multiple of 8
+	fse_bit_count nbits = (s->accum_nbits + 7) & -8; /* number of bits written, multiple of 8 */
 
-	// Write 8 bytes of current accumulator
+	/* Write 8 bytes of current accumulator */
 	memcpy(*pbuf, &(s->accum), 8);
-	*pbuf += (nbits >> 3); // bytes
+	*pbuf += (nbits >> 3); /* bytes */
 
-	// Update state
-	s->accum = 0; // remove nbits
+	/* Update state */
+	s->accum = 0; /* remove nbits */
 	s->accum_nbits -= nbits;
 }
 
@@ -220,24 +231,26 @@ static __always_inline void fse_out_finish64(fse_out_stream64 *s, uint8_t **pbuf
  * ensuring accum_nbits is in [-7, 0]. Bits are padded with 0 if needed.
  * We assume we can write 4 bytes to the output buffer \c (*pbuf[0..3]) in all
  * cases.
- * @note *pbuf is incremented by the number of written bytes. */
+ * @note *pbuf is incremented by the number of written bytes.
+ */
 static __always_inline void fse_out_finish32(fse_out_stream32 *s, uint8_t **pbuf)
 {
-	fse_bit_count nbits = (s->accum_nbits + 7) & -8; // number of bits written, multiple of 8
+	fse_bit_count nbits = (s->accum_nbits + 7) & -8; /* number of bits written, multiple of 8 */
 
-	// Write 8 bytes of current accumulator
+	/* Write 8 bytes of current accumulator */
 	memcpy(*pbuf, &(s->accum), 4);
-	*pbuf += (nbits >> 3); // bytes
+	*pbuf += (nbits >> 3); /* bytes */
 
-	// Update state
-	s->accum = 0; // remove nbits
+	/* Update state */
+	s->accum = 0; /* remove nbits */
 	s->accum_nbits -= nbits;
 }
 
 /*! @abstract Accumulate \c n bits \c b to output stream \c s. We \b must have:
  * 0 <= b < 2^n, and N + s->accum_nbits <= 64.
  * @note The caller must ensure out_flush is called \b before the accumulator
- * overflows to more than 64 bits. */
+ * overflows to more than 64 bits.
+ */
 static __always_inline void fse_out_push64(fse_out_stream64 *s, fse_bit_count n, uint64_t b)
 {
 	s->accum |= b << s->accum_nbits;
@@ -247,7 +260,8 @@ static __always_inline void fse_out_push64(fse_out_stream64 *s, fse_bit_count n,
 /*! @abstract Accumulate \c n bits \c b to output stream \c s. We \b must have:
  * 0 <= n < 2^n, and n + s->accum_nbits <= 32.
  * @note The caller must ensure out_flush is called \b before the accumulator
- * overflows to more than 32 bits. */
+ * overflows to more than 32 bits.
+ */
 static __always_inline void fse_out_push32(fse_out_stream32 *s, fse_bit_count n, uint32_t b)
 {
 	s->accum |= b << s->accum_nbits;
@@ -261,19 +275,20 @@ static __always_inline void fse_out_push32(fse_out_stream32 *s, fse_bit_count n,
  *  us to avoid a special case in the fse_in_pull function (eliminating an
  *  unpredictable branch), while not requiring any additional fse_flush
  *  operations. This is why we have the special case for n == 0 (in which case
- *  we want to load only 7 bytes instead of 8). */
+ *  we want to load only 7 bytes instead of 8).
+ */
 static __always_inline int fse_in_checked_init64(fse_in_stream64 *s, fse_bit_count n,
 						 const uint8_t **pbuf, const uint8_t *buf_start)
 {
 	if (n) {
 		if (*pbuf < buf_start + 8)
-			return -1; // out of range
+			return -1; /* out of range */
 		*pbuf -= 8;
 		memcpy(&(s->accum), *pbuf, 8);
 		s->accum_nbits = n + 64;
 	} else {
 		if (*pbuf < buf_start + 7)
-			return -1; // out of range
+			return -1; /* out of range */
 		*pbuf -= 7;
 		memcpy(&(s->accum), *pbuf, 7);
 		s->accum &= 0xffffffffffffff;
@@ -281,27 +296,27 @@ static __always_inline int fse_in_checked_init64(fse_in_stream64 *s, fse_bit_cou
 	}
 
 	if ((s->accum_nbits < 56 || s->accum_nbits >= 64) || ((s->accum >> s->accum_nbits) != 0)) {
-		return -1; // the incoming input is wrong (encoder should have zeroed the
-			// upper bits)
+		return -1; /* the incoming input is wrong (encoder should have zeroed the upper bits) */
 	}
 
-	return 0; // OK
+	return 0; /* OK */
 }
 
 /*! @abstract Identical to previous function, but for 32-bit operation
- * (resulting bit count is between 24 and 31 bits). */
+ * (resulting bit count is between 24 and 31 bits).
+ */
 static __always_inline int fse_in_checked_init32(fse_in_stream32 *s, fse_bit_count n,
 						 const uint8_t **pbuf, const uint8_t *buf_start)
 {
 	if (n) {
 		if (*pbuf < buf_start + 4)
-			return -1; // out of range
+			return -1; /* out of range */
 		*pbuf -= 4;
 		memcpy(&(s->accum), *pbuf, 4);
 		s->accum_nbits = n + 32;
 	} else {
 		if (*pbuf < buf_start + 3)
-			return -1; // out of range
+			return -1; /* out of range */
 		*pbuf -= 3;
 		memcpy(&(s->accum), *pbuf, 3);
 		s->accum &= 0xffffff;
@@ -309,32 +324,32 @@ static __always_inline int fse_in_checked_init32(fse_in_stream32 *s, fse_bit_cou
 	}
 
 	if ((s->accum_nbits < 24 || s->accum_nbits >= 32) || ((s->accum >> s->accum_nbits) != 0)) {
-		return -1; // the incoming input is wrong (encoder should have zeroed the
-			// upper bits)
+		return -1; /* the incoming input is wrong (encoder should have zeroed the upper bits) */
 	}
 
-	return 0; // OK
+	return 0; /* OK */
 }
 
 /*! @abstract  Read in new bytes from buffer to ensure that we have a full
  * complement of bits in the stream object (again, between 56 and 63 bits).
  * checking the new value of \c *pbuf remains >= \c buf_start.
  * @return 0 if OK.
- * @return -1 on failure. */
+ * @return -1 on failure.
+ */
 static __always_inline int fse_in_checked_flush64(fse_in_stream64 *s, const uint8_t **pbuf,
 						  const uint8_t *buf_start)
 {
-	//  Get number of bits to add to bring us into the desired range.
+	/* Get number of bits to add to bring us into the desired range. */
 	fse_bit_count nbits = (63 - s->accum_nbits) & -8;
-	//  Convert bits to bytes and decrement buffer address, then load new data.
+	/* Convert bits to bytes and decrement buffer address, then load new data. */
 	const uint8_t *buf = (*pbuf) - (nbits >> 3);
 	uint64_t incoming;
 	if (buf < buf_start) {
-		return -1; // out of range
+		return -1; /* out of range */
 	}
 	*pbuf = buf;
 	memcpy(&incoming, buf, 8);
-	// Update the state object and verify its validity (in DEBUG).
+	/* Update the state object and verify its validity (in DEBUG). */
 	s->accum = (s->accum << nbits) | fse_mask_lsb64(incoming, nbits);
 	s->accum_nbits += nbits;
 	DEBUG_CHECK_INPUT_STREAM_PARAMETERS
@@ -342,31 +357,32 @@ static __always_inline int fse_in_checked_flush64(fse_in_stream64 *s, const uint
 }
 
 /*! @abstract Identical to previous function (but again, we're only filling
- * a 32-bit field with between 24 and 31 bits). */
+ * a 32-bit field with between 24 and 31 bits).
+ */
 static __always_inline int fse_in_checked_flush32(fse_in_stream32 *s, const uint8_t **pbuf,
 						  const uint8_t *buf_start)
 {
-	//  Get number of bits to add to bring us into the desired range.
+	/* Get number of bits to add to bring us into the desired range. */
 	fse_bit_count nbits = (31 - s->accum_nbits) & -8;
 
 	if (nbits > 0) {
-		//  Convert bits to bytes and decrement buffer address, then load new data.
+		/* Convert bits to bytes and decrement buffer address, then load new data. */
 		const uint8_t *buf = (*pbuf) - (nbits >> 3);
 		uint32_t incoming;
 		if (buf < buf_start) {
-			return -1; // out of range
+			return -1; /* out of range */
 		}
 
 		*pbuf = buf;
 
 		incoming = *((uint32_t *)buf);
 
-		// Update the state object and verify its validity (in DEBUG).
+		/* Update the state object and verify its validity (in DEBUG). */
 		s->accum = (s->accum << nbits) | fse_mask_lsb32(incoming, nbits);
 		s->accum_nbits += nbits;
 	}
 	DEBUG_CHECK_INPUT_STREAM_PARAMETERS
-	return 0; // OK
+	return 0; /* OK */
 }
 
 /*! @abstract Pull n bits out of the fse stream object. */
@@ -389,9 +405,9 @@ static __always_inline uint32_t fse_in_pull32(fse_in_stream32 *s, fse_bit_count 
 	return result;
 }
 
-// MARK: - Encode/Decode
+/* MARK: - Encode/Decode */
 
-// Map to 32/64-bit implementations and types for I/O
+/* Map to 32/64-bit implementations and types for I/O */
 #if FSE_IOSTREAM_64
 
 typedef uint64_t fse_bits;
@@ -433,42 +449,44 @@ typedef fse_in_stream32 fse_in_stream;
 #endif
 
 /*! @abstract  Entry for one state in the decoder table (32b). */
-typedef struct { // DO NOT REORDER THE FIELDS
-	int8_t k; // Number of bits to read
-	uint8_t symbol; // Emitted symbol
-	int16_t delta; // Signed increment used to compute next state (+bias)
+typedef struct { /* DO NOT REORDER THE FIELDS */
+	int8_t k; /* Number of bits to read */
+	uint8_t symbol; /* Emitted symbol */
+	int16_t delta; /* Signed increment used to compute next state (+bias) */
 } fse_decoder_entry;
 
 /*! @abstract  Entry for one state in the value decoder table (64b). */
-typedef struct { // DO NOT REORDER THE FIELDS
-	uint8_t total_bits; // state bits + extra value bits = shift for next decode
-	uint8_t value_bits; // extra value bits
-	int16_t delta; // state base (delta)
-	int32_t vbase; // value base
+typedef struct { /* DO NOT REORDER THE FIELDS */
+	uint8_t total_bits; /* state bits + extra value bits = shift for next decode */
+	uint8_t value_bits; /* extra value bits */
+	int16_t delta; /* state base (delta) */
+	int32_t vbase; /* value base */
 } fse_value_decoder_entry;
 
 /*! @abstract Decode and return symbol using the decoder table, and update
  *  \c *pstate, \c in.
  *  @note The caller must ensure we have enough bits available in the input
- *  stream accumulator. */
+ *  stream accumulator.
+ */
 static __always_inline uint8_t fse_decode(fse_state *__restrict pstate,
 					  const int32_t *__restrict decoder_table,
 					  fse_in_stream *__restrict in)
 {
 	int32_t e = decoder_table[*pstate];
 
-	// Update state from K bits of input + DELTA
+	/* Update state from K bits of input + DELTA */
 	*pstate = (fse_state)(e >> 16) + (fse_state)fse_in_pull(in, e & 0xff);
 
-	// Return the symbol for this state
-	return fse_extract_bits(e, 8, 8); // symbol
+	/* Return the symbol for this state */
+	return fse_extract_bits(e, 8, 8); /* symbol */
 }
 
 /*! @abstract Decode and return value using the decoder table, and update \c
  *  *pstate, \c in.
  * \c value_decoder_table[nstates]
  * @note The caller must ensure we have enough bits available in the input
- * stream accumulator. */
+ * stream accumulator.
+ */
 static __always_inline int32_t fse_value_decode(fse_state *__restrict pstate,
 						const fse_value_decoder_entry *value_decoder_table,
 						fse_in_stream *__restrict in)
@@ -479,15 +497,17 @@ static __always_inline int32_t fse_value_decode(fse_state *__restrict pstate,
 	return (int32_t)(entry.vbase + fse_mask_lsb(state_and_value_bits, entry.value_bits));
 }
 
-// MARK: - Tables
+/* MARK: - Tables */
 
-// IMPORTANT: To properly decode an FSE encoded stream, both encoder/decoder
-// tables shall be initialized with the same parameters, including the
-// FREQ[NSYMBOL] array.
-//
+/*
+ * IMPORTANT: To properly decode an FSE encoded stream, both encoder/decoder
+ * tables shall be initialized with the same parameters, including the
+ * FREQ[NSYMBOL] array.
+ */
 
 /*! @abstract Sanity check on frequency table, verify sum of \c freq
- *  is <= \c number_of_states. */
+ *  is <= \c number_of_states.
+ */
 static __always_inline int fse_check_freq(const uint16_t *freq_table, const size_t table_size,
 					  const size_t number_of_states)
 {
