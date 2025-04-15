@@ -297,7 +297,7 @@ static __always_inline uint16_t load2(const void *ptr)
 {
 	uint16_t data;
 
-	memcpy(&data, ptr, sizeof data);
+	memcpy(&data, ptr, sizeof(data));
 	return data;
 }
 
@@ -305,7 +305,7 @@ static __always_inline uint32_t load4(const void *ptr)
 {
 	uint32_t data;
 
-	memcpy(&data, ptr, sizeof data);
+	memcpy(&data, ptr, sizeof(data));
 	return data;
 }
 
@@ -313,24 +313,24 @@ static __always_inline uint64_t load8(const void *ptr)
 {
 	uint64_t data;
 
-	memcpy(&data, ptr, sizeof data);
+	memcpy(&data, ptr, sizeof(data));
 	return data;
 }
 
 /*! @abstract Store bytes to memory location DST. */
 static __always_inline void store2(void *ptr, uint16_t data)
 {
-	memcpy(ptr, &data, sizeof data);
+	memcpy(ptr, &data, sizeof(data));
 }
 
 static __always_inline void store4(void *ptr, uint32_t data)
 {
-	memcpy(ptr, &data, sizeof data);
+	memcpy(ptr, &data, sizeof(data));
 }
 
 static __always_inline void store8(void *ptr, uint64_t data)
 {
-	memcpy(ptr, &data, sizeof data);
+	memcpy(ptr, &data, sizeof(data));
 }
 
 /*! @abstract Load+store bytes from locations SRC to DST. Not intended for use
@@ -362,7 +362,7 @@ static __always_inline void copy16(void *dst, const void *src)
  */
 static __always_inline uintmax_t extract(uintmax_t container, unsigned int lsb, unsigned int width)
 {
-	static const size_t container_width = sizeof container * 8;
+	static const size_t container_width = sizeof(container) * 8;
 
 	if (width == container_width)
 		return container;
@@ -380,7 +380,7 @@ static __always_inline uintmax_t extract(uintmax_t container, unsigned int lsb, 
 static __always_inline uintmax_t insert(uintmax_t container, uintmax_t data, unsigned int lsb,
 					unsigned int width)
 {
-	static const size_t container_width = sizeof container * 8;
+	static const size_t container_width = sizeof(container) * 8;
 	uintmax_t mask;
 
 	if (width == container_width)
