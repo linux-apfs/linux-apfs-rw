@@ -296,7 +296,11 @@ static __always_inline int fse_in_checked_init64(fse_in_stream64 *s, fse_bit_cou
 	}
 
 	if ((s->accum_nbits < 56 || s->accum_nbits >= 64) || ((s->accum >> s->accum_nbits) != 0)) {
-		return -1; /* the incoming input is wrong (encoder should have zeroed the upper bits) */
+		/*
+		 * the incoming input is wrong (encoder should have zeroed the
+		 * upper bits)
+		 */
+		return -1;
 	}
 
 	return 0; /* OK */
@@ -324,7 +328,11 @@ static __always_inline int fse_in_checked_init32(fse_in_stream32 *s, fse_bit_cou
 	}
 
 	if ((s->accum_nbits < 24 || s->accum_nbits >= 32) || ((s->accum >> s->accum_nbits) != 0)) {
-		return -1; /* the incoming input is wrong (encoder should have zeroed the upper bits) */
+		/*
+		 * the incoming input is wrong (encoder should have zeroed the
+		 * upper bits)
+		 */
+		return -1;
 	}
 
 	return 0; /* OK */
@@ -345,9 +353,8 @@ static __always_inline int fse_in_checked_flush64(fse_in_stream64 *s, const uint
 	const uint8_t *buf = (*pbuf) - (nbits >> 3);
 	uint64_t incoming;
 
-	if (buf < buf_start) {
+	if (buf < buf_start)
 		return -1; /* out of range */
-	}
 	*pbuf = buf;
 	memcpy(&incoming, buf, 8);
 	/* Update the state object and verify its validity (in DEBUG). */
@@ -371,9 +378,8 @@ static __always_inline int fse_in_checked_flush32(fse_in_stream32 *s, const uint
 		const uint8_t *buf = (*pbuf) - (nbits >> 3);
 		uint32_t incoming;
 
-		if (buf < buf_start) {
+		if (buf < buf_start)
 			return -1; /* out of range */
-		}
 
 		*pbuf = buf;
 
@@ -518,9 +524,8 @@ static __always_inline int fse_check_freq(const uint16_t *freq_table, const size
 	size_t sum_of_freq = 0;
 	int i;
 
-	for (i = 0; i < table_size; i++) {
+	for (i = 0; i < table_size; i++)
 		sum_of_freq += freq_table[i];
-	}
 	return (sum_of_freq > number_of_states) ? -1 : 0;
 }
 

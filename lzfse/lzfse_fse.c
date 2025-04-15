@@ -46,9 +46,8 @@ int fse_init_decoder_table(int nstates, int nsymbols, const uint16_t *__restrict
 
 		sum_of_freq += f;
 
-		if (sum_of_freq > nstates) {
+		if (sum_of_freq > nstates)
 			return -1;
-		}
 
 		k = __builtin_clz(f) - n_clz; /* shift needed to ensure N <= (F<<K) < 2*N */
 		j0 = ((2 * nstates) >> k) - f;

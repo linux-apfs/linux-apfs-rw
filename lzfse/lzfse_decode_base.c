@@ -210,22 +210,18 @@ static int lzfse_decode_lmd(lzfse_decoder_state *s)
 		int res;
 		/* Decode the next L, M, D symbol from the input stream. */
 		res = fse_in_flush(&in, &src, src_start);
-		if (res) {
+		if (res)
 			return LZFSE_STATUS_ERROR;
-		}
 		L = fse_value_decode(&l_state, bs->l_decoder, &in);
-		if ((lit + L) >= (bs->literals + LZFSE_LITERALS_PER_BLOCK + 64)) {
+		if ((lit + L) >= (bs->literals + LZFSE_LITERALS_PER_BLOCK + 64))
 			return LZFSE_STATUS_ERROR;
-		}
 		res = fse_in_flush2(&in, &src, src_start);
-		if (res) {
+		if (res)
 			return LZFSE_STATUS_ERROR;
-		}
 		M = fse_value_decode(&m_state, bs->m_decoder, &in);
 		res = fse_in_flush2(&in, &src, src_start);
-		if (res) {
+		if (res)
 			return LZFSE_STATUS_ERROR;
-		}
 		new_d = fse_value_decode(&d_state, bs->d_decoder, &in);
 		D = new_d ? new_d : D;
 		symbols--;
@@ -487,9 +483,8 @@ int lzfse_decode(lzfse_decoder_state *s)
 					return LZFSE_STATUS_SRC_EMPTY; /* need all encoded block */
 
 				/* Sanity checks */
-				if (lzfse_check_block_header_v1(&header1) != 0) {
+				if (lzfse_check_block_header_v1(&header1) != 0)
 					return LZFSE_STATUS_ERROR;
-				}
 
 				/* Skip header */
 				s->src += header_size;
