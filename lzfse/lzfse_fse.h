@@ -344,6 +344,7 @@ static __always_inline int fse_in_checked_flush64(fse_in_stream64 *s, const uint
 	/* Convert bits to bytes and decrement buffer address, then load new data. */
 	const uint8_t *buf = (*pbuf) - (nbits >> 3);
 	uint64_t incoming;
+
 	if (buf < buf_start) {
 		return -1; /* out of range */
 	}
@@ -369,6 +370,7 @@ static __always_inline int fse_in_checked_flush32(fse_in_stream32 *s, const uint
 		/* Convert bits to bytes and decrement buffer address, then load new data. */
 		const uint8_t *buf = (*pbuf) - (nbits >> 3);
 		uint32_t incoming;
+
 		if (buf < buf_start) {
 			return -1; /* out of range */
 		}
@@ -389,6 +391,7 @@ static __always_inline int fse_in_checked_flush32(fse_in_stream32 *s, const uint
 static __always_inline uint64_t fse_in_pull64(fse_in_stream64 *s, fse_bit_count n)
 {
 	uint64_t result;
+
 	s->accum_nbits -= n;
 	result = s->accum >> s->accum_nbits;
 	s->accum = fse_mask_lsb64(s->accum, s->accum_nbits);
@@ -399,6 +402,7 @@ static __always_inline uint64_t fse_in_pull64(fse_in_stream64 *s, fse_bit_count 
 static __always_inline uint32_t fse_in_pull32(fse_in_stream32 *s, fse_bit_count n)
 {
 	uint32_t result;
+
 	s->accum_nbits -= n;
 	result = s->accum >> s->accum_nbits;
 	s->accum = fse_mask_lsb32(s->accum, s->accum_nbits);
@@ -513,6 +517,7 @@ static __always_inline int fse_check_freq(const uint16_t *freq_table, const size
 {
 	size_t sum_of_freq = 0;
 	int i;
+
 	for (i = 0; i < table_size; i++) {
 		sum_of_freq += freq_table[i];
 	}

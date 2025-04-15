@@ -223,6 +223,7 @@ copy_literal_and_match:
 		 * buffer, so it is not an important case to optimize.
 		 */
 		size_t i;
+
 		for (i = 0; i < L; ++i)
 			dst_ptr[i] = src_ptr[i];
 	} else {
@@ -230,6 +231,7 @@ copy_literal_and_match:
 
 		/* Copy partial literal */
 		size_t i;
+
 		for (i = 0; i < dst_len; ++i)
 			dst_ptr[i] = src_ptr[i];
 		/* Save state */
@@ -278,6 +280,7 @@ copy_match:
 		 * bound away from the end of the destination buffer.
 		 */
 		size_t i;
+
 		for (i = 0; i < M; i += 8)
 			store8(&dst_ptr[i], load8(&dst_ptr[i - D]));
 	} else if (M <= dst_len) {
@@ -287,6 +290,7 @@ copy_match:
 		 * Fall back on a simple byte-by-byte implementation.
 		 */
 		size_t i;
+
 		for (i = 0; i < M; ++i)
 			dst_ptr[i] = dst_ptr[i - D];
 	} else {
@@ -294,6 +298,7 @@ copy_match:
 
 		/* Copy partial match */
 		size_t i;
+
 		for (i = 0; i < dst_len; ++i)
 			dst_ptr[i] = dst_ptr[i - D];
 		/* Save state */
@@ -403,6 +408,7 @@ copy_literal:
 		 * either buffer.
 		 */
 		size_t i;
+
 		for (i = 0; i < L; i += 8)
 			store8(&dst_ptr[i], load8(&src_ptr[i]));
 	} else if (L <= dst_len) {
@@ -412,6 +418,7 @@ copy_literal:
 		 * we copy the literal byte-by-byte.
 		 */
 		size_t i;
+
 		for (i = 0; i < L; ++i)
 			dst_ptr[i] = src_ptr[i];
 	} else {
@@ -419,6 +426,7 @@ copy_literal:
 
 		/* Copy partial literal */
 		size_t i;
+
 		for (i = 0; i < dst_len; ++i)
 			dst_ptr[i] = src_ptr[i];
 		/* Save state */

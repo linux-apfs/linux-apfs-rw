@@ -36,6 +36,7 @@ static size_t lzfse_decode_buffer_with_scratch(uint8_t *__restrict dst_buffer, s
 {
 	int status;
 	lzfse_decoder_state *s = (lzfse_decoder_state *)scratch_buffer;
+
 	memset(s, 0x00, sizeof(*s));
 
 	/* Initialize state */

@@ -162,6 +162,7 @@ static inline int lzfse_decode_v1(lzfse_compressed_block_header_v1 *out,
 static inline void copy(uint8_t *dst, const uint8_t *src, size_t length)
 {
 	const uint8_t *dst_end = dst + length;
+
 	do {
 		copy8(dst, src);
 		dst += 8;
@@ -283,6 +284,7 @@ ExecuteMatch:
 			 */
 			if (L <= remaining_bytes) {
 				size_t i;
+
 				for (i = 0; i < L; i++)
 					dst[i] = lit[i];
 				dst += L;
@@ -299,6 +301,7 @@ ExecuteMatch:
 			 */
 			else {
 				size_t i;
+
 				for (i = 0; i < remaining_bytes; i++)
 					dst[i] = lit[i];
 				dst += remaining_bytes;
@@ -314,6 +317,7 @@ ExecuteMatch:
 			 */
 			if (M <= remaining_bytes) {
 				size_t i;
+
 				for (i = 0; i < M; i++)
 					dst[i] = dst[i - D];
 				dst += M;
@@ -334,6 +338,7 @@ ExecuteMatch:
 				 */
 			} else {
 				size_t i;
+
 				for (i = 0; i < remaining_bytes; i++)
 					dst[i] = dst[i - D];
 				dst += remaining_bytes;
@@ -401,6 +406,7 @@ int lzfse_decode(lzfse_decoder_state *s)
 
 			if (magic == LZFSE_UNCOMPRESSED_BLOCK_MAGIC) {
 				uncompressed_block_decoder_state *bs = NULL;
+
 				if (s->src + sizeof(uncompressed_block_header) > s->src_end)
 					return LZFSE_STATUS_SRC_EMPTY; /* SRC truncated */
 				/* Setup state for uncompressed block */
@@ -414,6 +420,7 @@ int lzfse_decode(lzfse_decoder_state *s)
 
 			if (magic == LZFSE_COMPRESSEDLZVN_BLOCK_MAGIC) {
 				lzvn_compressed_block_decoder_state *bs = NULL;
+
 				if (s->src + sizeof(lzvn_compressed_block_header) > s->src_end)
 					return LZFSE_STATUS_SRC_EMPTY; /* SRC truncated */
 				/* Setup state for compressed LZVN block */
@@ -587,6 +594,7 @@ int lzfse_decode(lzfse_decoder_state *s)
 					fse_in_stream in;
 					/* read bits backwards from the end */
 					const uint8_t *buf = s->src + header1.n_lmd_payload_bytes;
+
 					if (fse_in_init(&in, header1.lmd_bits, &buf, s->src) != 0)
 						return LZFSE_STATUS_ERROR;
 
@@ -623,6 +631,7 @@ int lzfse_decode(lzfse_decoder_state *s)
 
 			uint32_t copy_size = bs->n_raw_bytes; /* bytes left to copy */
 			size_t src_space, dst_space;
+
 			if (copy_size == 0) {
 				s->block_magic = 0;
 				break;
@@ -676,6 +685,7 @@ int lzfse_decode(lzfse_decoder_state *s)
 			lzvn_compressed_block_decoder_state *bs = &(s->compressed_lzvn_block_state);
 			lzvn_decoder_state dstate;
 			size_t src_used, dst_used;
+
 			if (bs->n_payload_bytes > 0 && s->src_end <= s->src)
 				return LZFSE_STATUS_SRC_EMPTY; /* need more SRC data */
 

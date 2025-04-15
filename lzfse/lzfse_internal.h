@@ -296,6 +296,7 @@ typedef int32_t lzvn_offset;
 static __always_inline uint16_t load2(const void *ptr)
 {
 	uint16_t data;
+
 	memcpy(&data, ptr, sizeof data);
 	return data;
 }
@@ -303,6 +304,7 @@ static __always_inline uint16_t load2(const void *ptr)
 static __always_inline uint32_t load4(const void *ptr)
 {
 	uint32_t data;
+
 	memcpy(&data, ptr, sizeof data);
 	return data;
 }
@@ -310,6 +312,7 @@ static __always_inline uint32_t load4(const void *ptr)
 static __always_inline uint64_t load8(const void *ptr)
 {
 	uint64_t data;
+
 	memcpy(&data, ptr, sizeof data);
 	return data;
 }
@@ -344,6 +347,7 @@ static __always_inline void copy16(void *dst, const void *src)
 {
 	uint64_t m0 = load8(src);
 	uint64_t m1 = load8((const unsigned char *)src + 8);
+
 	store8(dst, m0);
 	store8((unsigned char *)dst + 8, m1);
 }
@@ -359,6 +363,7 @@ static __always_inline void copy16(void *dst, const void *src)
 static __always_inline uintmax_t extract(uintmax_t container, unsigned lsb, unsigned width)
 {
 	static const size_t container_width = sizeof container * 8;
+
 	if (width == container_width)
 		return container;
 	return (container >> lsb) & (((uintmax_t)1 << width) - 1);
@@ -377,6 +382,7 @@ static __always_inline uintmax_t insert(uintmax_t container, uintmax_t data, uns
 {
 	static const size_t container_width = sizeof container * 8;
 	uintmax_t mask;
+
 	if (width == container_width)
 		return container;
 	mask = ((uintmax_t)1 << width) - 1;
@@ -395,6 +401,7 @@ lzfse_check_block_header_v1(const lzfse_compressed_block_header_v1 *header)
 	int tests_results = 0;
 	uint16_t literal_state[4];
 	int res;
+
 	tests_results = tests_results |
 			((header->magic == LZFSE_COMPRESSEDV1_BLOCK_MAGIC) ? 0 : (1 << 0));
 	tests_results = tests_results |

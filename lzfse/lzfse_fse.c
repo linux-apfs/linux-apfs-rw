@@ -36,9 +36,11 @@ int fse_init_decoder_table(int nstates, int nsymbols, const uint16_t *__restrict
 	int n_clz = __builtin_clz(nstates);
 	int sum_of_freq = 0;
 	int i, j0, j;
+
 	for (i = 0; i < nsymbols; i++) {
 		int f = (int)freq[i];
 		int k;
+
 		if (f == 0)
 			continue; /* skip this symbol, no occurrences */
 
@@ -90,10 +92,12 @@ void fse_init_value_decoder_table(int nstates, int nsymbols, const uint16_t *__r
 {
 	int n_clz = __builtin_clz(nstates);
 	int i;
+
 	for (i = 0; i < nsymbols; i++) {
 		fse_value_decoder_entry ei = { 0 };
 		int f = (int)freq[i];
 		int k, j0, j;
+
 		if (f == 0)
 			continue; /* skip this symbol, no occurrences */
 
