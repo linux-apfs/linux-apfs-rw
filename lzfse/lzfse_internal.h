@@ -360,7 +360,7 @@ static __always_inline void copy16(void *dst, const void *src)
 /*! @abstract Extracts \p width bits from \p container, starting with \p lsb; if
  * we view \p container as a bit array, we extract \c container[lsb:lsb+width].
  */
-static __always_inline uintmax_t extract(uintmax_t container, unsigned lsb, unsigned width)
+static __always_inline uintmax_t extract(uintmax_t container, unsigned int lsb, unsigned int width)
 {
 	static const size_t container_width = sizeof container * 8;
 
@@ -377,8 +377,8 @@ static __always_inline uintmax_t extract(uintmax_t container, unsigned lsb, unsi
  * container[lsb+width:] is unchanged
  * @endcode
  */
-static __always_inline uintmax_t insert(uintmax_t container, uintmax_t data, unsigned lsb,
-					unsigned width)
+static __always_inline uintmax_t insert(uintmax_t container, uintmax_t data, unsigned int lsb,
+					unsigned int width)
 {
 	static const size_t container_width = sizeof container * 8;
 	uintmax_t mask;
