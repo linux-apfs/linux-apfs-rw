@@ -534,8 +534,7 @@ int lzfse_decode(lzfse_decoder_state *s)
 					state3 = header1.literal_state[3];
 
 					for (i = 0; i < header1.n_literals;
-					     i += 4) /* n_literals is multiple of 4 */
-					{
+					     i += 4 /* n_literals is multiple of 4 */) {
 #if FSE_IOSTREAM_64
 						if (fse_in_flush(&in, &buf, buf_start) != 0)
 							return LZFSE_STATUS_ERROR; /* [57, 64] bits */
