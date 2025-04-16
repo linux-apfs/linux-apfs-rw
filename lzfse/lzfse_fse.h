@@ -467,12 +467,12 @@ typedef struct { /* DO NOT REORDER THE FIELDS */
 } fse_decoder_entry;
 
 /*! @abstract  Entry for one state in the value decoder table (64b). */
-typedef struct { /* DO NOT REORDER THE FIELDS */
+struct fse_value_decoder_entry { /* DO NOT REORDER THE FIELDS */
 	uint8_t total_bits; /* state bits + extra value bits = shift for next decode */
 	uint8_t value_bits; /* extra value bits */
 	int16_t delta; /* state base (delta) */
 	int32_t vbase; /* value base */
-} fse_value_decoder_entry;
+};
 
 /*! @abstract Decode and return symbol using the decoder table, and update
  *  \c *pstate, \c in.
@@ -499,10 +499,10 @@ static __always_inline uint8_t fse_decode(fse_state *__restrict pstate,
  * stream accumulator.
  */
 static __always_inline int32_t fse_value_decode(fse_state *__restrict pstate,
-						const fse_value_decoder_entry *value_decoder_table,
+						const struct fse_value_decoder_entry *value_decoder_table,
 						fse_in_stream *__restrict in)
 {
-	fse_value_decoder_entry entry = value_decoder_table[*pstate];
+	struct fse_value_decoder_entry entry = value_decoder_table[*pstate];
 	uint32_t state_and_value_bits = (uint32_t)fse_in_pull(in, entry.total_bits);
 	*pstate = (fse_state)(entry.delta + (state_and_value_bits >> entry.value_bits));
 	return (int32_t)(entry.vbase + fse_mask_lsb(state_and_value_bits, entry.value_bits));
@@ -567,4 +567,4 @@ int fse_init_decoder_table(int nstates, int nsymbols, const uint16_t *__restrict
 void fse_init_value_decoder_table(int nstates, int nsymbols, const uint16_t *__restrict freq,
 				  const uint8_t *__restrict symbol_vbits,
 				  const int32_t *__restrict symbol_vbase,
-				  fse_value_decoder_entry *__restrict t);
+				  struct fse_value_decoder_entry *__restrict t);

@@ -88,13 +88,13 @@ int fse_init_decoder_table(int nstates, int nsymbols, const uint16_t *__restrict
 void fse_init_value_decoder_table(int nstates, int nsymbols, const uint16_t *__restrict freq,
 				  const uint8_t *__restrict symbol_vbits,
 				  const int32_t *__restrict symbol_vbase,
-				  fse_value_decoder_entry *__restrict t)
+				  struct fse_value_decoder_entry *__restrict t)
 {
 	int n_clz = __builtin_clz(nstates);
 	int i;
 
 	for (i = 0; i < nsymbols; i++) {
-		fse_value_decoder_entry ei = { 0 };
+		struct fse_value_decoder_entry ei = { 0 };
 		int f = (int)freq[i];
 		int k, j0, j;
 
@@ -109,7 +109,7 @@ void fse_init_value_decoder_table(int nstates, int nsymbols, const uint16_t *__r
 
 		/* Initialize all states S reached by this symbol: OFFSET <= S < OFFSET + F */
 		for (j = 0; j < f; j++) {
-			fse_value_decoder_entry e = ei;
+			struct fse_value_decoder_entry e = ei;
 
 			if (j < j0) {
 				e.total_bits = (uint8_t)k + e.value_bits;

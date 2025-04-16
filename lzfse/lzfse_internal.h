@@ -101,9 +101,9 @@ typedef struct {
 	 * alignment forced to 8 bytes to guarantee that a single state's
 	 * entry cannot span two cachelines.
 	 */
-	fse_value_decoder_entry l_decoder[LZFSE_ENCODE_L_STATES] __aligned(8);
-	fse_value_decoder_entry m_decoder[LZFSE_ENCODE_M_STATES] __aligned(8);
-	fse_value_decoder_entry d_decoder[LZFSE_ENCODE_D_STATES] __aligned(8);
+	struct fse_value_decoder_entry l_decoder[LZFSE_ENCODE_L_STATES] __aligned(8);
+	struct fse_value_decoder_entry m_decoder[LZFSE_ENCODE_M_STATES] __aligned(8);
+	struct fse_value_decoder_entry d_decoder[LZFSE_ENCODE_D_STATES] __aligned(8);
 	int32_t literal_decoder[LZFSE_ENCODE_LITERAL_STATES];
 	/*
 	 * The literal stream for the block, plus padding to allow for faster
