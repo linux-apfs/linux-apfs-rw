@@ -1194,6 +1194,10 @@ static inline void apfs_assert_query_is_valid(const struct apfs_query *query)
 	ASSERT(apfs_node_is_root(apfs_query_root(query)));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+#define page_has_buffers(page)	folio_buffers(page_folio(page))
+#endif
+
 /*
  * TODO: the following are modified variants of buffer head functions that will
  * work with the shared block device for the container. The correct approach

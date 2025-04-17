@@ -12,6 +12,13 @@
 typedef int vm_fault_t;
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+static void wait_for_stable_page(struct page *page)
+{
+	return folio_wait_stable(page_folio(page));
+}
+#endif
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
 static vm_fault_t apfs_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 {

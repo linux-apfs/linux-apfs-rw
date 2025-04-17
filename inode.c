@@ -20,6 +20,13 @@
 
 #define MAX_PFK_LEN	512
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+static struct page *grab_cache_page_write_begin(struct address_space *mapping, pgoff_t index)
+{
+	return pagecache_get_page(mapping, index, FGP_WRITEBEGIN, mapping_gfp_mask(mapping));
+}
+#endif
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0) || RHEL_VERSION_GE(9, 3)
 
 static int apfs_read_folio(struct file *file, struct folio *folio)
