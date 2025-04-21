@@ -724,12 +724,19 @@ int apfs_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
 	return apfs_mknod(mnt_userns, dir, dentry, mode | S_IFDIR, 0 /* rdev */);
 }
 
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 15, 0)
 
 int apfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 	       struct dentry *dentry, umode_t mode)
 {
 	return apfs_mknod(idmap, dir, dentry, mode | S_IFDIR, 0 /* rdev */);
+}
+
+#else
+
+struct dentry *apfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode)
+{
+	return ERR_PTR(apfs_mknod(idmap, dir, dentry, mode | S_IFDIR, 0 /* rdev */));
 }
 
 #endif
