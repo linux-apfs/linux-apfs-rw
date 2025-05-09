@@ -26,7 +26,8 @@
  * we use the more descriptive name "Finite State Entropy".
  */
 
-#pragma once
+#ifndef LZFSE_FSE_H
+#define LZFSE_FSE_H
 
 #include <linux/types.h>
 #include <linux/string.h>
@@ -568,3 +569,5 @@ void fse_init_value_decoder_table(int nstates, int nsymbols, const uint16_t *__r
 				  const uint8_t *__restrict symbol_vbits,
 				  const int32_t *__restrict symbol_vbase,
 				  struct fse_value_decoder_entry *__restrict t);
+
+#endif /* LZFSE_FSE_H */
