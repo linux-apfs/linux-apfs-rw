@@ -1078,7 +1078,7 @@ int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 int apfs_getattr(const struct path *path, struct kstat *stat,
 		 u32 request_mask, unsigned int query_flags)
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0) && !RHEL_VERSION_GE(9, 6)
 int apfs_getattr(struct user_namespace *mnt_userns,
 		 const struct path *path, struct kstat *stat, u32 request_mask,
 		 unsigned int query_flags)
@@ -1110,7 +1110,7 @@ int apfs_getattr(struct mnt_idmap *idmap,
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	generic_fillattr(inode, stat);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0) && !RHEL_VERSION_GE(9, 6)
 	generic_fillattr(mnt_userns, inode, stat);
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	generic_fillattr(idmap, inode, stat);
@@ -1882,7 +1882,7 @@ struct inode *apfs_new_inode(struct inode *dir, umode_t mode, dev_t rdev)
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	inode_init_owner(inode, dir, mode);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0) && !RHEL_VERSION_GE(9, 6)
 	inode_init_owner(&init_user_ns, inode, dir, mode);
 #else
 	inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
@@ -2030,7 +2030,7 @@ static int apfs_setsize(struct inode *inode, loff_t new_size)
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 int apfs_setattr(struct dentry *dentry, struct iattr *iattr)
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0) && !RHEL_VERSION_GE(9, 6)
 int apfs_setattr(struct user_namespace *mnt_userns,
 		 struct dentry *dentry, struct iattr *iattr)
 #else
@@ -2051,7 +2051,7 @@ int apfs_setattr(struct mnt_idmap *idmap,
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	err = setattr_prepare(dentry, iattr);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0) && !RHEL_VERSION_GE(9, 6)
 	err = setattr_prepare(&init_user_ns, dentry, iattr);
 #else
 	err = setattr_prepare(&nop_mnt_idmap, dentry, iattr);
@@ -2075,7 +2075,7 @@ int apfs_setattr(struct mnt_idmap *idmap,
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	setattr_copy(inode, iattr);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0) && !RHEL_VERSION_GE(9, 6)
 	setattr_copy(&init_user_ns, inode, iattr);
 #else
 	setattr_copy(&nop_mnt_idmap, inode, iattr);
@@ -2107,7 +2107,7 @@ int apfs_update_time(struct inode *inode, int flags)
 		return err;
 	apfs_inode_join_transaction(sb, inode);
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0) && !RHEL_VERSION_GE(9, 6)
 	generic_update_time(inode, time, flags);
 #else
 	generic_update_time(inode, flags);
@@ -2443,7 +2443,7 @@ static int apfs_ioc_setflags(struct file *file, int __user *arg)
 	return err;
 }
 
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0) && !RHEL_VERSION_GE(9, 6)
 
 int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 {

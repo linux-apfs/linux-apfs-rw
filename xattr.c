@@ -804,7 +804,7 @@ done:
 static int apfs_xattr_osx_set(const struct xattr_handler *handler,
 	      struct dentry *unused, struct inode *inode, const char *name,
 	      const void *value, size_t size, int flags)
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0) && !RHEL_VERSION_GE(9, 6)
 static int apfs_xattr_osx_set(const struct xattr_handler *handler,
 		  struct user_namespace *mnt_userns, struct dentry *unused,
 		  struct inode *inode, const char *name, const void *value,

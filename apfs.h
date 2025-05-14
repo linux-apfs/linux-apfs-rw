@@ -945,7 +945,7 @@ extern int apfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		       unsigned int flags);
 extern int apfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 		       bool excl);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0) && !RHEL_VERSION_GE(9, 6)
 extern int apfs_mknod(struct user_namespace *mnt_userns, struct inode *dir,
 		      struct dentry *dentry, umode_t mode, dev_t rdev);
 extern int apfs_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
@@ -1027,7 +1027,7 @@ extern int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta)
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 extern int apfs_setattr(struct dentry *dentry, struct iattr *iattr);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0) && !RHEL_VERSION_GE(9, 6)
 extern int apfs_setattr(struct user_namespace *mnt_userns,
 			struct dentry *dentry, struct iattr *iattr);
 #else
@@ -1049,7 +1049,7 @@ extern int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 extern int apfs_getattr(const struct path *path, struct kstat *stat,
 			u32 request_mask, unsigned int query_flags);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0) && !RHEL_VERSION_GE(9, 6)
 extern int apfs_getattr(struct user_namespace *mnt_userns,
 		const struct path *path, struct kstat *stat, u32 request_mask,
 		unsigned int query_flags);
@@ -1061,7 +1061,7 @@ extern int apfs_getattr(struct mnt_idmap *idmap,
 
 extern int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta);
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0) || RHEL_VERSION_GE(9, 6)
 extern int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa);
 extern int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct fileattr *fa);
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
