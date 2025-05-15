@@ -23,7 +23,13 @@
 /* LZVN low-level decoder */
 
 #include <linux/compiler.h>
+#include <linux/version.h>
 #include "lzvn_decode_base.h"
+
+/* Older kernel versions will still get an objtool warning here */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 3, 0)
+#define __annotate_jump_table
+#endif
 
 /*
  * Both the source and destination buffers are represented by a pointer and
