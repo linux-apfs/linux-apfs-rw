@@ -422,7 +422,11 @@ static int apfs_compress_readpage(struct file *filp, struct page *page)
 	loff_t off;
 
 	/* Mostly copied from ext4_read_inline_page() */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
+	off = page_folio(page)->index << PAGE_SHIFT;
+#else
 	off = page->index << PAGE_SHIFT;
+#endif
 	addr = kmap(page);
 	ret = apfs_compress_file_read_page(filp, addr, off);
 	flush_dcache_page(page);

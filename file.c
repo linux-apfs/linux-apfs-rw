@@ -72,7 +72,11 @@ static vm_fault_t apfs_page_mkwrite(struct vm_fault *vmf)
 	}
 
 	size = i_size_read(inode);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
+	if (page_folio(page)->index == size >> PAGE_SHIFT)
+#else
 	if (page->index == size >> PAGE_SHIFT)
+#endif
 		len = size & ~PAGE_MASK;
 	else
 		len = PAGE_SIZE;
