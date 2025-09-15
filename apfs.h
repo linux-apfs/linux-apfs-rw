@@ -1061,6 +1061,10 @@ extern int apfs_getattr(struct mnt_idmap *idmap,
 
 extern int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+#define fileattr file_kattr
+#endif
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0) || RHEL_VERSION_GE(9, 6)
 extern int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa);
 extern int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct fileattr *fa);
