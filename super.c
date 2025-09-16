@@ -1585,7 +1585,11 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto failed_cat;
 
 	sb->s_op = &apfs_sops;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+	set_default_d_op(sb, &apfs_dentry_operations);
+#else
 	sb->s_d_op = &apfs_dentry_operations;
+#endif
 	sb->s_xattr = apfs_xattr_handlers;
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_time_gran = 1; /* Nanosecond granularity */
