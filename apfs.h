@@ -1021,8 +1021,15 @@ extern struct inode *apfs_new_inode(struct inode *dir, umode_t mode,
 extern int apfs_create_inode_rec(struct super_block *sb, struct inode *inode,
 				 struct dentry *dentry);
 extern int apfs_inode_create_exclusive_dstream(struct inode *inode);
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+extern int __apfs_write_begin(const struct kiocb *kiocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata);
+extern int __apfs_write_end(const struct kiocb *kiocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata);
+#else
 extern int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata);
 extern int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata);
+#endif
+
 extern int apfs_dstream_adj_refcnt(struct apfs_dstream_info *dstream, u32 delta);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
@@ -1061,7 +1068,10 @@ extern int apfs_getattr(struct mnt_idmap *idmap,
 
 extern int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int delta);
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0) || RHEL_VERSION_GE(9, 6)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+extern int apfs_fileattr_get(struct dentry *dentry, struct file_kattr *fa);
+extern int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct file_kattr *fa);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0) || RHEL_VERSION_GE(9, 6)
 extern int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa);
 extern int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct fileattr *fa);
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)

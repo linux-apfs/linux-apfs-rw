@@ -470,7 +470,11 @@ out:
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+int __apfs_write_begin(const struct kiocb *kiocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata)
+#else
 int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int flags, struct page **pagep, void **fsdata)
+#endif
 {
 	struct inode *inode = mapping->host;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
@@ -584,7 +588,11 @@ out_put_page:
 	return err;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+static int apfs_write_begin(const struct kiocb *kiocb, struct address_space *mapping,
+			    loff_t pos, unsigned int len,
+			    struct folio **foliop, void **fsdata)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
 static int apfs_write_begin(struct file *file, struct address_space *mapping,
 			    loff_t pos, unsigned int len,
 			    struct folio **foliop, void **fsdata)
@@ -616,7 +624,12 @@ static int apfs_write_begin(struct file *file, struct address_space *mapping,
 	if (err)
 		return err;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+	err = __apfs_write_begin(kiocb, mapping, pos, len, flags, pagep, fsdata);
+#else
 	err = __apfs_write_begin(file, mapping, pos, len, flags, pagep, fsdata);
+#endif
+
 	if (err)
 		goto fail;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
@@ -629,13 +642,19 @@ fail:
 	return err;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+int __apfs_write_end(const struct kiocb *kiocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata)
+#else
 int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct page *page, void *fsdata)
+#endif
 {
 	struct inode *inode = mapping->host;
 	struct apfs_dstream_info *dstream = &APFS_I(inode)->i_dstream;
 	int ret, err;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+	ret = generic_write_end(kiocb, mapping, pos, len, copied, page_folio(page), fsdata);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
 	ret = generic_write_end(file, mapping, pos, len, copied, page_folio(page), fsdata);
 #else
 	ret = generic_write_end(file, mapping, pos, len, copied, page, fsdata);
@@ -652,7 +671,11 @@ int __apfs_write_end(struct file *file, struct address_space *mapping, loff_t po
 	return ret;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+static int apfs_write_end(const struct kiocb *kiocb, struct address_space *mapping,
+			  loff_t pos, unsigned int len, unsigned int copied,
+			  struct folio *folio, void *fsdata)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
 static int apfs_write_end(struct file *file, struct address_space *mapping,
 			  loff_t pos, unsigned int len, unsigned int copied,
 			  struct folio *folio, void *fsdata)
@@ -670,7 +693,12 @@ static int apfs_write_end(struct file *file, struct address_space *mapping,
 #endif
 	int ret, err;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+	ret = __apfs_write_end(kiocb, mapping, pos, len, copied, page, fsdata);
+#else
 	ret = __apfs_write_end(file, mapping, pos, len, copied, page, fsdata);
+#endif
+
 	if (ret < 0) {
 		err = ret;
 		goto fail;
@@ -2485,7 +2513,11 @@ int apfs_fileattr_set(struct user_namespace *mnt_userns, struct dentry *dentry, 
 
 #else /* LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+int apfs_fileattr_get(struct dentry *dentry, struct file_kattr *fa)
+#else
 int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
+#endif
 {
 	unsigned int flags = apfs_getflags(d_inode(dentry));
 
@@ -2493,7 +2525,11 @@ int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct file_kattr *fa)
+#else
 int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct fileattr *fa)
+#endif
 {
 	struct inode *inode = d_inode(dentry);
 	struct super_block *sb = inode->i_sb;
