@@ -1149,7 +1149,7 @@ int apfs_getattr(struct mnt_idmap *idmap,
  *
  * Returns the length of the value, or a negative error code in case of failure.
  */
-static int apfs_build_inode_val(struct inode *inode, struct qstr *qname,
+static int apfs_build_inode_val(struct inode *inode, const struct qstr *qname,
 				struct apfs_inode_val **val_p)
 {
 	struct apfs_inode_val *val;

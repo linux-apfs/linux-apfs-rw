@@ -261,7 +261,7 @@ const struct file_operations apfs_dir_operations = {
  *
  * Returns the length of the key, or a negative error code in case of failure.
  */
-static int apfs_build_dentry_unhashed_key(struct qstr *qname, u64 parent_id,
+static int apfs_build_dentry_unhashed_key(const struct qstr *qname, u64 parent_id,
 					  struct apfs_drec_key **key_p)
 {
 	struct apfs_drec_key *key;
@@ -290,7 +290,7 @@ static int apfs_build_dentry_unhashed_key(struct qstr *qname, u64 parent_id,
  *
  * Returns the length of the key, or a negative error code in case of failure.
  */
-static int apfs_build_dentry_hashed_key(struct qstr *qname, u64 hash, u64 parent_id,
+static int apfs_build_dentry_hashed_key(const struct qstr *qname, u64 hash, u64 parent_id,
 					struct apfs_drec_hashed_key **key_p)
 {
 	struct apfs_drec_hashed_key *key;
@@ -363,7 +363,7 @@ static int apfs_build_dentry_val(struct inode *inode, u64 sibling_id,
  *
  * Returns 0 on success or a negative error code in case of failure.
  */
-static int apfs_create_dentry_rec(struct inode *inode, struct qstr *qname,
+static int apfs_create_dentry_rec(struct inode *inode, const struct qstr *qname,
 				  u64 parent_id, u64 sibling_id)
 {
 	struct super_block *sb = inode->i_sb;
@@ -426,7 +426,7 @@ static int apfs_build_sibling_val(struct dentry *dentry,
 				  struct apfs_sibling_val **val_p)
 {
 	struct apfs_sibling_val *val;
-	struct qstr *qname = &dentry->d_name;
+	const struct qstr *qname = &dentry->d_name;
 	u16 namelen = qname->len + 1; /* We count the null-termination */
 	struct inode *parent = d_inode(dentry->d_parent);
 	int val_len;
