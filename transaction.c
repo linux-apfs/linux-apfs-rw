@@ -468,7 +468,7 @@ int apfs_transaction_flush_all_inodes(struct super_block *sb)
 		curr_err = apfs_update_inode(inode, NULL /* new_name */);
 		if (curr_err)
 			err = curr_err;
-		inode->i_state &= ~I_DIRTY_ALL;
+		apfs_inode_state_clear_raw(inode, I_DIRTY_ALL);
 
 		/*
 		 * The same inode may get dirtied again as soon as we release

@@ -1037,7 +1037,7 @@ struct inode *apfs_iget(struct super_block *sb, u64 cnid)
 	inode = apfs_iget_locked(sb, cnid);
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
-	if (!(inode->i_state & I_NEW))
+	if (!(apfs_inode_state_read_once(inode) & I_NEW))
 		return inode;
 
 	down_read(&nxi->nx_big_sem);

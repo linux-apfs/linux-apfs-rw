@@ -1255,9 +1255,10 @@ static void __apfs_undo_unlink(struct dentry *dentry)
 {
 	struct inode *inode = d_inode(dentry);
 
-	inode->i_state |= I_LINKABLE; /* Silence warning about nlink 0->1 */
+	/* Silence warning about nlink 0->1 */
+	apfs_inode_state_set_raw(inode, I_LINKABLE);
 	inc_nlink(inode);
-	inode->i_state &= ~I_LINKABLE;
+	apfs_inode_state_clear_raw(inode, I_LINKABLE);
 
 	apfs_undo_delete_dentry(dentry);
 }

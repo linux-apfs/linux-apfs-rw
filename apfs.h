@@ -1216,6 +1216,33 @@ static inline void apfs_assert_query_is_valid(const struct apfs_query *query)
 #define page_has_buffers(page)	folio_buffers(page_folio(page))
 #endif
 
+static inline int apfs_inode_state_read_once(struct inode *inode)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
+	return inode_state_read_once(inode);
+#else
+	return inode->i_state;
+#endif
+}
+
+static inline void apfs_inode_state_set_raw(struct inode *inode, int flags)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
+	inode_state_set_raw(inode, flags);
+#else
+	inode->i_state |= flags;
+#endif
+}
+
+static inline void apfs_inode_state_clear_raw(struct inode *inode, int flags)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
+	inode_state_clear_raw(inode, flags);
+#else
+	inode->i_state &= ~flags;
+#endif
+}
+
 /*
  * TODO: the following are modified variants of buffer head functions that will
  * work with the shared block device for the container. The correct approach
