@@ -1239,9 +1239,19 @@ static void apfs_set_nx_flags(struct super_block *sb, unsigned int flags)
  * Many of the parse_options() functions in other file systems return 0
  * on error. This one returns an error code, and 0 on success.
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+static int parse_options(struct fs_context *fc, char *options)
+{
+	#define opt_err_parse(fmt, ...) apfs_err(NULL, fmt, ##__VA_ARGS__)
+	#define opt_alert_parse(fmt, ...) apfs_err(NULL, fmt, ##__VA_ARGS__)
+    struct apfs_sb_info *sbi = fc->s_fs_info;
+#else
 static int parse_options(struct super_block *sb, char *options)
 {
+	#define opt_err_parse(fmt, ...) apfs_err(sb, fmt, ##__VA_ARGS__)
+	#define opt_alert_parse(fmt, ...) apfs_err(sb, fmt, ##__VA_ARGS__)
 	struct apfs_sb_info *sbi = APFS_SB(sb);
+#endif
 	struct apfs_nxsb_info *nxi = sbi->s_nxi;
 	char *p;
 	substring_t args[MAX_OPT_ARGS];
@@ -1255,6 +1265,11 @@ static int parse_options(struct super_block *sb, char *options)
 #ifdef CONFIG_APFS_RW_ALWAYS
 	/* Still risky, but some packagers want writable mounts by default */
 	nx_flags |= APFS_READWRITE;
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	sbi->s_uid = INVALID_UID;
+	sbi->s_gid = INVALID_GID;
 #endif
 
 	if (!options)
@@ -1287,7 +1302,7 @@ static int parse_options(struct super_block *sb, char *options)
 				return err;
 			sbi->s_uid = make_kuid(current_user_ns(), option);
 			if (!uid_valid(sbi->s_uid)) {
-				apfs_err(sb, "invalid uid");
+				opt_err_parse("invalid uid");
 				return -EINVAL;
 			}
 			break;
@@ -1297,7 +1312,7 @@ static int parse_options(struct super_block *sb, char *options)
 				return err;
 			sbi->s_gid = make_kgid(current_user_ns(), option);
 			if (!gid_valid(sbi->s_gid)) {
-				apfs_err(sb, "invalid gid");
+				opt_err_parse("invalid gid");
 				return -EINVAL;
 			}
 			break;
@@ -1311,12 +1326,15 @@ static int parse_options(struct super_block *sb, char *options)
 			 * We should have already checked the mount options in
 			 * apfs_preparse_options(), so this is a bug.
 			 */
-			apfs_alert(sb, "invalid mount option %s", p);
+			opt_alert_parse("invalid mount option %s", p);
 			return -EINVAL;
 		}
 	}
 
 out:
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	sbi->s_mount_opt = nx_flags;
+#else
 	apfs_set_nx_flags(sb, nx_flags);
 	if (!(sb->s_flags & SB_RDONLY)) {
 		if (nxi->nx_flags & APFS_READWRITE) {
@@ -1327,7 +1345,10 @@ out:
 			sb->s_flags |= SB_RDONLY;
 		}
 	}
+#endif
 	return 0;
+#undef opt_err_parse
+#undef opt_alert_parse
 }
 
 /**
@@ -1559,12 +1580,24 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 	if (err)
 		goto failed_volume;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	apfs_set_nx_flags(sb, sbi->s_mount_opt);
+	if (!(sb->s_flags & SB_RDONLY)) {
+		if (sbi->s_mount_opt & APFS_READWRITE) {
+			apfs_notice(sb, "experimental write support is enabled");
+		} else {
+			apfs_warn(sb, "experimental writes disabled to avoid data loss");
+			apfs_warn(sb, "if you really want them, check the README");
+			sb->s_flags |= SB_RDONLY;
+		}
+	}
+#else
 	sbi->s_uid = INVALID_UID;
 	sbi->s_gid = INVALID_GID;
 	err = parse_options(sb, data);
 	if (err)
 		goto failed_volume;
-
+#endif
 	err = apfs_map_volume_super(sb, false /* write */);
 	if (err)
 		goto failed_volume;
@@ -2185,10 +2218,16 @@ static void apfs_free_fc(struct fs_context *fc)
 	}
 }
 
+static int apfs_parse_monolithic(struct fs_context *fc, void *data)
+{
+    return parse_options(fc, data);
+}
+
 static const struct fs_context_operations apfs_context_ops = {
 	.get_tree    = apfs_get_tree,
 	.reconfigure = apfs_reconfigure,
 	.free        = apfs_free_fc,
+	.parse_monolithic = apfs_parse_monolithic,
 };
 
 static int apfs_init_fs_context(struct fs_context *fc)
