@@ -1235,6 +1235,22 @@ static void apfs_set_nx_flags(struct super_block *sb, unsigned int flags)
 	mutex_unlock(&nxs_mutex);
 }
 
+void parse_options_set_flags(struct super_block *sb, struct apfs_sb_info *sbi,
+		unsigned int nx_flags)
+{
+	struct apfs_nxsb_info *nxi = sbi->s_nxi;
+	apfs_set_nx_flags(sb, nx_flags);
+	if (!(sb->s_flags & SB_RDONLY)) {
+		if (nxi->nx_flags & APFS_READWRITE) {
+			apfs_notice(sb, "experimental write support is enabled");
+		} else {
+			apfs_warn(sb, "experimental writes disabled to avoid data loss");
+			apfs_warn(sb, "if you really want them, check the README");
+			sb->s_flags |= SB_RDONLY;
+		}
+	}
+}
+
 /*
  * Many of the parse_options() functions in other file systems return 0
  * on error. This one returns an error code, and 0 on success.
@@ -1252,7 +1268,6 @@ static int parse_options(struct super_block *sb, char *options)
 	#define opt_alert_parse(fmt, ...) apfs_err(sb, fmt, ##__VA_ARGS__)
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 #endif
-	struct apfs_nxsb_info *nxi = sbi->s_nxi;
 	char *p;
 	substring_t args[MAX_OPT_ARGS];
 	int option;
@@ -1335,16 +1350,7 @@ out:
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
 	sbi->s_mount_opt = nx_flags;
 #else
-	apfs_set_nx_flags(sb, nx_flags);
-	if (!(sb->s_flags & SB_RDONLY)) {
-		if (nxi->nx_flags & APFS_READWRITE) {
-			apfs_notice(sb, "experimental write support is enabled");
-		} else {
-			apfs_warn(sb, "experimental writes disabled to avoid data loss");
-			apfs_warn(sb, "if you really want them, check the README");
-			sb->s_flags |= SB_RDONLY;
-		}
-	}
+	parse_options_set_flags(sb, sbi, nx_flags);
 #endif
 	return 0;
 #undef opt_err_parse
@@ -1581,16 +1587,7 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto failed_volume;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
-	apfs_set_nx_flags(sb, sbi->s_mount_opt);
-	if (!(sb->s_flags & SB_RDONLY)) {
-		if (sbi->s_mount_opt & APFS_READWRITE) {
-			apfs_notice(sb, "experimental write support is enabled");
-		} else {
-			apfs_warn(sb, "experimental writes disabled to avoid data loss");
-			apfs_warn(sb, "if you really want them, check the README");
-			sb->s_flags |= SB_RDONLY;
-		}
-	}
+	parse_options_set_flags(sb, sbi, sbi->s_mount_opt);
 #else
 	sbi->s_uid = INVALID_UID;
 	sbi->s_gid = INVALID_GID;
