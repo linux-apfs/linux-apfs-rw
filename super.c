@@ -468,6 +468,9 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 	u32 bmap_idx;
 	int i;
 
+	if (!nxi || !sbi)
+		return;
+
 	mutex_lock(&nxs_mutex);
 
 	list_del(&sbi->list);
