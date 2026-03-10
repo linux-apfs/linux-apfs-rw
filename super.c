@@ -2013,12 +2013,12 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
 	if (!sbi)
 		return ERR_PTR(-ENOMEM);
-#endif
 
 	/* Set up the fields that sget() will need to id the superblock */
 	error = apfs_preparse_options(sbi, data);
 	if (error)
 		goto out_free_sbi;
+#endif
 
 	/* Make sure that snapshots are mounted read-only */
 	if (sbi->s_snap_name)
@@ -2217,6 +2217,10 @@ static void apfs_free_fc(struct fs_context *fc)
 
 static int apfs_parse_monolithic(struct fs_context *fc, void *data)
 {
+    struct apfs_sb_info *sbi = fc->s_fs_info;
+    int result = apfs_preparse_options(sbi, data);
+    if (result)
+        return result;
     return parse_options(fc, data);
 }
 
