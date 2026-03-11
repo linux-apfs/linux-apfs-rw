@@ -462,13 +462,16 @@ static void apfs_blkdev_cleanup(struct apfs_blkdev_info *info)
  */
 static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 {
-	struct apfs_nxsb_info *nxi = sbi->s_nxi;
+	struct apfs_nxsb_info *nxi = NULL;
 	struct apfs_ephemeral_object_info *eph_list = NULL;
 	struct apfs_spaceman *sm = NULL;
 	u32 bmap_idx;
 	int i;
 
-	if (!nxi || !sbi)
+	if (!sbi)
+		return;
+	nxi = sbi->s_nxi;
+	if (!nxi)
 		return;
 
 	mutex_lock(&nxs_mutex);
@@ -2001,7 +2004,7 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	blk_mode_t mode = sb_open_mode(fc->sb_flags);
 	void *data = fc->fs_private;
 	const char *dev_name = fc->source;
-	
+
 	sbi = fc->s_fs_info;
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0) || RHEL_VERSION_GE(9, 4)
 	blk_mode_t mode = sb_open_mode(flags);
