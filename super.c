@@ -462,15 +462,12 @@ static void apfs_blkdev_cleanup(struct apfs_blkdev_info *info)
  */
 static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 {
-	struct apfs_nxsb_info *nxi = NULL;
+	struct apfs_nxsb_info *nxi = sbi->s_nxi;
 	struct apfs_ephemeral_object_info *eph_list = NULL;
 	struct apfs_spaceman *sm = NULL;
 	u32 bmap_idx;
 	int i;
 
-	if (!sbi)
-		return;
-	nxi = sbi->s_nxi;
 	if (!nxi)
 		return;
 
@@ -1242,6 +1239,7 @@ void parse_options_set_flags(struct super_block *sb, struct apfs_sb_info *sbi,
 		unsigned int nx_flags)
 {
 	struct apfs_nxsb_info *nxi = sbi->s_nxi;
+
 	apfs_set_nx_flags(sb, nx_flags);
 	if (!(sb->s_flags & SB_RDONLY)) {
 		if (nxi->nx_flags & APFS_READWRITE) {
@@ -1261,14 +1259,10 @@ void parse_options_set_flags(struct super_block *sb, struct apfs_sb_info *sbi,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
 static int parse_options(struct fs_context *fc, char *options)
 {
-	#define opt_err_parse(fmt, ...) apfs_err(NULL, fmt, ##__VA_ARGS__)
-	#define opt_alert_parse(fmt, ...) apfs_err(NULL, fmt, ##__VA_ARGS__)
     struct apfs_sb_info *sbi = fc->s_fs_info;
 #else
 static int parse_options(struct super_block *sb, char *options)
 {
-	#define opt_err_parse(fmt, ...) apfs_err(sb, fmt, ##__VA_ARGS__)
-	#define opt_alert_parse(fmt, ...) apfs_err(sb, fmt, ##__VA_ARGS__)
 	struct apfs_sb_info *sbi = APFS_SB(sb);
 #endif
 	char *p;
@@ -1320,7 +1314,7 @@ static int parse_options(struct super_block *sb, char *options)
 				return err;
 			sbi->s_uid = make_kuid(current_user_ns(), option);
 			if (!uid_valid(sbi->s_uid)) {
-				opt_err_parse("invalid uid");
+				apfs_err(NULL, "invalid uid");
 				return -EINVAL;
 			}
 			break;
@@ -1330,7 +1324,7 @@ static int parse_options(struct super_block *sb, char *options)
 				return err;
 			sbi->s_gid = make_kgid(current_user_ns(), option);
 			if (!gid_valid(sbi->s_gid)) {
-				opt_err_parse("invalid gid");
+				apfs_err(NULL, "invalid gid");
 				return -EINVAL;
 			}
 			break;
@@ -1344,7 +1338,7 @@ static int parse_options(struct super_block *sb, char *options)
 			 * We should have already checked the mount options in
 			 * apfs_preparse_options(), so this is a bug.
 			 */
-			opt_alert_parse("invalid mount option %s", p);
+			apfs_alert(NULL, "invalid mount option %s", p);
 			return -EINVAL;
 		}
 	}
@@ -1356,8 +1350,6 @@ out:
 	parse_options_set_flags(sb, sbi, nx_flags);
 #endif
 	return 0;
-#undef opt_err_parse
-#undef opt_alert_parse
 }
 
 /**
@@ -2220,11 +2212,12 @@ static void apfs_free_fc(struct fs_context *fc)
 
 static int apfs_parse_monolithic(struct fs_context *fc, void *data)
 {
-    struct apfs_sb_info *sbi = fc->s_fs_info;
-    int result = apfs_preparse_options(sbi, data);
-    if (result)
-        return result;
-    return parse_options(fc, data);
+	struct apfs_sb_info *sbi = fc->s_fs_info;
+	int result = apfs_preparse_options(sbi, data);
+
+	if (result)
+		return result;
+	return parse_options(fc, data);
 }
 
 static const struct fs_context_operations apfs_context_ops = {
