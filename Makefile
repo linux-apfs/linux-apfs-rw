@@ -14,9 +14,9 @@ apfs-y := btree.o compress.o dir.o extents.o file.o inode.o key.o libzbitmap.o \
 	  spaceman.o super.o symlink.o transaction.o unicode.o xattr.o xfield.o
 
 # If you want mounts to be writable by default, run the build as:
-#   make CONFIG=-DCONFIG_APFS_RW_ALWAYS
+#   make APFS_CONFIG=-DCONFIG_APFS_RW_ALWAYS
 # This is risky and not generally recommended.
-ccflags-y += $(CONFIG)
+ccflags-y += $(APFS_CONFIG)
 
 default:
 	./genver.sh
