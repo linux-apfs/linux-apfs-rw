@@ -15,6 +15,9 @@
 #include <linux/seq_file.h>
 #include "apfs.h"
 #include "version.h"
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+#include <linux/fs_context.h>
+#endif
 
 #define APFS_MODULE_ID_STRING	"linux-apfs by eafer (" GIT_COMMIT ")"
 
@@ -464,6 +467,9 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 	struct apfs_spaceman *sm = NULL;
 	u32 bmap_idx;
 	int i;
+
+	if (!nxi)
+		return;
 
 	mutex_lock(&nxs_mutex);
 
@@ -1187,7 +1193,9 @@ static const struct super_operations apfs_sops = {
 	.put_super	= apfs_put_super,
 	.sync_fs	= apfs_sync_fs,
 	.statfs		= apfs_statfs,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 0, 0)
 	.remount_fs	= apfs_remount,
+#endif
 	.show_options	= apfs_show_options,
 };
 
@@ -1227,14 +1235,36 @@ static void apfs_set_nx_flags(struct super_block *sb, unsigned int flags)
 	mutex_unlock(&nxs_mutex);
 }
 
+void parse_options_set_flags(struct super_block *sb, struct apfs_sb_info *sbi,
+		unsigned int nx_flags)
+{
+	struct apfs_nxsb_info *nxi = sbi->s_nxi;
+
+	apfs_set_nx_flags(sb, nx_flags);
+	if (!(sb->s_flags & SB_RDONLY)) {
+		if (nxi->nx_flags & APFS_READWRITE) {
+			apfs_notice(sb, "experimental write support is enabled");
+		} else {
+			apfs_warn(sb, "experimental writes disabled to avoid data loss");
+			apfs_warn(sb, "if you really want them, check the README");
+			sb->s_flags |= SB_RDONLY;
+		}
+	}
+}
+
 /*
  * Many of the parse_options() functions in other file systems return 0
  * on error. This one returns an error code, and 0 on success.
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+static int parse_options(struct fs_context *fc, char *options)
+{
+    struct apfs_sb_info *sbi = fc->s_fs_info;
+#else
 static int parse_options(struct super_block *sb, char *options)
 {
 	struct apfs_sb_info *sbi = APFS_SB(sb);
-	struct apfs_nxsb_info *nxi = sbi->s_nxi;
+#endif
 	char *p;
 	substring_t args[MAX_OPT_ARGS];
 	int option;
@@ -1247,6 +1277,11 @@ static int parse_options(struct super_block *sb, char *options)
 #ifdef CONFIG_APFS_RW_ALWAYS
 	/* Still risky, but some packagers want writable mounts by default */
 	nx_flags |= APFS_READWRITE;
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	sbi->s_uid = INVALID_UID;
+	sbi->s_gid = INVALID_GID;
 #endif
 
 	if (!options)
@@ -1279,7 +1314,7 @@ static int parse_options(struct super_block *sb, char *options)
 				return err;
 			sbi->s_uid = make_kuid(current_user_ns(), option);
 			if (!uid_valid(sbi->s_uid)) {
-				apfs_err(sb, "invalid uid");
+				apfs_err(NULL, "invalid uid");
 				return -EINVAL;
 			}
 			break;
@@ -1289,7 +1324,7 @@ static int parse_options(struct super_block *sb, char *options)
 				return err;
 			sbi->s_gid = make_kgid(current_user_ns(), option);
 			if (!gid_valid(sbi->s_gid)) {
-				apfs_err(sb, "invalid gid");
+				apfs_err(NULL, "invalid gid");
 				return -EINVAL;
 			}
 			break;
@@ -1303,22 +1338,17 @@ static int parse_options(struct super_block *sb, char *options)
 			 * We should have already checked the mount options in
 			 * apfs_preparse_options(), so this is a bug.
 			 */
-			apfs_alert(sb, "invalid mount option %s", p);
+			apfs_alert(NULL, "invalid mount option %s", p);
 			return -EINVAL;
 		}
 	}
 
 out:
-	apfs_set_nx_flags(sb, nx_flags);
-	if (!(sb->s_flags & SB_RDONLY)) {
-		if (nxi->nx_flags & APFS_READWRITE) {
-			apfs_notice(sb, "experimental write support is enabled");
-		} else {
-			apfs_warn(sb, "experimental writes disabled to avoid data loss");
-			apfs_warn(sb, "if you really want them, check the README");
-			sb->s_flags |= SB_RDONLY;
-		}
-	}
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	sbi->s_mount_opt = nx_flags;
+#else
+	parse_options_set_flags(sb, sbi, nx_flags);
+#endif
 	return 0;
 }
 
@@ -1551,12 +1581,15 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 	if (err)
 		goto failed_volume;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	parse_options_set_flags(sb, sbi, sbi->s_mount_opt);
+#else
 	sbi->s_uid = INVALID_UID;
 	sbi->s_gid = INVALID_GID;
 	err = parse_options(sb, data);
 	if (err)
 		goto failed_volume;
-
+#endif
 	err = apfs_map_volume_super(sb, false /* write */);
 	if (err)
 		goto failed_volume;
@@ -1946,30 +1979,49 @@ out:
 /*
  * This function is a copy of mount_bdev() that allows multiple mounts.
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+static int apfs_test_super_fc(struct super_block *sb, struct fs_context *fc);
+static int apfs_set_super_fc(struct super_block *sb, struct fs_context *fc);
+static int apfs_get_tree(struct fs_context *fc)
+#else
 static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 				 const char *dev_name, void *data)
+#endif
 {
 	struct super_block *sb;
 	struct apfs_sb_info *sbi;
 	struct apfs_blkdev_info *bd_info = NULL, *tier2_info = NULL;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0) || RHEL_VERSION_GE(9, 4)
+	int error = 0;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	blk_mode_t mode = sb_open_mode(fc->sb_flags);
+	void *data = fc->fs_private;
+	const char *dev_name = fc->source;
+
+	sbi = fc->s_fs_info;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0) || RHEL_VERSION_GE(9, 4)
 	blk_mode_t mode = sb_open_mode(flags);
 #else
 	fmode_t mode = FMODE_READ | FMODE_EXCL;
 #endif
-	int error = 0;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 0, 0)
 	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
 	if (!sbi)
 		return ERR_PTR(-ENOMEM);
+
 	/* Set up the fields that sget() will need to id the superblock */
 	error = apfs_preparse_options(sbi, data);
 	if (error)
 		goto out_free_sbi;
+#endif
 
 	/* Make sure that snapshots are mounted read-only */
 	if (sbi->s_snap_name)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+		fc->sb_flags |= SB_RDONLY;
+#else
 		flags |= SB_RDONLY;
+#endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0) && !RHEL_VERSION_GE(9, 4)
 	if (!(flags & SB_RDONLY))
@@ -1981,7 +2033,12 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 		goto out_free_sbi;
 
 	/* TODO: lockfs stuff? Btrfs doesn't seem to care */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	fc->sb_flags |= SB_NOSEC;
+	sb = sget_fc(fc, apfs_test_super_fc, apfs_set_super_fc);
+#else
 	sb = sget(fs_type, apfs_test_super, apfs_set_super, flags | SB_NOSEC, sbi);
+#endif
 	if (IS_ERR(sb)) {
 		error = PTR_ERR(sb);
 		goto out_unmap_super;
@@ -1997,7 +2054,11 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 	WARN_ON(sb->s_dev != bd_info->blki_bdev->bd_dev);
 
 	if (sb->s_root) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+		if ((fc->sb_flags ^ sb->s_flags) & SB_RDONLY) {
+#else
 		if ((flags ^ sb->s_flags) & SB_RDONLY) {
+#endif
 			error = -EBUSY;
 			deactivate_locked_super(sb);
 			goto out_unmap_super;
@@ -2009,8 +2070,14 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 		kfree(sbi->s_tier2_path);
 		sbi->s_tier2_path = NULL;
 		kfree(sbi);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+		fc->s_fs_info = NULL;
+#endif
 		sbi = NULL;
 	} else {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+		fc->s_fs_info = NULL;
+#endif
 		if (!sbi->s_snap_name && !tier2_info)
 			snprintf(sb->s_id, sizeof(sb->s_id), "%pg:%u", bd_info->blki_bdev, sbi->s_vol_nr);
 		else if (!tier2_info)
@@ -2022,28 +2089,49 @@ static struct dentry *apfs_mount(struct file_system_type *fs_type, int flags,
 		error = apfs_read_main_super(sb);
 		if (error) {
 			deactivate_locked_super(sb);
-			return ERR_PTR(error);
+			goto out_return_error;
 		}
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0) && !RHEL_VERSION_GE(9, 4)
 		sb->s_mode = mode;
 #endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+		error = apfs_fill_super(sb, data, fc->sb_flags & SB_SILENT ? 1 : 0);
+#else
 		error = apfs_fill_super(sb, data, flags & SB_SILENT ? 1 : 0);
+#endif
 		if (error) {
 			deactivate_locked_super(sb);
-			return ERR_PTR(error);
+			goto out_return_error;
 		}
 		sb->s_flags |= SB_ACTIVE;
 	}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	fc->root = dget(sb->s_root);
+	return 0;
+#else
 	return dget(sb->s_root);
+#endif
 
 out_unmap_super:
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 0, 0)
 	apfs_free_main_super(sbi);
+#endif
 out_free_sbi:
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	return error;
+#else
 	kfree(sbi->s_snap_name);
 	kfree(sbi->s_tier2_path);
 	kfree(sbi);
+#endif
+out_return_error:
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	return error;
+#else
 	return ERR_PTR(error);
+#endif
 }
 
 /**
@@ -2091,10 +2179,77 @@ static void apfs_kill_sb(struct super_block *sb)
 	apfs_free_sb_info(sb);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+static int apfs_test_super_fc(struct super_block *sb, struct fs_context *fc)
+{
+	return apfs_test_super(sb, fc->s_fs_info);
+}
+
+static int apfs_set_super_fc(struct super_block *sb, struct fs_context *fc)
+{
+	return apfs_set_super(sb, fc->s_fs_info);
+}
+
+static int apfs_reconfigure(struct fs_context *fc)
+{
+	struct super_block *sb = fc->root->d_sb;
+	int flags = fc->sb_flags;
+
+	return apfs_remount(sb, &flags, fc->fs_private);
+}
+
+static void apfs_free_fc(struct fs_context *fc)
+{
+	struct apfs_sb_info *sbi = fc->s_fs_info;
+
+	if (sbi) {
+		apfs_free_main_super(sbi);
+		kfree(sbi->s_snap_name);
+		kfree(sbi->s_tier2_path);
+		kfree(sbi);
+	}
+}
+
+static int apfs_parse_monolithic(struct fs_context *fc, void *data)
+{
+	struct apfs_sb_info *sbi = fc->s_fs_info;
+	int result = apfs_preparse_options(sbi, data);
+
+	if (result)
+		return result;
+	return parse_options(fc, data);
+}
+
+static const struct fs_context_operations apfs_context_ops = {
+	.get_tree    = apfs_get_tree,
+	.reconfigure = apfs_reconfigure,
+	.free        = apfs_free_fc,
+	.parse_monolithic = apfs_parse_monolithic,
+};
+
+static int apfs_init_fs_context(struct fs_context *fc)
+{
+	struct apfs_sb_info *sbi;
+
+	/* Setup happens here now instead of the top of apfs_mount */
+	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
+	if (!sbi)
+		return -ENOMEM;
+
+	fc->s_fs_info = sbi;
+	fc->ops = &apfs_context_ops;
+	return 0;
+}
+#endif /* LINUX_VERSION_CODE >= 7.0.0 */
+
 static struct file_system_type apfs_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "apfs",
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 0, 0)
 	.mount		= apfs_mount,
+#else
+	.init_fs_context = apfs_init_fs_context,
+#endif
 	.kill_sb	= apfs_kill_sb,
 	.fs_flags	= FS_REQUIRES_DEV,
 };

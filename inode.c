@@ -2109,7 +2109,9 @@ fail:
 }
 
 /* TODO: this only seems to be necessary because ->write_inode() isn't firing */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+int apfs_update_time(struct inode *inode, enum fs_update_time time, unsigned int flags)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 int apfs_update_time(struct inode *inode, struct timespec64 *time, int flags)
 #else
 int apfs_update_time(struct inode *inode, int flags)
@@ -2123,7 +2125,7 @@ int apfs_update_time(struct inode *inode, int flags)
 		return err;
 	apfs_inode_join_transaction(sb, inode);
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0) && !RHEL_VERSION_GE(9, 6)
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0) || LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)) && !RHEL_VERSION_GE(9, 6)
 	generic_update_time(inode, time, flags);
 #else
 	generic_update_time(inode, flags);

@@ -380,6 +380,9 @@ struct apfs_sb_info {
 	unsigned int s_vol_nr;		/* Index of the volume in the sb list */
 	kuid_t s_uid;			/* uid to override on-disk uid */
 	kgid_t s_gid;			/* gid to override on-disk gid */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	unsigned int s_mount_opt;
+#endif
 
 	struct apfs_crypto_state_val *s_dflt_pfk; /* default per-file key */
 
@@ -1040,7 +1043,9 @@ extern int apfs_setattr(struct mnt_idmap *idmap,
 			struct dentry *dentry, struct iattr *iattr);
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+extern int apfs_update_time(struct inode *inode, enum fs_update_time time, unsigned int flags);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 extern int apfs_update_time(struct inode *inode, struct timespec64 *time, int flags);
 #else
 extern int apfs_update_time(struct inode *inode, int flags);
