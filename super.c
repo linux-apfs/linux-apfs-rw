@@ -1235,7 +1235,7 @@ static void apfs_set_nx_flags(struct super_block *sb, unsigned int flags)
 	mutex_unlock(&nxs_mutex);
 }
 
-void parse_options_set_flags(struct super_block *sb, struct apfs_sb_info *sbi,
+static void parse_options_set_flags(struct super_block *sb, struct apfs_sb_info *sbi,
 		unsigned int nx_flags)
 {
 	struct apfs_nxsb_info *nxi = sbi->s_nxi;

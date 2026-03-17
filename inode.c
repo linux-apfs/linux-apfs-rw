@@ -2125,7 +2125,9 @@ int apfs_update_time(struct inode *inode, int flags)
 		return err;
 	apfs_inode_join_transaction(sb, inode);
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0) || LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)) && !RHEL_VERSION_GE(9, 6)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	generic_update_time(inode, time, flags);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0) && !RHEL_VERSION_GE(9, 6)
 	generic_update_time(inode, time, flags);
 #else
 	generic_update_time(inode, flags);
