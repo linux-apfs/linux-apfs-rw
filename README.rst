@@ -57,10 +57,15 @@ Now you can just cd to the linux-apfs-rw directory and run::
 	make
 
 The resulting module is the apfs.ko file. Before you can use it you must insert
-it into the kernel, as well as its dependencies. Again as root::
+it into the kernel. Again as root::
+
+	insmod apfs.ko
+
+If you get an "unknown symbol in module" error, run::
 
 	modprobe libcrc32c
-	insmod apfs.ko
+
+and then try the insmod command again.
 
 Mount
 =====
