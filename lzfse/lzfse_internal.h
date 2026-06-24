@@ -70,7 +70,9 @@ typedef int64_t lzfse_offset;
 typedef int32_t lzfse_offset;
 #endif
 
+#if !defined(__APPLE__) || !defined(__MACH__)
 typedef uint64_t uintmax_t;
+#endif
 
 /*! @abstract Decoder state object for lzfse compressed blocks. */
 typedef struct {
