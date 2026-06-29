@@ -721,8 +721,13 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		clear_buffer_dirty(bh);
 		get_bh(bh);
 		lock_buffer(bh);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)
 		bh->b_end_io = end_buffer_write_sync;
 		apfs_submit_bh(REQ_OP_WRITE, REQ_SYNC, bh);
+#else
+		bh_submit(bh, REQ_OP_WRITE | REQ_SYNC, bh_end_write);
+#endif
+
 	}
 	list_for_each_entry_safe(bhi, tmp, &nx_trans->t_buffers, list) {
 		struct buffer_head *bh = bhi->bh;

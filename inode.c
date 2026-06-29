@@ -556,8 +556,12 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 			if (buffer_mapped(bh) && !buffer_uptodate(bh)) {
 				get_bh(bh);
 				lock_buffer(bh);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)
 				bh->b_end_io = end_buffer_read_sync;
 				apfs_submit_bh(REQ_OP_READ, 0, bh);
+#else
+				bh_submit(bh, REQ_OP_READ, bh_end_read);
+#endif
 				wait_on_buffer(bh);
 				if (!buffer_uptodate(bh)) {
 					apfs_err(sb, "failed to read block for ino 0x%llx", apfs_ino(inode));

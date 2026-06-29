@@ -2298,8 +2298,12 @@ int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *buf, si
 		if (!buffer_uptodate(bh)) {
 			get_bh(bh);
 			lock_buffer(bh);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)
 			bh->b_end_io = end_buffer_read_sync;
 			apfs_submit_bh(REQ_OP_READ, 0, bh);
+#else
+			bh_submit(bh, REQ_OP_READ, bh_end_read);
+#endif
 		}
 	}
 
@@ -2365,8 +2369,12 @@ void apfs_nonsparse_dstream_preread(struct apfs_dstream_info *dstream)
 		if (!buffer_uptodate(bh)) {
 			get_bh(bh);
 			lock_buffer(bh);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)
 			bh->b_end_io = end_buffer_read_sync;
 			apfs_submit_bh(REQ_OP_READ, 0, bh);
+#else
+			bh_submit(bh, REQ_OP_READ, bh_end_read);
+#endif
 		}
 		brelse(bh);
 		bh = NULL;
