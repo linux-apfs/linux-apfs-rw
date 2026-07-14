@@ -2298,7 +2298,6 @@ int apfs_nonsparse_dstream_read(struct apfs_dstream_info *dstream, void *buf, si
 		if (!buffer_uptodate(bh)) {
 			get_bh(bh);
 			lock_buffer(bh);
-			bh->b_end_io = end_buffer_read_sync;
 			apfs_submit_bh(REQ_OP_READ, 0, bh);
 		}
 	}
@@ -2365,7 +2364,6 @@ void apfs_nonsparse_dstream_preread(struct apfs_dstream_info *dstream)
 		if (!buffer_uptodate(bh)) {
 			get_bh(bh);
 			lock_buffer(bh);
-			bh->b_end_io = end_buffer_read_sync;
 			apfs_submit_bh(REQ_OP_READ, 0, bh);
 		}
 		brelse(bh);

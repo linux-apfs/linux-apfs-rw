@@ -44,10 +44,32 @@ static inline bool sb_rdonly(const struct super_block *sb) { return sb->s_flags 
 #endif
 
 /* Compatibility wrapper around submit_bh() */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0) || RHEL_VERSION_GE(9, 2)
-#define apfs_submit_bh(op, op_flags, bh) submit_bh(op | op_flags, bh)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 2, 0)
+#define apfs_submit_bh(op, op_flags, bh)				\
+do {									\
+	if (op == REQ_OP_READ)						\
+		bh_submit(bh, op | op_flags, bh_end_read);		\
+	else								\
+		bh_submit(bh, op | op_flags, bh_end_write);		\
+} while (0)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0) || RHEL_VERSION_GE(9, 2)
+#define apfs_submit_bh(op, op_flags, bh)				\
+do {									\
+	if (op == REQ_OP_READ)						\
+		bh->b_end_io = end_buffer_read_sync;			\
+	else								\
+		bh->b_end_io = end_buffer_write_sync;			\
+	submit_bh(op | op_flags, bh);					\
+} while (0)
 #else
-#define apfs_submit_bh(op, op_flags, bh) submit_bh(op, op_flags, bh)
+#define apfs_submit_bh(op, op_flags, bh)				\
+do {									\
+	if (op == REQ_OP_READ)						\
+		bh->b_end_io = end_buffer_read_sync;			\
+	else								\
+		bh->b_end_io = end_buffer_write_sync;			\
+	submit_bh(op, op_flags, bh);					\
+} while (0)
 #endif
 
 /*

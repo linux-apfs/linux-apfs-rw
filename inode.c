@@ -556,7 +556,6 @@ int __apfs_write_begin(struct file *file, struct address_space *mapping, loff_t 
 			if (buffer_mapped(bh) && !buffer_uptodate(bh)) {
 				get_bh(bh);
 				lock_buffer(bh);
-				bh->b_end_io = end_buffer_read_sync;
 				apfs_submit_bh(REQ_OP_READ, 0, bh);
 				wait_on_buffer(bh);
 				if (!buffer_uptodate(bh)) {
