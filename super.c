@@ -343,8 +343,8 @@ static int apfs_read_main_super(struct super_block *sb)
 	xid = le64_to_cpu(msb_raw->nx_o.o_xid);
 	for (i = 0; i < desc_blocks; ++i) {
 		struct apfs_nx_superblock *desc_raw;
+		bool ignore;
 
-		brelse(desc_bh);
 		desc_bh = apfs_sb_bread(sb, desc_base + i);
 		if (!desc_bh) {
 			apfs_err(sb, "unable to read checkpoint descriptor");
@@ -352,18 +352,24 @@ static int apfs_read_main_super(struct super_block *sb)
 		}
 		desc_raw = (struct apfs_nx_superblock *)desc_bh->b_data;
 
+		ignore = false;
 		if (le32_to_cpu(desc_raw->nx_magic) != APFS_NX_MAGIC)
-			continue; /* Not a superblock */
+			ignore = true; /* Not a superblock */
 		if (le64_to_cpu(desc_raw->nx_o.o_xid) <= xid)
-			continue; /* Old */
+			ignore = true; /* Old */
 		if (!apfs_obj_verify_csum(sb, desc_bh))
-			continue; /* Corrupted */
+			ignore = true; /* Corrupted */
 
-		xid = le64_to_cpu(desc_raw->nx_o.o_xid);
-		msb_raw = desc_raw;
-		bno = desc_base + i;
-		brelse(bh);
-		bh = desc_bh;
+		if (ignore) {
+			brelse(desc_bh);
+		} else {
+			xid = le64_to_cpu(desc_raw->nx_o.o_xid);
+			msb_raw = desc_raw;
+			bno = desc_base + i;
+			brelse(bh);
+			bh = desc_bh;
+		}
+		desc_raw = NULL;
 		desc_bh = NULL;
 	}
 
