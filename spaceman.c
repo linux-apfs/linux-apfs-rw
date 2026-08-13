@@ -308,6 +308,7 @@ static int apfs_write_single_ip_bitmap(struct super_block *sb, char *bitmap, u32
 	err = apfs_transaction_join(sb, bh);
 	if (err)
 		goto fail;
+	put_bh(bh);
 	bh = NULL;
 
 	spaceman->sm_ip_bmaps[idx].dirty = false;
