@@ -640,6 +640,9 @@ static int apfs_write_ephemeral_objects(struct super_block *sb)
 		}
 		data_len += obj_blkcnt;
 	}
+	brelse(cpm_bh);
+	cpm = NULL;
+	cpm_bh = NULL;
 
 	/*
 	 * The checkpoint superblock can't be set until the very end of the
