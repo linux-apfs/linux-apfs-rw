@@ -47,6 +47,7 @@ static inline bool sb_rdonly(const struct super_block *sb) { return sb->s_flags 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 2, 0)
 #define apfs_submit_bh(op, op_flags, bh)				\
 do {									\
+	put_bh(bh);							\
 	if (op == REQ_OP_READ)						\
 		bh_submit(bh, op | op_flags, bh_end_read);		\
 	else								\
