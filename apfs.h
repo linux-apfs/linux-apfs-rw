@@ -1181,6 +1181,7 @@ extern int apfs_transaction_flush_all_inodes(struct super_block *sb);
 extern int apfs_read_ephemeral_objects(struct super_block *sb);
 
 /* xattr.c */
+extern int apfs_xattr_get(struct inode *inode, const char *name, void *buffer, size_t size);
 extern int ____apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 			      size_t size, bool only_whole);
 extern int __apfs_xattr_get(struct inode *inode, const char *name, void *buffer,

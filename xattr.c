@@ -375,7 +375,7 @@ done:
  * Returns the number of bytes used/required, or a negative error code in case
  * of failure.
  */
-static int apfs_xattr_get(struct inode *inode, const char *name, void *buffer, size_t size)
+int apfs_xattr_get(struct inode *inode, const char *name, void *buffer, size_t size)
 {
 	struct apfs_nxsb_info *nxi = APFS_NXI(inode->i_sb);
 	int ret;

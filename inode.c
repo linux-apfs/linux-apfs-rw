@@ -1075,14 +1075,53 @@ fail:
 	return ERR_PTR(err);
 }
 
+/**
+ * apfs_symlink_fillattr - Fill any symlink-specific fields of kstat
+ * @inode:	inode to stat
+ * @stat:	kstat struct to fill
+ *
+ * The size of a symlink in POSIX is the length of the target path, but we
+ * don't use that as i_size because it's awkward to retrieve from disk. Instead
+ * we must call this function whenever file status is requested.
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_symlink_fillattr(struct inode *inode, struct kstat *stat)
+{
+	struct super_block *sb = NULL;
+	int size;
+
+	if (!S_ISLNK(inode->i_mode))
+		return 0;
+
+	sb = inode->i_sb;
+	size = apfs_xattr_get(inode, APFS_XATTR_NAME_SYMLINK, NULL /* buffer */, 0 /* size */);
+	if (size < 0) {
+		apfs_err(sb, "symlink size read failed");
+		return size;
+	}
+	if (size == 0) {
+		apfs_err(sb, "empty link target in inode 0x%llx", apfs_ino(inode));
+		return -EFSCORRUPTED;
+	}
+	stat->size = size - 1;
+	return 0;
+}
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0) /* No statx yet... */
 
 int apfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		 struct kstat *stat)
 {
 	struct inode *inode = d_inode(dentry);
+	int err;
 
 	generic_fillattr(inode, stat);
+
+	err = apfs_symlink_fillattr(inode, stat);
+	if (err)
+		return err;
+
 	stat->dev = APFS_SB(inode->i_sb)->s_anon_dev;
 	stat->ino = apfs_ino(inode);
 	return 0;
@@ -1105,6 +1144,7 @@ int apfs_getattr(struct mnt_idmap *idmap,
 {
 	struct inode *inode = d_inode(path->dentry);
 	struct apfs_inode_info *ai = APFS_I(inode);
+	int err;
 
 	stat->result_mask |= STATX_BTIME;
 	stat->btime = ai->i_crtime;
@@ -1132,6 +1172,10 @@ int apfs_getattr(struct mnt_idmap *idmap,
 #else
 	generic_fillattr(idmap, request_mask, inode, stat);
 #endif
+
+	err = apfs_symlink_fillattr(inode, stat);
+	if (err)
+		return err;
 
 	stat->dev = APFS_SB(inode->i_sb)->s_anon_dev;
 	stat->ino = apfs_ino(inode);
