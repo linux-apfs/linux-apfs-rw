@@ -1699,6 +1699,13 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_xattr = apfs_xattr_handlers;
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_time_gran = 1; /* Nanosecond granularity */
+	/*
+	 * Without the "+1" and "-1", timespec64_to_ns() would make up extra
+	 * nanoseconds after the final second. I don't mind either way but
+	 * generic/634 of xfstests would break.
+	 */
+	sb->s_time_min = (S64_MIN / NSEC_PER_SEC) + 1;
+	sb->s_time_max = (S64_MAX / NSEC_PER_SEC) - 1;
 
 	/*
 	 * At this point everything is already set up for the inode reads,
