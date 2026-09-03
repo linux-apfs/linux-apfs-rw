@@ -2255,6 +2255,12 @@ static int __init init_apfs_fs(void)
 {
 	int err = 0;
 
+	/*
+	 * The driver has only been tested with a page size of 4 KiB, and I
+	 * would be shocked if other page sizes don't cause serious problems.
+	 */
+	BUILD_BUG_ON(PAGE_SIZE != 4096);
+
 	err = init_inodecache();
 	if (err)
 		return err;
