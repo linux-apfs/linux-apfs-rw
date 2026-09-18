@@ -1262,6 +1262,8 @@ static void parse_options_set_flags(struct super_block *sb, struct apfs_sb_info 
 
 	apfs_set_nx_flags(sb, nx_flags);
 	if (!(sb->s_flags & SB_RDONLY)) {
+		if (PAGE_SIZE != 4096)
+			apfs_warn(sb, "your system's page size (%lu) is untested for writes\n", PAGE_SIZE);
 		if (nxi->nx_flags & APFS_READWRITE) {
 			apfs_notice(sb, "experimental write support is enabled");
 		} else {
@@ -2254,12 +2256,6 @@ MODULE_ALIAS_FS("apfs");
 static int __init init_apfs_fs(void)
 {
 	int err = 0;
-
-	/*
-	 * The driver has only been tested with a page size of 4 KiB, and I
-	 * would be shocked if other page sizes don't cause serious problems.
-	 */
-	BUILD_BUG_ON(PAGE_SIZE != 4096);
 
 	err = init_inodecache();
 	if (err)

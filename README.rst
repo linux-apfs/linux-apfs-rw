@@ -90,7 +90,7 @@ cknodes	       Verify the checksum on all metadata nodes. Right now this has a
 	       severe performance cost, so it's not recommended.
 
 readwrite      Enable the experimental write support. This may corrupt your
-	       container.
+	       container, especially if your kernel doesn't use 4 KiB pages.
 ============   =================================================================
 
 So for instance, if you want to mount volume number 2, and you want the metadata
