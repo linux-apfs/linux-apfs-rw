@@ -758,10 +758,18 @@ int apfs_create(struct user_namespace *mnt_userns, struct inode *dir,
 	return apfs_mknod(mnt_userns, dir, dentry, mode, 0 /* rdev */);
 }
 
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
 
 int apfs_create(struct mnt_idmap *idmap, struct inode *dir,
 		struct dentry *dentry, umode_t mode, bool excl)
+{
+	return apfs_mknod(idmap, dir, dentry, mode, 0 /* rdev */);
+}
+
+#else
+
+int apfs_create(struct mnt_idmap *idmap, struct inode *dir,
+		struct dentry *dentry, umode_t mode)
 {
 	return apfs_mknod(idmap, dir, dentry, mode, 0 /* rdev */);
 }
