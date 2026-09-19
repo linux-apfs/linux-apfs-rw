@@ -1263,7 +1263,7 @@ static void parse_options_set_flags(struct super_block *sb, struct apfs_sb_info 
 	apfs_set_nx_flags(sb, nx_flags);
 	if (!(sb->s_flags & SB_RDONLY)) {
 		if (PAGE_SIZE != 4096)
-			apfs_warn(sb, "your system's page size (%lu) is untested for writes\n", PAGE_SIZE);
+			apfs_warn(sb, "your system's page size (%lu) is untested for writes", PAGE_SIZE);
 		if (nxi->nx_flags & APFS_READWRITE) {
 			apfs_notice(sb, "experimental write support is enabled");
 		} else {
