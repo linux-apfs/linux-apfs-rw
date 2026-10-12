@@ -1234,6 +1234,7 @@ static int apfs_build_inode_val(struct inode *inode, const struct qstr *qname,
 	val->owner = cpu_to_le32(i_uid_read(inode));
 	val->group = cpu_to_le32(i_gid_read(inode));
 	val->mode = cpu_to_le16(inode->i_mode);
+	val->internal_flags = cpu_to_le64(APFS_I(inode)->i_int_flags);
 
 	/* The buffer was just allocated: none of these functions should fail */
 	apfs_init_xfields(val->xfields, total_xlen);
