@@ -1356,7 +1356,7 @@ __apfs_getblk(struct super_block *sb, sector_t block)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0) && !RHEL_VERSION_GE(9, 8)
 	return __getblk_gfp(info->blki_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
 #else
-	return bdev_getblk(info->blki_bdev, block, sb->s_blocksize, __GFP_MOVABLE);
+	return __getblk(info->blki_bdev, block, sb->s_blocksize);
 #endif
 }
 
