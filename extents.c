@@ -1396,7 +1396,7 @@ static int apfs_dstream_get_new_block(struct apfs_dstream_info *dstream, u64 dsb
 	}
 
 	dstream_blks = apfs_size_to_blocks(sb, dstream->ds_size);
-	if (dstream_blks < dsblock) {
+	if (dstream_blks <= dsblock) {
 		/*
 		 * This recurses into apfs_dstream_get_new_block() and dirties
 		 * the extent cache, so it must happen before flushing it.
