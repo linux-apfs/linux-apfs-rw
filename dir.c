@@ -418,15 +418,15 @@ fail:
 /**
  * apfs_build_sibling_val - Allocate and initialize a sibling link's value
  * @dentry:	in-memory dentry for this hardlink
+ * @qname:	name for the hardlink
  * @val_p:	on return, a pointer to the new on-disk value structure
  *
  * Returns the length of the value, or a negative error code in case of failure.
  */
-static int apfs_build_sibling_val(struct dentry *dentry,
+static int apfs_build_sibling_val(struct dentry *dentry, const struct qstr *qname,
 				  struct apfs_sibling_val **val_p)
 {
 	struct apfs_sibling_val *val;
-	const struct qstr *qname = &dentry->d_name;
 	u16 namelen = qname->len + 1; /* We count the null-termination */
 	struct inode *parent = d_inode(dentry->d_parent);
 	int val_len;
@@ -447,12 +447,13 @@ static int apfs_build_sibling_val(struct dentry *dentry,
 /**
  * apfs_create_sibling_link_rec - Create a sibling link record for a dentry
  * @dentry:	the in-memory dentry
+ * @qname:	name for the hardlink
  * @inode:	vfs inode for the dentry
  * @sibling_id:	sibling id for this hardlink
  *
  * Returns 0 on success or a negative error code in case of failure.
  */
-static int apfs_create_sibling_link_rec(struct dentry *dentry,
+static int apfs_create_sibling_link_rec(struct dentry *dentry, const struct qstr *qname,
 					struct inode *inode, u64 sibling_id)
 {
 	struct super_block *sb = dentry->d_sb;
@@ -477,7 +478,7 @@ static int apfs_create_sibling_link_rec(struct dentry *dentry,
 
 	apfs_key_set_hdr(APFS_TYPE_SIBLING_LINK, apfs_ino(inode), &raw_key);
 	raw_key.sibling_id = cpu_to_le64(sibling_id);
-	val_len = apfs_build_sibling_val(dentry, &raw_val);
+	val_len = apfs_build_sibling_val(dentry, qname, &raw_val);
 	if (val_len < 0)
 		goto fail;
 
@@ -536,12 +537,13 @@ fail:
 /**
  * apfs_create_sibling_recs - Create sibling link and map records for a dentry
  * @dentry:	the in-memory dentry
+ * @qname:	name for the hardlink
  * @inode:	vfs inode for the dentry
  * @sibling_id:	on return, the sibling id for this hardlink
  *
  * Returns 0 on success or a negative error code in case of failure.
  */
-static int apfs_create_sibling_recs(struct dentry *dentry,
+static int apfs_create_sibling_recs(struct dentry *dentry, const struct qstr *qname,
 				    struct inode *inode, u64 *sibling_id)
 {
 	struct super_block *sb = dentry->d_sb;
@@ -554,7 +556,7 @@ static int apfs_create_sibling_recs(struct dentry *dentry,
 	cnid = le64_to_cpu(vsb_raw->apfs_next_obj_id);
 	le64_add_cpu(&vsb_raw->apfs_next_obj_id, 1);
 
-	ret = apfs_create_sibling_link_rec(dentry, inode, cnid);
+	ret = apfs_create_sibling_link_rec(dentry, qname, inode, cnid);
 	if (ret)
 		return ret;
 	ret = apfs_create_sibling_map_rec(dentry, inode, cnid);
@@ -583,7 +585,7 @@ static int apfs_create_dentry(struct dentry *dentry, struct inode *inode)
 
 	if (inode->i_nlink > 1) {
 		/* This is optional for a single link, so don't waste space */
-		err = apfs_create_sibling_recs(dentry, inode, &sibling_id);
+		err = apfs_create_sibling_recs(dentry, &dentry->d_name, inode, &sibling_id);
 		if (err) {
 			apfs_err(sb, "failed to create sibling recs for ino 0x%llx", apfs_ino(inode));
 			return err;
@@ -789,6 +791,8 @@ static int apfs_prepare_dentry_for_link(struct dentry *dentry)
 	struct super_block *sb = parent->i_sb;
 	struct apfs_query *query;
 	struct apfs_drec drec;
+	struct qstr qname;
+	char *name;
 	u64 sibling_id;
 	int ret;
 
@@ -803,21 +807,34 @@ static int apfs_prepare_dentry_for_link(struct dentry *dentry)
 		return 0;
 	}
 
+	/*
+	 * Keep the name from the record: on case-insensitive volumes the lookup
+	 * may have used a different case, and the inode still has the old name.
+	 */
+	name = kmemdup_nul(drec.name, drec.name_len, GFP_KERNEL);
+	if (!name) {
+		apfs_free_query(query);
+		return -ENOMEM;
+	}
+	qname = (struct qstr)QSTR_INIT(name, drec.name_len);
+
 	/* Don't modify the dentry record, just delete it to make a new one */
 	ret = apfs_btree_remove(query);
 	apfs_free_query(query);
 	if (ret) {
 		apfs_err(sb, "removal failed in dir 0x%llx", apfs_ino(parent));
-		return ret;
+		goto out;
 	}
 
-	ret = apfs_create_sibling_recs(dentry, d_inode(dentry), &sibling_id);
+	ret = apfs_create_sibling_recs(dentry, &qname, d_inode(dentry), &sibling_id);
 	if (ret) {
 		apfs_err(sb, "failed to create sibling recs in dir 0x%llx", apfs_ino(parent));
-		return ret;
+		goto out;
 	}
-	return apfs_create_dentry_rec(d_inode(dentry), &dentry->d_name,
-				      apfs_ino(parent), sibling_id);
+	ret = apfs_create_dentry_rec(d_inode(dentry), &qname, apfs_ino(parent), sibling_id);
+out:
+	kfree(name);
+	return ret;
 }
 
 /**
