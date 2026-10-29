@@ -817,24 +817,31 @@ static int apfs_xattr_osx_set(const struct xattr_handler *handler,
 #endif
 {
 	struct super_block *sb = inode->i_sb;
-	int err;
+	int err, ret;
 
-	err = apfs_transaction_start(sb, value ? APFS_TRANS_REG : APFS_TRANS_DEL);
-	if (err)
-		return err;
+	ret = apfs_transaction_start(sb, value ? APFS_TRANS_REG : APFS_TRANS_DEL);
+	if (ret)
+		return ret;
 
 	/* Ignore the fake 'osx' prefix */
-	err = apfs_xattr_set(inode, name, value, size, flags);
-	if (err)
-		goto fail;
+	ret = apfs_xattr_set(inode, name, value, size, flags);
+	if (ret) {
+		/*
+		 * No need to abort the transaction when the user tries to
+		 * replace (or delete) a xattr that doesn't exist.
+		 */
+		if (!(flags & XATTR_REPLACE && ret == -ENODATA))
+			goto fail;
+	}
 
 	err = apfs_transaction_commit(sb);
 	if (!err)
-		return 0;
+		return ret;
+	ret = err;
 
 fail:
 	apfs_transaction_abort(sb);
-	return err;
+	return ret;
 }
 
 static const struct xattr_handler apfs_xattr_osx_handler = {
