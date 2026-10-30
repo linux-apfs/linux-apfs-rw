@@ -712,15 +712,15 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 	int key_len, val_len;
 	struct apfs_xattr_key *raw_key = NULL;
 	struct apfs_xattr_val *raw_val = NULL;
-	struct apfs_dstream_info *dstream = NULL;
-	struct apfs_dstream_info *old_dstream = NULL;
+	struct apfs_dstream_info *valid_dstream = NULL;
+	struct apfs_dstream_info *bad_dstream = NULL;
 	int ret;
 
 	if (size > APFS_XATTR_MAX_EMBEDDED_SIZE) {
-		dstream = apfs_create_xattr_dstream(sb, value, size);
-		if (IS_ERR(dstream)) {
+		valid_dstream = apfs_create_xattr_dstream(sb, value, size);
+		if (IS_ERR(valid_dstream)) {
 			apfs_err(sb, "failed to set xattr dstream for ino 0x%llx", apfs_ino(inode));
-			return PTR_ERR(dstream);
+			return PTR_ERR(valid_dstream);
 		}
 	}
 
@@ -738,9 +738,13 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 			apfs_err(sb, "query failed for id 0x%llx (%s)", cnid, name);
 			goto done;
 		} else if (flags & XATTR_REPLACE) {
+			bad_dstream = valid_dstream;
+			valid_dstream = NULL;
 			goto done;
 		}
 	} else if (flags & XATTR_CREATE) {
+		bad_dstream = valid_dstream;
+		valid_dstream = NULL;
 		ret = -EEXIST;
 		goto done;
 	} else if (!value) {
@@ -750,7 +754,7 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 		goto done;
 	} else {
 		/* Remember the old dstream to clean it up later */
-		ret = apfs_xattr_dstream_from_query(query, &old_dstream);
+		ret = apfs_xattr_dstream_from_query(query, &bad_dstream);
 		if (ret) {
 			apfs_err(sb, "failed to get the old dstream");
 			goto done;
@@ -763,8 +767,8 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 		goto done;
 	}
 
-	if (dstream)
-		val_len = apfs_build_dstream_xattr_val(dstream, &raw_val);
+	if (valid_dstream)
+		val_len = apfs_build_dstream_xattr_val(valid_dstream, &raw_val);
 	else
 		val_len = apfs_build_inline_xattr_val(value, size, &raw_val);
 	if (val_len < 0) {
@@ -785,15 +789,14 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 		goto done;
 	}
 
-	if (old_dstream) {
-		ret = apfs_truncate(old_dstream, 0);
-		if (ret)
-			apfs_err(sb, "truncation failed for dstream 0x%llx", old_dstream->ds_id);
-	}
-
 done:
-	kfree(dstream);
-	kfree(old_dstream);
+	kfree(valid_dstream);
+	if (bad_dstream) {
+		ret = apfs_truncate(bad_dstream, 0);
+		if (ret)
+			apfs_err(sb, "truncation failed for dstream 0x%llx", bad_dstream->ds_id);
+		kfree(bad_dstream);
+	}
 	kfree(raw_val);
 	kfree(raw_key);
 	apfs_free_query(query);
