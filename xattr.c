@@ -826,11 +826,8 @@ static int apfs_xattr_osx_set(const struct xattr_handler *handler,
 	/* Ignore the fake 'osx' prefix */
 	ret = apfs_xattr_set(inode, name, value, size, flags);
 	if (ret) {
-		/*
-		 * No need to abort the transaction when the user tries to
-		 * replace (or delete) a xattr that doesn't exist.
-		 */
-		if (!(flags & XATTR_REPLACE && ret == -ENODATA))
+		/* Don't abort after normal errors requested by the user */
+		if (!(flags & XATTR_REPLACE && ret == -ENODATA) && !(flags & XATTR_CREATE && ret == -EEXIST))
 			goto fail;
 	}
 
