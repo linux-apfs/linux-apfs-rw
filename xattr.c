@@ -714,7 +714,7 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 	struct apfs_xattr_val *raw_val = NULL;
 	struct apfs_dstream_info *valid_dstream = NULL;
 	struct apfs_dstream_info *bad_dstream = NULL;
-	int ret;
+	int ret, cleanup_err;
 
 	if (size > APFS_XATTR_MAX_EMBEDDED_SIZE) {
 		valid_dstream = apfs_create_xattr_dstream(sb, value, size);
@@ -792,9 +792,11 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 done:
 	kfree(valid_dstream);
 	if (bad_dstream) {
-		ret = apfs_truncate(bad_dstream, 0);
-		if (ret)
+		cleanup_err = apfs_truncate(bad_dstream, 0);
+		if (cleanup_err) {
+			ret = cleanup_err;
 			apfs_err(sb, "truncation failed for dstream 0x%llx", bad_dstream->ds_id);
+		}
 		kfree(bad_dstream);
 	}
 	kfree(raw_val);
