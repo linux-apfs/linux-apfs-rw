@@ -863,7 +863,8 @@ static int apfs_inode_from_query(struct apfs_query *query, struct inode *inode)
 			struct apfs_dstream *dstream_raw = (struct apfs_dstream *)xval;
 
 			dstream->ds_size = inode->i_size = le64_to_cpu(dstream_raw->size);
-			inode->i_blocks = le64_to_cpu(dstream_raw->alloced_size) >> 9;
+			dstream->ds_alloced_size = le64_to_cpu(dstream_raw->alloced_size);
+			inode->i_blocks = dstream->ds_alloced_size >> 9;
 			ai->i_has_dstream = true;
 		}
 	}
@@ -1017,6 +1018,67 @@ fail:
 }
 
 /**
+ * apfs_inode_trim_overallocation - Get rid of overallocated tail extent if any
+ * @inode:	inode to trim
+ *
+ * Truncates the allocated inode size to match the number of blocks needed, in
+ * case the official driver overallocated in the tail extent. Returns 0 on
+ * success and a negative error code in case of failure.
+ */
+static int apfs_inode_trim_overallocation(struct inode *inode)
+{
+	struct super_block *sb = NULL;
+	struct apfs_inode_info *ai = NULL;
+	struct apfs_dstream_info *dstream = NULL;
+	int err;
+
+	if (!S_ISREG(inode->i_mode))
+		return 0;
+
+	sb = inode->i_sb;
+	/* The overallocation issues we want to prevent only affect writes */
+	if (sb->s_flags & SB_RDONLY)
+		return 0;
+
+	/*
+	 * I don't know if compressed files get overallocated or not, but we
+	 * never write to them either way.
+	 */
+	ai = APFS_I(inode);
+	if (ai->i_bsd_flags & APFS_INOBSD_COMPRESSED)
+		return 0;
+
+	dstream = &ai->i_dstream;
+	if (dstream->ds_alloced_size == apfs_alloced_size(dstream)) {
+		/* No overallocation */
+		return 0;
+	}
+	if (dstream->ds_alloced_size < apfs_alloced_size(dstream)) {
+		apfs_err(sb, "bad alloced size (%llu < %llu) for inode 0x%llx", dstream->ds_alloced_size, apfs_alloced_size(dstream), apfs_ino(inode));
+		return -EFSCORRUPTED;
+	}
+
+	/* The dstream is overallocated, so trim it */
+	err = apfs_transaction_start(sb, APFS_TRANS_DEL);
+	if (err)
+		return err;
+	apfs_inode_join_transaction(sb, inode);
+	err = apfs_truncate(dstream, dstream->ds_size);
+	if (err) {
+		apfs_err(sb, "truncation failed for overallocated ino 0x%llx", apfs_ino(inode));
+		goto fail;
+	}
+	err = apfs_transaction_commit(sb);
+	if (err)
+		goto fail;
+	return 0;
+
+fail:
+	apfs_transaction_abort(sb);
+	return err;
+}
+
+/**
  * apfs_iget - Populate inode structures with metadata from disk
  * @sb:		filesystem superblock
  * @cnid:	inode number
@@ -1064,6 +1126,17 @@ struct inode *apfs_iget(struct super_block *sb, u64 cnid)
 		inode->i_uid = sbi->s_uid;
 	if (gid_valid(sbi->s_gid))
 		inode->i_gid = sbi->s_gid;
+
+	/*
+	 * The official driver sometimes overallocates in the tail extent. This
+	 * driver does CoW on every write so the overallocation is useless for
+	 * us and it would be tricky to handle correcty; get rid of it.
+	 */
+	err = apfs_inode_trim_overallocation(inode);
+	if (err) {
+		iget_failed(inode);
+		return ERR_PTR(err);
+	}
 
 	/* Inode flags are not important for now, leave them at 0 */
 	unlock_new_inode(inode);

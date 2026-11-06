@@ -792,6 +792,7 @@ struct apfs_dstream_info {
 	u64			ds_id;		/* ID of the extent records */
 	u64			ds_size;	/* Length of the stream */
 	u64			ds_sparse_bytes;/* Hole byte count in stream */
+	u64			ds_alloced_size;/* Total size of the extents */
 	struct apfs_file_extent	ds_cached_ext;	/* Latest extent record */
 	bool			ds_ext_dirty;	/* Is ds_cached_ext dirty? */
 	spinlock_t		ds_ext_lock;	/* Protects ds_cached_ext */
@@ -799,10 +800,8 @@ struct apfs_dstream_info {
 };
 
 /**
- * apfs_alloced_size - Return the alloced size for a data stream
+ * apfs_alloced_size - Return a dstream's alloced size with no overallocation
  * @dstream: data stream info
- *
- * TODO: is this always correct? Or could the extents have an unused tail?
  */
 static inline u64 apfs_alloced_size(struct apfs_dstream_info *dstream)
 {
