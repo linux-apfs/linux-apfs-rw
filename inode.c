@@ -1034,6 +1034,8 @@ static int apfs_inode_trim_overallocation(struct inode *inode)
 
 	if (!S_ISREG(inode->i_mode))
 		return 0;
+	if (!ai->i_has_dstream)
+		return 0;
 
 	sb = inode->i_sb;
 	/* The overallocation issues we want to prevent only affect writes */
@@ -1071,6 +1073,7 @@ static int apfs_inode_trim_overallocation(struct inode *inode)
 	err = apfs_transaction_commit(sb);
 	if (err)
 		goto fail;
+	inode->i_blocks = apfs_alloced_size(dstream) >> 9;
 	return 0;
 
 fail:

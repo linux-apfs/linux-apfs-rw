@@ -792,7 +792,7 @@ struct apfs_dstream_info {
 	u64			ds_id;		/* ID of the extent records */
 	u64			ds_size;	/* Length of the stream */
 	u64			ds_sparse_bytes;/* Hole byte count in stream */
-	u64			ds_alloced_size;/* Total size of the extents */
+	u64			ds_alloced_size;/* Total extent size on iget */
 	struct apfs_file_extent	ds_cached_ext;	/* Latest extent record */
 	bool			ds_ext_dirty;	/* Is ds_cached_ext dirty? */
 	spinlock_t		ds_ext_lock;	/* Protects ds_cached_ext */
