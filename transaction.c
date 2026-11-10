@@ -21,10 +21,11 @@ static int apfs_checkpoint_end(struct super_block *sb)
 	struct apfs_obj_phys *obj = &nxi->nx_raw->nx_o;
 	struct buffer_head *bh = NULL;
 	struct apfs_blkdev_info *bd_info = nxi->nx_blkdev_info;
+	struct block_device *blkdev = bd_info->blki_bdev;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
-	struct address_space *bdev_map = bd_info->blki_bdev->bd_mapping;
+	struct address_space *bdev_map = blkdev->bd_mapping;
 #else
-	struct inode *bdev_inode = bd_info->blki_bdev->bd_inode;
+	struct inode *bdev_inode = blkdev->bd_inode;
 	struct address_space *bdev_map = bdev_inode->i_mapping;
 #endif
 	int err;
@@ -43,6 +44,9 @@ static int apfs_checkpoint_end(struct super_block *sb)
 	err = filemap_write_and_wait(bdev_map);
 	if (err)
 		goto out;
+	err = blkdev_issue_flush(blkdev);
+	if (err)
+		goto out;
 
 	mark_buffer_dirty(bh);
 	err = sync_dirty_buffer(bh);
@@ -50,6 +54,11 @@ static int apfs_checkpoint_end(struct super_block *sb)
 		goto out;
 
 	err = filemap_write_and_wait(bdev_map);
+	if (err)
+		goto out;
+	err = blkdev_issue_flush(blkdev);
+	if (err)
+		goto out;
 out:
 	brelse(bh);
 	bh = NULL;
