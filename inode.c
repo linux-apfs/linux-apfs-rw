@@ -1034,8 +1034,6 @@ static int apfs_inode_trim_overallocation(struct inode *inode)
 
 	if (!S_ISREG(inode->i_mode))
 		return 0;
-	if (!ai->i_has_dstream)
-		return 0;
 
 	sb = inode->i_sb;
 	/* The overallocation issues we want to prevent only affect writes */
@@ -1050,6 +1048,8 @@ static int apfs_inode_trim_overallocation(struct inode *inode)
 	if (ai->i_bsd_flags & APFS_INOBSD_COMPRESSED)
 		return 0;
 
+	if (!ai->i_has_dstream)
+		return 0;
 	dstream = &ai->i_dstream;
 	if (dstream->ds_alloced_size == apfs_alloced_size(dstream)) {
 		/* No overallocation */
