@@ -702,7 +702,7 @@ int apfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 int apfs_mknod(struct user_namespace *mnt_userns, struct inode *dir,
 	       struct dentry *dentry, umode_t mode, dev_t rdev)
 #else
-int apfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
+int apfs_mknod(CONST_7_4 struct mnt_idmap *idmap, struct inode *dir,
 	       struct dentry *dentry, umode_t mode, dev_t rdev)
 #endif
 {
@@ -734,7 +734,7 @@ int apfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 
 #else
 
-struct dentry *apfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode)
+struct dentry *apfs_mkdir(CONST_7_4 struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	return ERR_PTR(apfs_mknod(idmap, dir, dentry, mode | S_IFDIR, 0 /* rdev */));
 }
@@ -768,7 +768,7 @@ int apfs_create(struct mnt_idmap *idmap, struct inode *dir,
 
 #else
 
-int apfs_create(struct mnt_idmap *idmap, struct inode *dir,
+int apfs_create(CONST_7_4 struct mnt_idmap *idmap, struct inode *dir,
 		struct dentry *dentry, umode_t mode)
 {
 	return apfs_mknod(idmap, dir, dentry, mode, 0 /* rdev */);
@@ -1394,7 +1394,7 @@ int apfs_rename(struct user_namespace *mnt_userns, struct inode *old_dir,
 		struct dentry *old_dentry, struct inode *new_dir,
 		struct dentry *new_dentry, unsigned int flags)
 #else
-int apfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
+int apfs_rename(CONST_7_4 struct mnt_idmap *idmap, struct inode *old_dir,
 		struct dentry *old_dentry, struct inode *new_dir,
 		struct dentry *new_dentry, unsigned int flags)
 #endif

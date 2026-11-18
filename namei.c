@@ -41,7 +41,7 @@ static int apfs_symlink(struct inode *dir, struct dentry *dentry,
 static int apfs_symlink(struct user_namespace *mnt_userns, struct inode *dir,
 			struct dentry *dentry, const char *symname)
 #else
-static int apfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
+static int apfs_symlink(CONST_7_4 struct mnt_idmap *idmap, struct inode *dir,
 			struct dentry *dentry, const char *symname)
 #endif
 {

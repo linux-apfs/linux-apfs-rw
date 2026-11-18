@@ -816,7 +816,7 @@ static int apfs_xattr_osx_set(const struct xattr_handler *handler,
 		  size_t size, int flags)
 #else
 static int apfs_xattr_osx_set(const struct xattr_handler *handler,
-		  struct mnt_idmap *idmap, struct dentry *unused,
+		  CONST_7_4 struct mnt_idmap *idmap, struct dentry *unused,
 		  struct inode *inode, const char *name, const void *value,
 		  size_t size, int flags)
 #endif

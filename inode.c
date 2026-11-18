@@ -1213,7 +1213,7 @@ int apfs_getattr(struct user_namespace *mnt_userns,
 		 const struct path *path, struct kstat *stat, u32 request_mask,
 		 unsigned int query_flags)
 #else
-int apfs_getattr(struct mnt_idmap *idmap,
+int apfs_getattr(CONST_7_4 struct mnt_idmap *idmap,
 		 const struct path *path, struct kstat *stat, u32 request_mask,
 		 unsigned int query_flags)
 #endif
@@ -2170,7 +2170,7 @@ int apfs_setattr(struct dentry *dentry, struct iattr *iattr)
 int apfs_setattr(struct user_namespace *mnt_userns,
 		 struct dentry *dentry, struct iattr *iattr)
 #else
-int apfs_setattr(struct mnt_idmap *idmap,
+int apfs_setattr(CONST_7_4 struct mnt_idmap *idmap,
 		 struct dentry *dentry, struct iattr *iattr)
 #endif
 {
@@ -2633,7 +2633,7 @@ int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 	return 0;
 }
 
-int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct fileattr *fa)
+int apfs_fileattr_set(CONST_7_4 struct mnt_idmap *idmap, struct dentry *dentry, struct fileattr *fa)
 {
 	struct inode *inode = d_inode(dentry);
 	struct super_block *sb = inode->i_sb;

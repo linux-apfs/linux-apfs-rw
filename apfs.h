@@ -73,6 +73,10 @@ do {									\
 } while (0)
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0)
+#define page_buffers(page)	folio_buffers(page_folio(page))
+#endif
+
 /*
  * Parameter for the snapshot creation ioctl
  */
@@ -930,6 +934,12 @@ do {									\
 	ASSERT(le64_to_cpu((obj)->o_xid) == APFS_NXI(sb)->nx_xid);	\
 } while (0)
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 4, 0)
+#define CONST_7_4
+#else
+#define CONST_7_4 const
+#endif
+
 /* btree.c */
 extern struct apfs_node *apfs_query_root(const struct apfs_query *query);
 extern struct apfs_query *apfs_alloc_query(struct apfs_node *node,
@@ -989,17 +999,17 @@ extern int apfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
 extern int apfs_create(struct mnt_idmap *idmap, struct inode *dir,
 		       struct dentry *dentry, umode_t mode, bool excl);
 #else
-extern int apfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
+extern int apfs_mknod(CONST_7_4 struct mnt_idmap *idmap, struct inode *dir,
 		      struct dentry *dentry, umode_t mode, dev_t rdev);
-extern struct dentry *apfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode);
-extern int apfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
+extern struct dentry *apfs_mkdir(CONST_7_4 struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode);
+extern int apfs_rename(CONST_7_4 struct mnt_idmap *idmap, struct inode *old_dir,
 		       struct dentry *old_dentry, struct inode *new_dir,
 		       struct dentry *new_dentry, unsigned int flags);
 # if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
 extern int apfs_create(struct mnt_idmap *idmap, struct inode *dir,
 		       struct dentry *dentry, umode_t mode, bool excl);
 # else
-extern int apfs_create(struct mnt_idmap *idmap, struct inode *dir,
+extern int apfs_create(CONST_7_4 struct mnt_idmap *idmap, struct inode *dir,
 		       struct dentry *dentry, umode_t mode);
 # endif
 #endif
@@ -1064,7 +1074,7 @@ extern int apfs_setattr(struct dentry *dentry, struct iattr *iattr);
 extern int apfs_setattr(struct user_namespace *mnt_userns,
 			struct dentry *dentry, struct iattr *iattr);
 #else
-extern int apfs_setattr(struct mnt_idmap *idmap,
+extern int apfs_setattr(CONST_7_4 struct mnt_idmap *idmap,
 			struct dentry *dentry, struct iattr *iattr);
 #endif
 
@@ -1089,7 +1099,7 @@ extern int apfs_getattr(struct user_namespace *mnt_userns,
 		const struct path *path, struct kstat *stat, u32 request_mask,
 		unsigned int query_flags);
 #else
-extern int apfs_getattr(struct mnt_idmap *idmap,
+extern int apfs_getattr(CONST_7_4 struct mnt_idmap *idmap,
 		const struct path *path, struct kstat *stat, u32 request_mask,
 		unsigned int query_flags);
 #endif
@@ -1102,7 +1112,7 @@ extern int apfs_crypto_adj_refcnt(struct super_block *sb, u64 crypto_id, int del
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0) || RHEL_VERSION_GE(9, 6)
 extern int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa);
-extern int apfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry, struct fileattr *fa);
+extern int apfs_fileattr_set(CONST_7_4 struct mnt_idmap *idmap, struct dentry *dentry, struct fileattr *fa);
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 13, 0)
 extern int apfs_fileattr_get(struct dentry *dentry, struct fileattr *fa);
 extern int apfs_fileattr_set(struct user_namespace *mnt_userns, struct dentry *dentry, struct fileattr *fa);

@@ -761,7 +761,10 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		kfree(bhi);
 		bhi = NULL;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0)
+		folio = bh->b_folio;
+		folio_get(folio);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
 		folio = page_folio(bh->b_page);
 		folio_get(folio);
 #else
