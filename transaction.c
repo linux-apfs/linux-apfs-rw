@@ -7,6 +7,17 @@
 #include <linux/rmap.h>
 #include "apfs.h"
 
+static int apfs_blkdev_issue_flush(struct block_device *bdev)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
+	return blkdev_issue_flush(bdev);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+	return blkdev_issue_flush(bdev, GFP_KERNEL);
+#else
+	return blkdev_issue_flush(bdev, GFP_KERNEL, NULL);
+#endif
+}
+
 /**
  * apfs_checkpoint_end - End the new checkpoint
  * @sb:	filesystem superblock
@@ -44,7 +55,7 @@ static int apfs_checkpoint_end(struct super_block *sb)
 	err = filemap_write_and_wait(bdev_map);
 	if (err)
 		goto out;
-	err = blkdev_issue_flush(blkdev);
+	err = apfs_blkdev_issue_flush(blkdev);
 	if (err)
 		goto out;
 
@@ -56,7 +67,7 @@ static int apfs_checkpoint_end(struct super_block *sb)
 	err = filemap_write_and_wait(bdev_map);
 	if (err)
 		goto out;
-	err = blkdev_issue_flush(blkdev);
+	err = apfs_blkdev_issue_flush(blkdev);
 	if (err)
 		goto out;
 out:
