@@ -1838,6 +1838,16 @@ int apfs_clone_file_range(struct file *src_file, loff_t off, struct file *dst_fi
 	dst_ai->i_int_flags &= ~xfield_flags;
 
 	/*
+	 * Just make the dstream exclusive right away because it seems that I
+	 * don't quite understand this stuff and it's risky.
+	 */
+	err = apfs_inode_create_exclusive_dstream(dst_inode);
+	if (err) {
+		apfs_err(sb, "dstream creation on clone failed for ino 0x%llx", apfs_ino(dst_inode));
+		goto fail;
+	}
+
+	/*
 	 * Commit the transaction to make sure all buffers in the source inode
 	 * go through copy-on-write. This is a bit excessive, but I don't expect
 	 * clones to be created often enough for it to matter.
