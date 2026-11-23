@@ -40,7 +40,8 @@ static int apfs_child_from_query(struct apfs_query *query, u64 *child)
 	struct super_block *sb = query->node->object.sb;
 	char *raw = query->node->object.data;
 
-	if (query->flags & APFS_QUERY_CAT && apfs_is_sealed(sb)) {
+	if (query->flags & APFS_QUERY_CAT &&
+	    ((query->node->flags & APFS_BTNODE_HASHED) || apfs_is_sealed(sb))) {
 		struct apfs_btn_index_node_val *index_val = NULL;
 
 		if (query->len != sizeof(*index_val)) {

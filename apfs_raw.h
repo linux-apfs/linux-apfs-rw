@@ -140,8 +140,10 @@ struct apfs_omap_snapshot {
 #define APFS_BTNODE_ROOT		0x0001
 #define APFS_BTNODE_LEAF		0x0002
 #define APFS_BTNODE_FIXED_KV_SIZE	0x0004
+#define APFS_BTNODE_HASHED		0x0008
+#define APFS_BTNODE_NOHEADER		0x0010
 #define APFS_BTNODE_CHECK_KOFF_INVAL	0x8000
-#define APFS_BTNODE_MASK		0x0007	/* Valid on-disk flags */
+#define APFS_BTNODE_MASK		0x001f	/* Valid on-disk flags */
 
 /* B-tree location constants */
 #define APFS_BTOFF_INVALID		0xffff
