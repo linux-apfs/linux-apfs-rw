@@ -658,6 +658,25 @@ fail:
 }
 
 /**
+ * apfs_free_spaceman - Free the in-memory spaceman and its ip bitmaps
+ * @nxi: container superblock info
+ */
+void apfs_free_spaceman(struct apfs_nxsb_info *nxi)
+{
+	struct apfs_spaceman *sm = nxi->nx_spaceman;
+	u32 bmap_idx;
+
+	if (!sm)
+		return;
+	for (bmap_idx = 0; bmap_idx < sm->sm_ip_bmaps_count; ++bmap_idx) {
+		kfree(sm->sm_ip_bmaps[bmap_idx].block);
+		sm->sm_ip_bmaps[bmap_idx].block = NULL;
+	}
+	kfree(sm);
+	nxi->nx_spaceman = NULL;
+}
+
+/**
  * apfs_allocate_spaceman - Allocate an in-memory spaceman struct, if needed
  * @sb:		superblock structure
  * @raw:	on-disk spaceman struct
@@ -710,8 +729,7 @@ static struct apfs_spaceman *apfs_allocate_spaceman(struct super_block *sb, stru
 	err = apfs_read_ip_bitmaps(sb);
 	if (err) {
 		apfs_err(sb, "failed to read the ip bitmaps");
-		kfree(spaceman);
-		nxi->nx_spaceman = spaceman = NULL;
+		apfs_free_spaceman(nxi);
 		return ERR_PTR(err);
 	}
 

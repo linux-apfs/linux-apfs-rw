@@ -471,8 +471,6 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 {
 	struct apfs_nxsb_info *nxi = sbi->s_nxi;
 	struct apfs_ephemeral_object_info *eph_list = NULL;
-	struct apfs_spaceman *sm = NULL;
-	u32 bmap_idx;
 	int i;
 
 	if (!nxi)
@@ -505,15 +503,7 @@ static inline void apfs_free_main_super(struct apfs_sb_info *sbi)
 	nxi->nx_tier2_info = NULL;
 
 	list_del(&nxi->nx_list);
-	sm = nxi->nx_spaceman;
-	if (sm) {
-		for (bmap_idx = 0; bmap_idx < sm->sm_ip_bmaps_count; ++bmap_idx) {
-			kfree(sm->sm_ip_bmaps[bmap_idx].block);
-			sm->sm_ip_bmaps[bmap_idx].block = NULL;
-		}
-		kfree(sm);
-		nxi->nx_spaceman = sm = NULL;
-	}
+	apfs_free_spaceman(nxi);
 	kfree(nxi);
 out:
 	sbi->s_nxi = NULL;
