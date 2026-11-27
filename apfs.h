@@ -1168,6 +1168,7 @@ extern int apfs_switch_to_snapshot(struct super_block *sb);
 
 /* spaceman.c */
 extern int apfs_read_spaceman(struct super_block *sb);
+extern void apfs_free_spaceman(struct apfs_nxsb_info *nxi);
 extern int apfs_free_queue_insert_nocache(struct super_block *sb, u64 bno, u64 count);
 extern int apfs_free_queue_insert(struct super_block *sb, u64 bno, u64 count);
 extern int apfs_spaceman_allocate_block(struct super_block *sb, u64 *bno, bool backwards);
