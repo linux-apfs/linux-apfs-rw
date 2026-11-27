@@ -751,8 +751,7 @@ int apfs_read_spaceman(struct super_block *sb)
 	spaceman = apfs_allocate_spaceman(sb, sm_raw, sm_eph_info->size);
 	if (IS_ERR(spaceman)) {
 		apfs_err(sb, "failed to allocate spaceman");
-		err = PTR_ERR(spaceman);
-		goto fail;
+		return PTR_ERR(spaceman);
 	}
 
 	spaceman->sm_free_cache_base = spaceman->sm_free_cache_blkcnt = 0;
@@ -795,7 +794,8 @@ int apfs_read_spaceman(struct super_block *sb)
 	return 0;
 
 fail:
-	spaceman->sm_raw = NULL;
+	if (!IS_ERR_OR_NULL(spaceman))
+		spaceman->sm_raw = NULL;
 	return err;
 }
 
