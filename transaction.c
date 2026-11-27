@@ -759,9 +759,13 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 
 		wait_on_buffer(bh);
 		if (!buffer_uptodate(bh)) {
-			apfs_err(sb, "failed to write some blocks");
-			return -EIO;
+			if (!err)
+				apfs_err(sb, "failed to write some blocks");
+			err = -EIO;
+			continue;
 		}
+		if (err)
+			continue;
 
 		list_del(&bhi->list);
 		clear_buffer_trans(bh);
@@ -814,6 +818,8 @@ static int apfs_transaction_commit_nx(struct super_block *sb)
 		put_page(page);
 #endif
 	}
+	if (err)
+		return err;
 	err = apfs_checkpoint_end(sb);
 	if (err) {
 		apfs_err(sb, "failed to end the checkpoint");
@@ -849,7 +855,7 @@ static bool apfs_transaction_need_commit(struct super_block *sb)
 		return true;
 	}
 
-	if (sm) {
+	if (sm && sm->sm_raw) {
 		struct apfs_spaceman_phys *sm_raw = sm->sm_raw;
 		struct apfs_spaceman_free_queue *fq_ip = &sm_raw->sm_fq[APFS_SFQ_IP];
 		struct apfs_spaceman_free_queue *fq_main = &sm_raw->sm_fq[APFS_SFQ_MAIN];
@@ -998,7 +1004,8 @@ static void apfs_force_readonly(struct apfs_nxsb_info *nxi)
 
 	list_for_each_entry(sbi, &nxi->vol_list, list) {
 		sb = sbi->s_vobject.sb;
-		sb->s_flags |= SB_RDONLY;
+		if (sb)
+			sb->s_flags |= SB_RDONLY;
 	}
 	nxi->nx_flags &= ~APFS_READWRITE;
 }
@@ -1033,6 +1040,7 @@ void apfs_transaction_abort(struct super_block *sb)
 	list_for_each_entry_safe(bhi, tmp, &nx_trans->t_buffers, list) {
 		struct buffer_head *bh = bhi->bh;
 
+		wait_on_buffer(bh);
 		bh->b_private = NULL;
 		clear_buffer_dirty(bh);
 		clear_buffer_trans(bh);
@@ -1043,6 +1051,9 @@ void apfs_transaction_abort(struct super_block *sb)
 		list_del(&bhi->list);
 		kfree(bhi);
 	}
+	nx_trans->t_buffers_count = 0;
+	nx_trans->t_starts_count = 0;
+	nx_trans->t_work_sb = NULL;
 
 	/*
 	 * It's not possible to undo in-memory changes from old operations in
